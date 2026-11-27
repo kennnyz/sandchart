@@ -44,6 +44,16 @@ export const RETRY_DELAYS_S = [5, 10, 20, 40, 60];
 
 type RetryKind = "latest" | "older";
 
+/** Pending trouble of one kind of request; each kind has its own timer and backoff. */
+interface Pending {
+  message: string;
+  /** Next attempt (ms), null while an attempt runs or when nothing is scheduled. */
+  retryAt: number | null;
+  timer: ReturnType<typeof setTimeout> | null;
+  /** Consecutive failures, for the backoff. */
+  failures: number;
+}
+
 function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
@@ -59,9 +69,7 @@ export class ChartSession {
   /** Generation that has, or is acquiring, the live stream. */
   private liveGen = 0;
   private olderInFlight = false;
-  private retryTimer: ReturnType<typeof setTimeout> | null = null;
-  private retryKind: RetryKind | null = null;
-  private failures = 0;
+  private readonly pending = new Map<RetryKind, Pending>();
   private state: SessionState = {
     id: null,
     tf: "1h",
@@ -105,7 +113,7 @@ export class ChartSession {
         return;
       }
       this.chart.prependData(older);
-      if (older.warning) this.set({ problem: { message: older.warning, retryAt: null } });
+      if (older.warning) this.warn("older", older.warning);
       else this.recovered("older");
       this.bump();
     } catch (e) {
@@ -115,17 +123,22 @@ export class ChartSession {
     }
   }
 
-  /** Runs the pending retry now (e.g. when the connection comes back). */
+  /** Runs every scheduled retry now (e.g. when the connection comes back). */
   async retryNow(): Promise<void> {
-    if (this.retryTimer === null) return;
-    clearTimeout(this.retryTimer);
-    this.retryTimer = null;
-    const kind = this.retryKind;
-    this.retryKind = null;
-    if (this.state.problem) this.set({ problem: { ...this.state.problem, retryAt: null } });
+    const due = [...this.pending].filter(([, p]) => p.timer !== null).map(([k]) => k);
+    await Promise.all(due.map((k) => this.retry(k)));
+  }
+
+  private async retry(kind: RetryKind): Promise<void> {
+    const p = this.pending.get(kind);
+    if (!p || p.timer === null) return;
+    clearTimeout(p.timer);
+    p.timer = null;
+    p.retryAt = null;
+    this.publishProblem();
     if (kind === "latest") {
       await this.loadLatest(this.gen);
-    } else if (kind === "older") {
+    } else {
       // The chart asks again (synchronously) if it still needs older candles.
       this.chart.releaseOlder();
       if (!this.olderInFlight) this.recovered("older");
@@ -143,10 +156,8 @@ export class ChartSession {
     this.stopLive = null;
     this.liveGen = 0;
     this.olderInFlight = false;
-    if (this.retryTimer !== null) clearTimeout(this.retryTimer);
-    this.retryTimer = null;
-    this.retryKind = null;
-    this.failures = 0;
+    for (const p of this.pending.values()) if (p.timer !== null) clearTimeout(p.timer);
+    this.pending.clear();
     return this.gen;
   }
 
@@ -236,23 +247,46 @@ export class ChartSession {
     this.bump();
   }
 
+  /** A request of `kind` failed: schedules its retry with that kind's backoff. */
   private fail(kind: RetryKind, text: string): void {
-    const delay = RETRY_DELAYS_S[Math.min(this.failures, RETRY_DELAYS_S.length - 1)]! * 1000;
-    this.failures++;
-    if (this.retryTimer !== null) clearTimeout(this.retryTimer);
-    this.retryKind = kind;
-    this.retryTimer = setTimeout(() => void this.retryNow(), delay);
-    this.set({ problem: { message: text, retryAt: Date.now() + delay } });
+    const p = this.pending.get(kind) ?? { message: text, retryAt: null, timer: null, failures: 0 };
+    const delay = RETRY_DELAYS_S[Math.min(p.failures, RETRY_DELAYS_S.length - 1)]! * 1000;
+    if (p.timer !== null) clearTimeout(p.timer);
+    p.failures++;
+    p.message = text;
+    p.retryAt = Date.now() + delay;
+    p.timer = setTimeout(() => void this.retry(kind), delay);
+    this.pending.set(kind, p);
+    this.publishProblem();
   }
 
-  /** A request of `kind` succeeded: clears the problem unless another kind is pending. */
+  /** A request of `kind` succeeded with a warning: shown, but nothing to retry for it. */
+  private warn(kind: RetryKind, text: string): void {
+    const p = this.pending.get(kind);
+    if (p?.timer) clearTimeout(p.timer);
+    this.pending.set(kind, { message: text, retryAt: null, timer: null, failures: 0 });
+    this.publishProblem();
+  }
+
+  /** A request of `kind` succeeded: clears that kind only. */
   private recovered(kind: RetryKind): void {
-    if (this.retryKind !== null && this.retryKind !== kind) return;
-    if (this.retryTimer !== null) clearTimeout(this.retryTimer);
-    this.retryTimer = null;
-    this.retryKind = null;
-    this.failures = 0;
-    if (this.state.problem) this.set({ problem: null });
+    const p = this.pending.get(kind);
+    if (!p) return;
+    if (p.timer !== null) clearTimeout(p.timer);
+    this.pending.delete(kind);
+    this.publishProblem();
+  }
+
+  /** The banner state: shown while any kind is pending; the countdown is the soonest retry. */
+  private publishProblem(): void {
+    const all = [...this.pending.values()];
+    if (all.length === 0) {
+      if (this.state.problem) this.set({ problem: null });
+      return;
+    }
+    const times = all.map((p) => p.retryAt).filter((t): t is number => t !== null);
+    const message = (this.pending.get("latest") ?? all[0]!).message;
+    this.set({ problem: { message, retryAt: times.length ? Math.min(...times) : null } });
   }
 
   private bump(): void {

@@ -263,4 +263,66 @@ describe("ChartSession", () => {
     await vi.advanceTimersByTimeAsync(120_000);
     expect(calls).toBe(2);
   });
+
+  it("an older failure and recovery do not drop a pending newest-page retry", async () => {
+    vi.useFakeTimers();
+    const mock = createMockBackend({ candles: 3000 });
+    let latestWarning: string | null = "offline, cached";
+    let olderFails = true;
+    let latestCalls = 0;
+    const backend: Backend = {
+      ...mock,
+      async getCandles(id, tf, before) {
+        if (before === undefined) {
+          latestCalls++;
+          return { ...(await mock.getCandles(id, tf)), warning: latestWarning };
+        }
+        if (olderFails) throw new Error("older failed");
+        return mock.getCandles(id, tf, before);
+      },
+    };
+    const { chart, session, last } = setup(backend);
+    chart.needOlder = () => void session.loadOlder();
+    await session.open(BTC, "1h");
+    const latestRetryAt = last().problem!.retryAt!;
+
+    await session.loadOlder();
+    expect(last().problem).not.toBeNull();
+    olderFails = false;
+    // The older retry (5 s) and the newest-page retry (5 s) are both due now.
+    await vi.advanceTimersByTimeAsync(latestRetryAt - Date.now() - 1);
+    expect(latestCalls).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(chart.count).toBe(2000);
+    // The newest page was retried, still warns: the banner stays with a countdown.
+    expect(latestCalls).toBe(2);
+    expect(last().problem?.message).toBe("offline, cached");
+    expect(last().problem?.retryAt).toBeGreaterThan(Date.now());
+
+    latestWarning = null;
+    await vi.advanceTimersByTimeAsync(last().problem!.retryAt! - Date.now());
+    expect(latestCalls).toBe(3);
+    expect(last().problem).toBeNull();
+    session.close();
+  });
+
+  it("an older page with a warning does not hide a pending newest-page countdown", async () => {
+    vi.useFakeTimers();
+    const mock = createMockBackend({ candles: 3000 });
+    const backend: Backend = {
+      ...mock,
+      async getCandles(id, tf, before) {
+        return { ...(await mock.getCandles(id, tf, before)), warning: "cached only" };
+      },
+    };
+    const { chart, session, last } = setup(backend);
+    await session.open(BTC, "1h");
+    const retryAt = last().problem!.retryAt!;
+    expect(retryAt).toBeGreaterThan(Date.now());
+
+    await session.loadOlder();
+    expect(chart.count).toBe(2000);
+    expect(last().problem?.retryAt).toBe(retryAt);
+    session.close();
+  });
 });
