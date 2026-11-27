@@ -74,6 +74,30 @@ async fn exchange_info_asks_only_for_trading_spot_pairs() {
 }
 
 #[tokio::test]
+async fn old_candles_with_finer_steps_are_rounded_not_rejected() {
+    // 2024-03-08 BTCUSDT 1d: volume has 6 decimals, today's lot step has 5.
+    let body = r#"[
+      [1709856000000,"66855.36000000","69990.00000000","66124.40000000","68300.93000000","74261.93284200",1709942399999,"0",1,"0","0","0"],
+      [1709942400000,"68300.94000000","68541.10000000","67883.33000000","68498.88000000","18425.01945000",1710028799999,"0",1,"0","0","0"]
+    ]"#;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v3/klines"))
+        .respond_with(json(body))
+        .mount(&server)
+        .await;
+
+    let candles = provider(&server)
+        .history(&instrument("BTCUSDT", 2, 5), Timeframe::D1, None, 1000)
+        .await
+        .unwrap();
+
+    assert_eq!(candles.len(), 2);
+    assert_eq!(candles[0].volume, 7_426_193_284);
+    assert_eq!(candles[1].volume, 1_842_501_945);
+}
+
+#[tokio::test]
 async fn parses_klines_ascending() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))

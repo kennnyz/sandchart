@@ -1,6 +1,8 @@
 //! Binance JSON shapes and their conversion into core types.
 
-use sandchart_core::{Candle, Instrument, InstrumentId, parse_scaled, scale_from_step};
+use sandchart_core::{
+    Candle, Instrument, InstrumentId, parse_scaled, parse_scaled_rounded, scale_from_step,
+};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -66,7 +68,7 @@ pub fn parse_kline(row: &[Value], inst: &Instrument) -> Result<Candle, ProviderE
             .get(i)
             .and_then(Value::as_str)
             .ok_or_else(|| parse_err("kline field"))?;
-        parse_scaled(s, inst.price_scale)
+        parse_scaled_rounded(s, inst.price_scale)
             .map_err(|e| ProviderError::Parse(format!("kline price: {e}")))
     };
     let volume = row
@@ -82,7 +84,7 @@ pub fn parse_kline(row: &[Value], inst: &Instrument) -> Result<Candle, ProviderE
         high: price(2)?,
         low: price(3)?,
         close: price(4)?,
-        volume: parse_scaled(volume, inst.qty_scale)
+        volume: parse_scaled_rounded(volume, inst.qty_scale)
             .map_err(|e| ProviderError::Parse(format!("kline volume: {e}")))?,
     })
 }
@@ -113,7 +115,7 @@ impl WsEvent {
             return Ok(None);
         };
         let price = |s: &str| {
-            parse_scaled(s, inst.price_scale)
+            parse_scaled_rounded(s, inst.price_scale)
                 .map_err(|e| ProviderError::Parse(format!("live kline price: {e}")))
         };
         Ok(Some(LiveCandle {
@@ -123,7 +125,7 @@ impl WsEvent {
                 high: price(&k.h)?,
                 low: price(&k.l)?,
                 close: price(&k.c)?,
-                volume: parse_scaled(&k.v, inst.qty_scale)
+                volume: parse_scaled_rounded(&k.v, inst.qty_scale)
                     .map_err(|e| ProviderError::Parse(format!("live kline volume: {e}")))?,
             },
             closed: k.x,
@@ -146,7 +148,7 @@ impl Ticker24h {
     }
 
     pub fn into_day_change(self, inst: &Instrument) -> Result<DayChange, ProviderError> {
-        let last = parse_scaled(&self.last_price, inst.price_scale)
+        let last = parse_scaled_rounded(&self.last_price, inst.price_scale)
             .map_err(|e| ProviderError::Parse(format!("lastPrice: {e}")))?;
         Ok(DayChange {
             id: inst.id.clone(),

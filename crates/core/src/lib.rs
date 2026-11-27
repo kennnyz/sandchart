@@ -6,6 +6,8 @@ pub mod decimal;
 pub mod model;
 pub mod timeframe;
 
-pub use decimal::{DecimalError, JS_SAFE_MAX, format_scaled, parse_scaled, scale_from_step};
+pub use decimal::{
+    DecimalError, JS_SAFE_MAX, format_scaled, parse_scaled, parse_scaled_rounded, scale_from_step,
+};
 pub use model::{Candle, Instrument, InstrumentId};
 pub use timeframe::Timeframe;

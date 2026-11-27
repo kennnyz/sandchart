@@ -71,6 +71,32 @@ pub fn parse_scaled(s: &str, scale: u8) -> Result<i64, DecimalError> {
     Ok(if negative { -acc } else { acc })
 }
 
+/// Like [`parse_scaled`], but digits beyond `scale` are rounded half away
+/// from zero instead of rejected.
+///
+/// For exchange data only: Binance keeps old candles at the lot and tick
+/// sizes of their time, which can be finer than today's (BTCUSDT volumes
+/// had 6 decimals before the step became 0.00001).
+pub fn parse_scaled_rounded(s: &str, scale: u8) -> Result<i64, DecimalError> {
+    let Some((int, frac)) = s.split_once('.') else {
+        return parse_scaled(s, scale);
+    };
+    let keep = usize::from(scale);
+    if frac.len() <= keep {
+        return parse_scaled(s, scale);
+    }
+    let (kept, dropped) = frac.split_at(keep);
+    if !dropped.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(DecimalError::Invalid);
+    }
+    let truncated = parse_scaled(&format!("{int}.{kept}"), scale)?;
+    if dropped.as_bytes()[0] < b'5' {
+        return Ok(truncated);
+    }
+    let away = if int.starts_with('-') { -1 } else { 1 };
+    truncated.checked_add(away).ok_or(DecimalError::Overflow)
+}
+
 fn push_digit(acc: i64, d: i64) -> Result<i64, DecimalError> {
     acc.checked_mul(10)
         .and_then(|v| v.checked_add(d))
@@ -159,6 +185,38 @@ mod tests {
     fn parse_overflow() {
         assert_eq!(
             parse_scaled("99999999999999999999", 0),
+            Err(DecimalError::Overflow)
+        );
+    }
+    #[test]
+    fn rounded_keeps_values_that_fit() {
+        assert_eq!(
+            parse_scaled_rounded("61443.01000000", 2).unwrap(),
+            6_144_301
+        );
+        assert_eq!(parse_scaled_rounded("7", 0).unwrap(), 7);
+    }
+    #[test]
+    fn rounded_rounds_extra_digits_half_away_from_zero() {
+        // A real BTCUSDT 1d volume from 2024-03-08, when the lot step was finer.
+        assert_eq!(
+            parse_scaled_rounded("74261.93284200", 5).unwrap(),
+            7_426_193_284
+        );
+        assert_eq!(
+            parse_scaled_rounded("74261.93284500", 5).unwrap(),
+            7_426_193_285
+        );
+        assert_eq!(parse_scaled_rounded("-1.005", 2).unwrap(), -101);
+        assert_eq!(parse_scaled_rounded("-1.004", 2).unwrap(), -100);
+        assert_eq!(parse_scaled_rounded("0.000004", 5).unwrap(), 0);
+        assert_eq!(parse_scaled_rounded("0.5", 0).unwrap(), 1);
+    }
+    #[test]
+    fn rounded_still_rejects_garbage_and_overflow() {
+        assert_eq!(parse_scaled_rounded("1.2x", 2), Err(DecimalError::Invalid));
+        assert_eq!(
+            parse_scaled_rounded("9223372036854775807.5", 0),
             Err(DecimalError::Overflow)
         );
     }
