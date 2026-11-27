@@ -43,6 +43,14 @@ export function indexToTime(time: Float64Array, count: number, step: number, ind
   return time[i]! + (index - i) * (time[i + 1]! - time[i]!);
 }
 
+/** Bar prices in ticks, by bar index (the chart's series columns). */
+export interface Ohlc {
+  open: ArrayLike<number>;
+  high: ArrayLike<number>;
+  low: ArrayLike<number>;
+  close: ArrayLike<number>;
+}
+
 /**
  * Anchor space to CSS px of the price plot for one base frame. A new object every frame,
  * so it also serves as the key of every per-frame cache.
@@ -57,7 +65,34 @@ export class Coords {
     readonly priceH: number,
     /** Bar duration of the timeframe in ms. */
     readonly step: number,
+    /** Price decimals of the instrument, for labels. */
+    readonly decimals = 0,
+    private readonly ohlc: Ohlc | null = null,
   ) {}
+
+  /** Fractional bar index of time `t` (see `timeToIndex`). */
+  index(t: number): number {
+    return timeToIndex(this.time, this.count, this.step, t);
+  }
+
+  /** Time of a (fractional) bar index (see `indexToTime`). */
+  timeAt(index: number): number {
+    return indexToTime(this.time, this.count, this.step, index);
+  }
+
+  /** Index of the loaded bar whose slot contains `x`, or -1 when there is none. */
+  barAt(x: number): number {
+    // "+ 0" turns -0 (just left of bar 0) into 0.
+    const i = Math.round(xToIndex(this.view, x, this.plotW)) + 0;
+    return i >= 0 && i < this.count ? i : -1;
+  }
+
+  /** Open, high, low and close of bar `i` in ticks; null without prices or outside the bars. */
+  prices(i: number): [number, number, number, number] | null {
+    const o = this.ohlc;
+    if (!o || !(i >= 0 && i < this.count)) return null;
+    return [o.open[i]!, o.high[i]!, o.low[i]!, o.close[i]!];
+  }
 
   x(t: number): number {
     return indexToX(this.view, timeToIndex(this.time, this.count, this.step, t), this.plotW);
@@ -203,4 +238,17 @@ export function douglasPeucker(xs: ArrayLike<number>, ys: ArrayLike<number>, eps
   const out: number[] = [];
   for (let i = 0; i < n; i++) if (keep[i]) out.push(i);
   return out;
+}
+
+/**
+ * Douglas–Peucker indices of the path with tolerance `epsilon` px, doubled until at
+ * most `limit` points are left (`limit` >= 2).
+ */
+export function simplifyToLimit(xs: ArrayLike<number>, ys: ArrayLike<number>, limit: number, epsilon = 1): number[] {
+  let kept = douglasPeucker(xs, ys, epsilon);
+  while (kept.length > limit) {
+    epsilon *= 2;
+    kept = douglasPeucker(xs, ys, epsilon);
+  }
+  return kept;
 }

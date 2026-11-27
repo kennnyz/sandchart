@@ -8,6 +8,7 @@ import {
   distToRect,
   distToSegment,
   douglasPeucker,
+  simplifyToLimit,
   indexToTime,
   insideRect,
   timeToIndex,
@@ -82,6 +83,31 @@ describe("Coords", () => {
     expect(log.p(10_000)).toBeGreaterThanOrEqual(1);
   });
 
+  it("gives fractional bar indices, bar times and the bar under x", () => {
+    expect(lin.index(2 * H)).toBe(2);
+    expect(lin.index(3.5 * H)).toBeCloseTo(2.5);
+    expect(lin.timeAt(3)).toBe(5 * H);
+    expect(lin.timeAt(4)).toBe(6 * H);
+    expect(lin.barAt(390)).toBe(2);
+    expect(lin.barAt(394)).toBe(2);
+    expect(lin.barAt(396)).toBe(3);
+    // Half a bar past the last one and beyond: no bar.
+    expect(lin.barAt(404)).toBe(3);
+    expect(lin.barAt(406)).toBe(-1);
+    expect(lin.barAt(366)).toBe(0);
+    expect(lin.barAt(364)).toBe(-1);
+  });
+
+  it("reads the prices of a bar when it has them", () => {
+    expect(lin.prices(1)).toBeNull();
+    const ohlc = { open: [10, 20, 30, 40], high: [15, 25, 35, 45], low: [5, 15, 25, 35], close: [12, 22, 32, 42] };
+    const withBars = new Coords(times, COUNT, view, new PriceScale(1000, 2000, 500, "linear"), 400, 500, H, 2, ohlc);
+    expect(withBars.decimals).toBe(2);
+    expect(withBars.prices(1)).toEqual([20, 25, 15, 22]);
+    expect(withBars.prices(4)).toBeNull();
+    expect(withBars.prices(-1)).toBeNull();
+  });
+
   it("clamps ticks to the safe integer range", () => {
     const huge = new Coords(times, COUNT, view, new PriceScale(0, 4e15, 1, "linear"), 400, 1, H);
     expect(huge.p(-1e6)).toBe(MAX_TICKS);
@@ -154,5 +180,30 @@ describe("douglasPeucker", () => {
     expect(kept[0]).toBe(0);
     expect(kept.at(-1)).toBe(n - 1);
     expect(kept.length).toBeLessThan(n / 10);
+  });
+});
+
+describe("simplifyToLimit", () => {
+  it("keeps a short path as it is", () => {
+    expect(simplifyToLimit([0, 1, 2], [0, 5, 0], 500)).toEqual([0, 1, 2]);
+  });
+
+  it("drops points within the tolerance", () => {
+    const xs = Array.from({ length: 101 }, (_, i) => i);
+    const ys = xs.map((i) => (i % 2) * 0.4);
+    expect(simplifyToLimit(xs, ys, 500)).toEqual([0, 100]);
+  });
+
+  it("raises the tolerance until the path fits the limit", () => {
+    const n = 20_000;
+    const xs = Array.from({ length: n }, (_, i) => i / 10);
+    // A wiggle far above 1 px: the first tolerance keeps far more than 500 points.
+    const ys = xs.map((_, i) => Math.sin(i / 3) * 40 + (i % 7) * 3);
+    expect(douglasPeucker(xs, ys, 1).length).toBeGreaterThan(500);
+    const kept = simplifyToLimit(xs, ys, 500);
+    expect(kept.length).toBeLessThanOrEqual(500);
+    expect(kept.length).toBeGreaterThan(50);
+    expect(kept[0]).toBe(0);
+    expect(kept.at(-1)).toBe(n - 1);
   });
 });
