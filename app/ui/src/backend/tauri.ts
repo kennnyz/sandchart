@@ -1,6 +1,38 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { Backend, ConnectionState, LiveEvent } from "./types";
+import type { Backend, ComputedIndicator, ConnectionState, IndicatorResult, LiveEvent, Marker } from "./types";
+
+/** `compute_indicators` as Rust sends it: JSON has no NaN, so a gap is `null`. */
+interface WireResult {
+  instance: string;
+  result:
+    | {
+        ok: Omit<ComputedIndicator, "series"> & {
+          series: { id: string; data: { values: (number | null)[] } | { markers: Marker[] } }[];
+        };
+      }
+    | { err: string };
+}
+
+/** `null` becomes NaN, never 0, so a gap stays a gap. */
+function fromWire(r: WireResult): IndicatorResult {
+  if ("err" in r.result) return { instance: r.instance, result: r.result };
+  const { series, ...rest } = r.result.ok;
+  return {
+    instance: r.instance,
+    result: {
+      ok: {
+        ...rest,
+        series: series.map((s) => ({
+          id: s.id,
+          data: "values" in s.data
+            ? { values: Float64Array.from(s.data.values, (v) => v ?? NaN) }
+            : s.data,
+        })),
+      },
+    },
+  };
+}
 
 let reset: Promise<void> | null = null;
 
@@ -48,4 +80,20 @@ export const tauriBackend: Backend = {
     listen<ConnectionState>("connection", (e) => cb(e.payload)),
   instrumentsReady: () => invoke("get_instruments_ready"),
   onInstrumentsSynced: (cb) => listen("instruments-synced", () => cb()),
+  listIndicators: () => invoke("list_indicators"),
+  // Tauri 2 deserializes a Rust `Vec<u8>` from a JSON array, not from a typed array.
+  inspectIndicator: (bytes) => invoke("inspect_indicator", { bytes: Array.from(bytes) }),
+  installIndicator: (bytes) => invoke("install_indicator", { bytes: Array.from(bytes) }),
+  removeIndicator: (id) => invoke("remove_indicator", { id }),
+  getChartIndicators: () => invoke("get_chart_indicators"),
+  setChartIndicators: (items) => invoke("set_chart_indicators", { items }),
+  async computeIndicators(id, tf, fromTime) {
+    const wire = await invoke<WireResult[]>("compute_indicators", {
+      source: id.source,
+      symbol: id.symbol,
+      tf,
+      fromTime,
+    });
+    return wire.map(fromWire);
+  },
 };

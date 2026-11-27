@@ -17,16 +17,17 @@
 - **Nothing to steal.** The app never asks for exchange keys and only talks to Binance's public market-data hosts.
 - **Exact numbers.** Prices and volumes are integers counted in the pair's tick and lot size, from the exchange to the screen. No floating-point money anywhere in the core.
 - **Our own renderer.** The chart is a small Canvas 2D engine written for this project, not a wrapped charting library. A frame takes well under a millisecond to draw.
-- **Built to be extended.** Where it is going: indicators that run as WebAssembly modules in a sandbox (they cannot read your files or reach the network), a replay you can share and anyone can reproduce, and tools for AI agents. See the [roadmap](#roadmap).
+- **Built to be extended.** Indicators are WebAssembly modules that run in a sandbox: they cannot read your files or reach the network. Next: a replay you can share and anyone can reproduce, and tools for AI agents. See the [roadmap](#roadmap).
 
-## Features in 0.1
+## Features
 
 - Candlestick chart with volume: pan and zoom with mouse or trackpad (including pinch), crosshair with an OHLC legend, auto scale and logarithmic scale. The price axis grows to fit long prices such as `120 587.50` or `0.00001234`.
 - Timeframes from 1 minute to 1 month, each fetched natively from Binance and cached.
 - Live updates of the forming candle over WebSocket. After a dropped connection or a sleeping laptop, the missed candles are fetched again, so the chart has no gaps.
 - Polite to the exchange: retries back off (1, 2, 4… up to 30 s) and honour Binance's `Retry-After`.
 - Search over all Binance spot pairs (Cmd/Ctrl+K) and a watchlist with last price and 24 h change: add with the `+` button, drag to reorder, hide the panel to give the chart more room.
-- Monochrome candles (colour appears only in numbers), dark and light themes, English and Russian interface.
+- Indicators: SMA, EMA, Bollinger bands, RSI and MACD are built in, and you can add your own as WebAssembly modules. They run in a sandbox with no files, no network and no clock, under memory and work limits. Lines, histograms, markers and bands draw over the candles or in panes of their own, and a repaint check warns about indicators that change their past. Write one in Rust with the `sandchart-indicator` command, or let your coding agent do it: see [Writing indicators](docs/indicators.md).
+- Monochrome candles (colour appears only in numbers and indicator series), dark and light themes, English and Russian interface.
 - Builds for macOS (Apple silicon and Intel), Windows and Linux.
 
 ## Architecture
@@ -44,11 +45,13 @@ flowchart LR
             data["data<br/>Binance REST + WebSocket"]
             store[("store<br/>SQLite cache")]
             corecrate["core<br/>exact decimal ticks,<br/>timeframes, candles"]
+            host["indicators<br/>wasmtime sandbox: no files,<br/>network or clock"]
         end
         ui -- "commands" --> engine
         engine -- "events + live channel" --> ui
         engine --> data
         engine --> store
+        engine -- "all cached candles" --> host
         data --> corecrate
         store --> corecrate
     end
@@ -57,11 +60,9 @@ flowchart LR
 
     subgraph planned["Planned"]
         direction TB
-        wasm["Indicator .wasm<br/>no files, network or clock"]
         replay["Replay + paper trading"]
         mcp["MCP server for AI agents"]
     end
-    engine -. "candles up to the cursor" .-> wasm
     engine -.-> replay
     mcp -. "local socket" .-> engine
 ```
@@ -72,6 +73,9 @@ flowchart LR
 | [`crates/store`](crates/store) | The SQLite cache: instruments, candles per pair and timeframe, the start of each pair's history, and the watchlist. Migrations go up and down. |
 | [`crates/data`](crates/data) | Data providers behind one `Provider` trait. Binance today: pair list, history pages, 24 h changes, and a live WebSocket stream that reconnects with backoff and an idle timeout. |
 | [`crates/engine`](crates/engine) | The brain: serves charts from cache first, fetches only what is missing, keeps live subscriptions, backfills gaps after reconnects, and tracks the connection state. |
+| [`crates/indicators`](crates/indicators) | The indicator host: runs WebAssembly indicators in a sandbox (no files, network, env or real clock) under memory and work limits, and checks what they declare and return. The five built-in indicators are compiled in. |
+| [`crates/indicator-cli`](crates/indicator-cli) | The `sandchart-indicator` command for authors: `new`, `build` and `test`, using the same host as the app. |
+| [`indicators`](indicators) | The indicator SDK (`sandchart-indicator`, with the contract `sdk/wit/indicator.wit`), the built-in indicators, and test modules for the host. A separate Cargo workspace that builds for WebAssembly. |
 | [`app/src-tauri`](app/src-tauri) | The desktop shell: exposes the engine to the UI as typed commands and a live-event channel, with a strict content security policy and no file-system or shell access. |
 | [`app/ui`](app/ui) | The interface: Canvas chart, search, watchlist, status bar and states. It runs in a normal browser against a built-in mock too, which is how the end-to-end tests work. |
 
@@ -111,8 +115,8 @@ Nothing is reloaded wholesale: a chart you have opened before comes straight fro
 
 | Version | Focus |
 | --- | --- |
-| **0.1** (this release) | Live Binance charts, local cache, own renderer, search, watchlist, themes, unsigned builds |
-| 0.2 | Indicators as sandboxed WebAssembly modules, with an SDK and a command to build and test them |
+| 0.1 | Live Binance charts, local cache, own renderer, search, watchlist, themes, unsigned builds |
+| **0.2** (this release) | Indicators as sandboxed WebAssembly modules, with an SDK and a command to build and test them |
 | 0.3 | Replay: step through history candle by candle, paper trades with stop and take-profit, statistics in R, a shareable `.replay` file that gives anyone the same result |
 | 0.4 | An MCP server so AI agents can read charts, build indicators and run replays |
 | 0.5 | Drawing tools and alerts |
@@ -149,6 +153,17 @@ Run the `.msi`. If SmartScreen shows "Windows protected your PC", click More inf
 
 For the AppImage: `chmod +x Sandchart_*.AppImage`, then run it. For the `.deb`: `sudo apt install ./Sandchart_*.deb`.
 
+## Write your own indicators
+
+Indicators are WebAssembly modules. The [guide](docs/indicators.md) shows how to write one in Rust, or how to hand the job to your coding agent. You need the `sandchart-indicator` command: download the archive for your system (`sandchart-indicator-<target>.tar.gz`, or `.zip` on Windows) from the [Releases](../../releases) page and put the binary on your `PATH`, or build it from a clone:
+
+```sh
+rustup target add wasm32-wasip2
+git clone https://github.com/kennnyz/sandchart && cd sandchart
+cargo build --manifest-path indicators/Cargo.toml --target wasm32-wasip2 --release
+cargo install --path crates/indicator-cli
+```
+
 ## Verify your download
 
 Every release has a `SHA256SUMS` file and a build provenance attestation made by GitHub Actions.
@@ -170,7 +185,7 @@ gh attestation verify Sandchart_<version>_aarch64.dmg --repo kennnyz/sandchart
 
 ## Build from source
 
-You need Rust (stable, installed with [rustup](https://rustup.rs/)), Node.js 22 and pnpm 10. On Linux also install the Tauri system packages:
+You need Rust (stable, installed with [rustup](https://rustup.rs/)) with the `wasm32-wasip2` target (`rustup target add wasm32-wasip2`), Node.js 22 and pnpm 10. On Linux also install the Tauri system packages:
 
 ```sh
 sudo apt-get install -y build-essential libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
@@ -180,6 +195,7 @@ sudo apt-get install -y build-essential libwebkit2gtk-4.1-dev libxdo-dev libssl-
 Then:
 
 ```sh
+cargo build --manifest-path indicators/Cargo.toml --target wasm32-wasip2 --release   # the built-in indicators, embedded in the app
 pnpm --dir app/ui install --frozen-lockfile
 pnpm --dir app/ui tauri build    # macOS and Linux shell; bundles land in target/release/bundle/
 ```
@@ -217,7 +233,7 @@ Bundled fonts, under the SIL Open Font License 1.1 (licence texts in `app/ui/src
 
 Rust dependencies under the MPL-2.0 (file-level copyleft, used unmodified, allowed as exceptions in `deny.toml`): `cssparser`, `cssparser-macros`, `selectors`, `dtoa-short`, `option-ext`. All of them come in through Tauri.
 
-`target-lexicon` is Apache-2.0 WITH LLVM-exception.
+The WebAssembly runtime (wasmtime, cranelift and the WASI crates) is Apache-2.0 WITH LLVM-exception, which `deny.toml` allows for every crate.
 
 Every other dependency must be MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, Zlib or Unicode-3.0; `cargo deny check` enforces this in CI. Icons are from [Lucide](https://lucide.dev) (ISC).
 

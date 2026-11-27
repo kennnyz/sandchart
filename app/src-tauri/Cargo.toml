@@ -14,6 +14,7 @@ tauri-build = { version = "2", features = [] }
 sandchart-core = { path = "../../crates/core" }
 sandchart-data = { path = "../../crates/data" }
 sandchart-engine = { path = "../../crates/engine" }
+sandchart-indicators = { path = "../../crates/indicators" }
 directories = "6"
 serde.workspace = true
 thiserror.workspace = true

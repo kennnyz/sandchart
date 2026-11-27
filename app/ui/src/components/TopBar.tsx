@@ -1,4 +1,4 @@
-import { ChevronDown, Moon, PanelRightOpen, Sun } from "lucide-react";
+import { Activity, ChevronDown, Moon, PanelRightOpen, Sun } from "lucide-react";
 import type { ConnectionState, InstrumentId, TimeframeCode } from "../backend/types";
 import { getLanguage, setLanguage, t } from "../i18n";
 import { shortcutLabel, sourceName } from "../labels";
@@ -14,6 +14,7 @@ export interface TopBarProps {
   theme: "dark" | "light";
   onTheme: (t: "dark" | "light") => void;
   onSearch: () => void;
+  onIndicators: () => void;
   /** When the watchlist is hidden, a button here brings it back. */
   watchlistHidden: boolean;
   onShowWatchlist: () => void;
@@ -60,6 +61,16 @@ export function TopBar(p: TopBarProps) {
       >
         {t("topbar.log")}
         <span className="switch" />
+      </button>
+      <div className="divider" />
+      <button
+        className="text-button with-icon"
+        data-testid="indicators-button"
+        aria-haspopup="dialog"
+        onClick={p.onIndicators}
+      >
+        <Activity size={14} />
+        {t("indicators.button")}
       </button>
       <div className="spacer" />
       <div className="connection" data-testid="connection">

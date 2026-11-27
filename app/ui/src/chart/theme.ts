@@ -1,5 +1,5 @@
 // Every value comes from the Design Reference. Candles are monochrome; colour
-// appears only in numbers (`up` / `down`).
+// appears only in numbers (`up` / `down`) and in indicator series.
 
 export interface CandleStyle {
   body: string;
@@ -32,6 +32,10 @@ export interface ChartTheme {
   lastPriceBg: string;
   lastPriceText: string;
   lastPriceLine: string;
+  /** Indicator series colours by palette slot (0..=7): calm, apart from each other and from the candles. */
+  indicatorPalette: readonly string[];
+  /** Fill opacity of a band between two indicator lines. */
+  bandOpacity: number;
 }
 
 export const AXIS_FONT = '11px "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
@@ -61,6 +65,9 @@ export const dark: ChartTheme = {
   lastPriceBg: "#F2F2F2",
   lastPriceText: "#1A1A1A",
   lastPriceLine: "#A1A1A6",
+  // Blue, amber, teal, violet, rose, green, orange, slate.
+  indicatorPalette: ["#6E9FD8", "#D7A85A", "#4FB0A0", "#A58BD6", "#D9829B", "#94B85E", "#E08A5C", "#8FA3B8"],
+  bandOpacity: 0.12,
 };
 
 export const light: ChartTheme = {
@@ -81,4 +88,6 @@ export const light: ChartTheme = {
   lastPriceBg: "#111111",
   lastPriceText: "#FFFFFF",
   lastPriceLine: "#6B6B70",
+  indicatorPalette: ["#2F6DB5", "#B07A1E", "#1F8A7A", "#7357B8", "#B84F6E", "#5E8A2A", "#C2602E", "#5E7085"],
+  bandOpacity: 0.12,
 };

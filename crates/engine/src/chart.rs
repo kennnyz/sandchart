@@ -96,7 +96,8 @@ impl Engine {
                     self.shared.note_ok();
                     let key = id.clone();
                     let oldest_cached = cache.candles.first().map(|c| c.open_time);
-                    blocking(store, move |s| {
+                    let writes_candles = reset || !candles.is_empty();
+                    let written = blocking(store, move |s| {
                         if reset {
                             s.delete_series(&key, tf)?;
                         }
@@ -109,7 +110,11 @@ impl Engine {
                             Ok(())
                         }
                     })
-                    .await?;
+                    .await;
+                    if writes_candles {
+                        self.shared.drop_bars(id, tf);
+                    }
+                    written?;
                 }
                 Err(e) => {
                     self.shared.note_error(&e);

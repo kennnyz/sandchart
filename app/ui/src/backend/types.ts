@@ -91,6 +91,85 @@ export interface DayChange {
 /** `connecting`: nothing has answered yet since the app started. */
 export type ConnectionState = "connecting" | "connected" | "reconnecting" | "offline";
 
+// Indicators (dto.rs). Param values are externally tagged, as `{ int: 20 }`.
+export type ParamValue = { int: number } | { float: number } | { boolean: boolean } | { choice: string };
+export type ParamKind = { int: [number, number] } | { float: [number, number] } | "boolean" | { choice: string[] };
+export interface ParamSpec {
+  id: string;
+  label: string;
+  kind: ParamKind;
+  default: ParamValue;
+}
+export type SeriesKind = "line" | "histogram" | "markers" | { band: [string, string] };
+export interface SeriesSpec {
+  id: string;
+  label: string;
+  kind: SeriesKind;
+  pane: "price" | "own";
+  /** Palette slot, 0..=7. */
+  color: number;
+}
+export interface IndicatorMeta {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  params: ParamSpec[];
+  series: SeriesSpec[];
+}
+export interface IndicatorInfo {
+  meta: IndicatorMeta;
+  builtin: boolean;
+  /** The module changed earlier values when later bars arrived. */
+  repaints: boolean;
+}
+/** A built-in or installed module that could not be loaded; its chart instances stay stored. */
+export interface FailedIndicator {
+  id: string;
+  builtin: boolean;
+  error: string;
+}
+export interface IndicatorList {
+  indicators: IndicatorInfo[];
+  failed: FailedIndicator[];
+  /** Why the indicator service could not do its work (runtime did not start, list unreadable). */
+  error: string | null;
+}
+/** A checked module file that is not installed yet. */
+export interface Inspection {
+  meta: IndicatorMeta;
+  /** The installed version of the same id, which an install would replace. */
+  replaces: string | null;
+}
+/** One indicator on the chart. `instance` ids are made by the UI. */
+export interface IndicatorInstance {
+  instance: string;
+  moduleId: string;
+  params: [string, ParamValue][];
+  /** Palette slot per series id. */
+  colors: Record<string, number>;
+  hidden: boolean;
+}
+export interface Marker {
+  /** Index into the computed bars (`firstTime` is bar 0). */
+  index: number;
+  shape: "up" | "down" | "dot";
+  text: string | null;
+}
+/** `values` has one entry per bar; NaN is a gap. A band series carries empty values. */
+export type SeriesData = { values: Float64Array } | { markers: Marker[] };
+export interface ComputedIndicator {
+  /** Open time of the first and last bar kept. */
+  firstTime: number;
+  lastTime: number;
+  series: { id: string; data: SeriesData }[];
+  log: string;
+}
+export interface IndicatorResult {
+  instance: string;
+  result: { ok: ComputedIndicator } | { err: string };
+}
+
 export interface Backend {
   searchInstruments(q: string): Promise<Instrument[]>;
   /** Up to 1000 candles ending before `before` (newest when omitted), ascending. */
@@ -112,4 +191,14 @@ export interface Backend {
   instrumentsReady(): Promise<boolean>;
   /** Called when the instrument list was synced. Resolves to the function that stops listening. */
   onInstrumentsSynced(cb: () => void): Promise<() => void>;
+  listIndicators(): Promise<IndicatorList>;
+  /** Checks a module file without installing it. */
+  inspectIndicator(bytes: Uint8Array): Promise<Inspection>;
+  installIndicator(bytes: Uint8Array): Promise<IndicatorInfo>;
+  /** Uninstalls a module and removes its chart instances; built-ins cannot be removed. */
+  removeIndicator(id: string): Promise<void>;
+  getChartIndicators(): Promise<IndicatorInstance[]>;
+  setChartIndicators(items: IndicatorInstance[]): Promise<void>;
+  /** Every visible chart indicator over all cached bars, cut to bars with `time >= fromTime`. */
+  computeIndicators(id: InstrumentId, tf: TimeframeCode, fromTime: number): Promise<IndicatorResult[]>;
 }

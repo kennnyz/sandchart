@@ -148,6 +148,9 @@ impl Engine {
             qty_scale,
         }])?;
         store.upsert_candles(&id, tf, &candles)?;
+        // The bar cache is never locked while the store is (see `indicators.rs`).
+        drop(store);
+        self.shared.drop_bars(&id, tf);
         Ok(id)
     }
 }

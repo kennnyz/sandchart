@@ -18,6 +18,13 @@ export default defineConfig({
   },
   projects: [
     { name: "chart", grepInvert: /@perf/ },
+    // The app runs in WKWebView (macOS) and WebKitGTK (Linux), so every functional test also
+    // runs in WebKit: Chromium forgives things WebKit throws on.
+    {
+      name: "webkit",
+      grepInvert: /@perf/,
+      use: { ...devices["Desktop Safari"], viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 },
+    },
     // Draw time depends on the runner: two retries absorb a noisy run, then it gates (ruling R6).
     { name: "perf", grep: /@perf/, retries: 2 },
   ],

@@ -20,6 +20,27 @@ pub enum StoreError {
     LimitTooLarge(usize),
 }
 
+/// An installed indicator module, as recorded at install time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredModule {
+    pub id: String,
+    pub version: String,
+    pub sha256: String,
+    pub repaints: bool,
+    /// Milliseconds since the epoch.
+    pub installed_at: i64,
+}
+
+/// An indicator on the chart. `params` and `colors` are opaque strings owned by the engine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredInstance {
+    pub instance: String,
+    pub module_id: String,
+    pub params: String,
+    pub colors: String,
+    pub hidden: bool,
+}
+
 /// The local cache. Wraps a single SQLite connection.
 pub struct Store {
     conn: Connection,
@@ -282,6 +303,85 @@ impl Store {
             )?;
             for (position, id) in ids.iter().enumerate() {
                 stmt.execute(params![position as i64, id.source, id.symbol])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn indicator_modules(&self) -> Result<Vec<StoredModule>, StoreError> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT id, version, sha256, repaints, installed_at
+             FROM indicator_modules ORDER BY id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(StoredModule {
+                id: row.get(0)?,
+                version: row.get(1)?,
+                sha256: row.get(2)?,
+                repaints: row.get(3)?,
+                installed_at: row.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// Inserts a module or replaces the existing row with the same id.
+    pub fn upsert_indicator_module(&mut self, m: &StoredModule) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO indicator_modules
+                (id, version, sha256, repaints, installed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![m.id, m.version, m.sha256, m.repaints, m.installed_at],
+        )?;
+        Ok(())
+    }
+
+    /// Removes a module and every chart instance of it, atomically.
+    pub fn delete_indicator_module(&mut self, id: &str) -> Result<(), StoreError> {
+        let tx = self.conn.transaction()?;
+        tx.execute("DELETE FROM indicator_instances WHERE module_id = ?1", [id])?;
+        tx.execute("DELETE FROM indicator_modules WHERE id = ?1", [id])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn indicator_instances(&self) -> Result<Vec<StoredInstance>, StoreError> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT instance, module_id, params, colors, hidden
+             FROM indicator_instances ORDER BY position",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(StoredInstance {
+                instance: row.get(0)?,
+                module_id: row.get(1)?,
+                params: row.get(2)?,
+                colors: row.get(3)?,
+                hidden: row.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// Replaces every chart instance, preserving the order of `items`.
+    pub fn set_indicator_instances(&mut self, items: &[StoredInstance]) -> Result<(), StoreError> {
+        let tx = self.conn.transaction()?;
+        tx.execute("DELETE FROM indicator_instances", [])?;
+        {
+            let mut stmt = tx.prepare_cached(
+                "INSERT INTO indicator_instances
+                    (position, instance, module_id, params, colors, hidden)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )?;
+            for (position, i) in items.iter().enumerate() {
+                stmt.execute(params![
+                    position as i64,
+                    i.instance,
+                    i.module_id,
+                    i.params,
+                    i.colors,
+                    i.hidden
+                ])?;
             }
         }
         tx.commit()?;

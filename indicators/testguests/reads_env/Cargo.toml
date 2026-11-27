@@ -1,0 +1,15 @@
+[package]
+name = "testguest-reads-env"
+description = "Test guest for the indicator host: returns the number of args and env vars"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+sandchart-indicator = { path = "../../sdk" }
+

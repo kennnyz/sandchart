@@ -1,0 +1,12 @@
+# Indicator guests (WebAssembly components) live in their own workspace: they
+# build for wasm32-wasip2 and must not be pulled into the app's workspace.
+[workspace]
+resolver = "3"
+members = ["sdk", "builtin/*", "testguests/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+repository = "https://github.com/kennnyz/sandchart"

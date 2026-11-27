@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatBp, formatChange, formatCrosshairTime, formatPrice, formatTimeLabel, formatUtcClock } from "./format";
+import { formatBp, formatChange, formatCrosshairTime, formatPrice, formatTimeLabel, formatUtcClock, formatValue } from "./format";
 
 describe("formatPrice", () => {
   it("formats_tiny_tick_prices", () => {
@@ -72,5 +72,14 @@ describe("formatUtcClock", () => {
   it("shows HH:MM on the same UTC day, with the date otherwise", () => {
     expect(formatUtcClock(t("2026-11-27T09:05:00Z"), t("2026-11-27T18:00:00Z"))).toBe("09:05");
     expect(formatUtcClock(t("2026-11-25T23:59:00Z"), t("2026-11-27T18:00:00Z"))).toBe("25 Nov 23:59");
+  });
+});
+
+describe("formatValue", () => {
+  it("groups the integer part and uses a real minus", () => {
+    expect(formatValue(12345.678, 2)).toBe("12 345.68");
+    expect(formatValue(-0.5, 2)).toBe("−0.50");
+    expect(formatValue(-0.001, 2)).toBe("0.00");
+    expect(formatValue(54.1, 0)).toBe("54");
   });
 });

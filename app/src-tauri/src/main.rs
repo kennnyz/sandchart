@@ -54,6 +54,7 @@ fn main() {
             std::fs::create_dir_all(dirs.data_dir())?;
             let engine = Arc::new(Engine::open(
                 dirs.data_dir(),
+                Some(&dirs.cache_dir().join("indicators")),
                 vec![Arc::new(Binance::default_hosts())],
             )?);
 
@@ -100,6 +101,13 @@ fn main() {
             commands::import_csv,
             commands::get_connection,
             commands::get_instruments_ready,
+            commands::list_indicators,
+            commands::inspect_indicator,
+            commands::install_indicator,
+            commands::remove_indicator,
+            commands::get_chart_indicators,
+            commands::set_chart_indicators,
+            commands::compute_indicators,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Sandchart");

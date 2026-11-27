@@ -42,13 +42,35 @@ jobs:
       - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           components: rustfmt, clippy
+          targets: wasm32-wasip2
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: |
+            .
+            indicators
+      # Indicator guests: the host tests load these .wasm files.
+      - run: cargo build --manifest-path indicators/Cargo.toml --target wasm32-wasip2 --release --locked
       - run: cargo fmt --check
+      - run: cargo fmt --check --manifest-path indicators/Cargo.toml
       - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo clippy --manifest-path indicators/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --workspace
+      - run: cargo test --manifest-path indicators/Cargo.toml
+      # The author loop: new, build and test a project from the template (needs the network and wasm32-wasip2).
+      - run: cargo test -p sandchart-indicator-cli -- --ignored
+      # Timing budgets of the built-in indicators; CI runners are slower than the reference machine.
+      - run: cargo test --release -p sandchart-indicators --test builtins -- --ignored perf_
+        env:
+          SANDCHART_PERF_SLACK: "3"
       - name: cargo deny check
         if: runner.os == 'Linux'
         uses: EmbarkStudios/cargo-deny-action@81891abc19297b21343b15ef67dc61e4aea74fda # v2.1.4
+      # The guest workspace has its own lockfile; the root deny.toml applies to it too.
+      - name: cargo deny check (indicators)
+        if: runner.os == 'Linux'
+        uses: EmbarkStudios/cargo-deny-action@81891abc19297b21343b15ef67dc61e4aea74fda # v2.1.4
+        with:
+          manifest-path: indicators/Cargo.toml
 
   ui:
     name: ui
@@ -71,7 +93,7 @@ jobs:
       - run: pnpm test
 
   e2e:
-    name: e2e (chromium)
+    name: e2e (chromium, webkit)
     runs-on: ubuntu-22.04
     defaults:
       run:
@@ -87,7 +109,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: app/ui/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm exec playwright install --with-deps chromium webkit
       - run: pnpm exec playwright test
         env:
           CI: "true"

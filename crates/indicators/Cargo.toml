@@ -1,0 +1,23 @@
+[package]
+name = "sandchart-indicators"
+description = "Sandchart indicator host: runs indicator WebAssembly components in a sandbox with memory, fuel and time limits"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+bytes = "1"
+rand = { version = "0.10", default-features = false }
+semver = "1"
+serde.workspace = true
+sha2 = "0.10"
+thiserror.workspace = true
+# Only for the AsyncWrite trait that wasmtime-wasi's StdoutStream requires.
+tokio = { version = "1", default-features = false }
+wasmtime = { version = "51", default-features = false, features = ["addr2line", "component-model", "cranelift", "demangle", "parallel-compilation", "runtime", "std"] }
+wasmtime-wasi = { version = "51", default-features = false, features = ["p2"] }
+
+[dev-dependencies]
+tempfile = "3"

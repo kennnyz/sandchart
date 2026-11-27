@@ -10,10 +10,16 @@ struct Migration {
 }
 
 /// Index `i` holds the migration that moves the schema from version `i` to `i + 1`.
-const MIGRATIONS: &[Migration] = &[Migration {
-    up: include_str!("../migrations/0001_init.up.sql"),
-    down: include_str!("../migrations/0001_init.down.sql"),
-}];
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        up: include_str!("../migrations/0001_init.up.sql"),
+        down: include_str!("../migrations/0001_init.down.sql"),
+    },
+    Migration {
+        up: include_str!("../migrations/0002_indicators.up.sql"),
+        down: include_str!("../migrations/0002_indicators.down.sql"),
+    },
+];
 
 fn user_version(conn: &Connection) -> Result<u32, StoreError> {
     Ok(conn.pragma_query_value(None, "user_version", |row| row.get(0))?)

@@ -1,0 +1,15 @@
+[package]
+name = "testguest-spams-resources"
+description = "Test guest for the indicator host: creates WASI handles in a loop and never drops them"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+sandchart-indicator = { path = "../../sdk" }
+wasip2 = "1"

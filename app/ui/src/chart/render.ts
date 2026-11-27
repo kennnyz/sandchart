@@ -1,5 +1,6 @@
 import type { TimeframeCode } from "../backend/types";
 import { formatCrosshairTime, formatPrice, formatTimeLabel } from "./format";
+import { drawMarkers, drawPanes, drawPriceBands, drawPriceSeries, formatPaneValue, type IndicatorFrame, type PaneFrame } from "./renderIndicators";
 import type { PriceScale } from "./scale";
 import { MONO_FAMILY, PRICE_AXIS_WIDTH, SANS_FAMILY, TIME_AXIS_HEIGHT, VOLUME_HEIGHT, type CandleStyle, type ChartTheme } from "./theme";
 import { indexToX, visibleRange, type Viewport } from "./viewport";
@@ -32,7 +33,7 @@ export interface FrameInput {
   axisWidth: number;
   series: Series;
   view: Viewport;
-  /** Maps prices to CSS px rows of the plot. */
+  /** Maps prices to CSS px rows of the price plot (the top `indicators.priceH` of the plot). */
   scale: PriceScale;
   priceDecimals: number;
   tf: TimeframeCode;
@@ -40,6 +41,8 @@ export interface FrameInput {
   /** Two lines for the start-of-history marker, or null when the first candle is not the first one. */
   historyStart: [string, string] | null;
   theme: ChartTheme;
+  /** Indicator layers and own panes; null draws none and the price plot fills the plot. */
+  indicators: IndicatorFrame | null;
 }
 
 const LABEL_HEIGHT = 18;
@@ -62,6 +65,8 @@ export class RenderBuffers {
   markCount = 0;
   private fontDpr = 0;
   font = "";
+  private markerFontDpr = 0;
+  private markerFontText = "";
 
   ensureColumns(n: number): void {
     if (this.colX.length >= n) return;
@@ -80,6 +85,14 @@ export class RenderBuffers {
     }
     return this.font;
   }
+
+  markerFont(dpr: number): string {
+    if (dpr !== this.markerFontDpr) {
+      this.markerFontDpr = dpr;
+      this.markerFontText = `${10 * dpr}px ${MONO_FAMILY}`;
+    }
+    return this.markerFontText;
+  }
 }
 
 export function plotSize(width: number, height: number, axisWidth: number): { plotW: number; plotH: number } {
@@ -91,8 +104,9 @@ function priceTicks(scale: PriceScale): number[] {
 }
 
 /**
- * Widest price label (tick labels, last price, crosshair price) in CSS px, and the
- * price axis width that fits it: at least PRICE_AXIS_WIDTH, else the label plus padding.
+ * Widest price label (tick labels, last price, crosshair price, own pane labels) in CSS
+ * px, and the price axis width that fits it: at least PRICE_AXIS_WIDTH, else the label
+ * plus padding.
  */
 export function priceAxisWidth(
   ctx: CanvasRenderingContext2D,
@@ -102,6 +116,7 @@ export function priceAxisWidth(
   decimals: number,
   lastClose: number,
   crosshairY: number | null,
+  panes: readonly PaneFrame[] = [],
 ): { width: number; widest: number; widestText: string } {
   ctx.font = buf.axisFont(dpr);
   let widest = 0;
@@ -116,6 +131,7 @@ export function priceAxisWidth(
   for (const t of priceTicks(scale)) measure(formatPrice(Math.round(t), decimals));
   if (Number.isFinite(lastClose)) measure(formatPrice(lastClose, decimals));
   if (crosshairY !== null) measure(formatPrice(Math.round(scale.fromY(crosshairY)), decimals));
+  for (const p of panes) for (const t of p.ticks) measure(formatPaneValue(t));
   return { width: Math.max(PRICE_AXIS_WIDTH, Math.ceil(widest + 2 * LABEL_PAD)), widest, widestText };
 }
 
@@ -127,6 +143,10 @@ export function draw(f: FrameInput, buf: RenderBuffers): void {
   const pw = Math.round(plotW * dpr);
   const ph = Math.round(plotH * dpr);
   const px = Math.max(1, Math.round(dpr));
+  const ind = f.indicators;
+  // Price plot on top; own panes (if any) fill the rest of the plot height.
+  const priceH = ind ? ind.priceH : plotH;
+  const pph = Math.round(priceH * dpr);
 
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.globalAlpha = 1;
@@ -144,7 +164,7 @@ export function draw(f: FrameInput, buf: RenderBuffers): void {
   ctx.fillStyle = th.grid;
   for (const t of ticks) {
     const y = Math.round(f.scale.toY(t) * dpr);
-    if (y >= 0 && y < ph) ctx.fillRect(0, y, pw, px);
+    if (y >= 0 && y < pph) ctx.fillRect(0, y, pw, px);
   }
   for (let m = 0; m < buf.markCount; m++) {
     const x = Math.round(indexToX(view, buf.markIndex[m]!, plotW) * dpr);
@@ -153,12 +173,19 @@ export function draw(f: FrameInput, buf: RenderBuffers): void {
 
   ctx.save();
   ctx.beginPath();
-  ctx.rect(0, 0, pw, ph);
+  ctx.rect(0, 0, pw, pph);
   ctx.clip();
-  if (f.historyStart && s.count > 0) drawHistoryStart(f, plotW, plotH, px);
+  if (f.historyStart && s.count > 0) drawHistoryStart(f, plotW, priceH, px);
+  const layers = hasBars && ind !== null && ind.layers.length > 0;
+  // Order: bands under the candles; lines, histograms and markers over them.
+  if (layers) drawPriceBands(f, ind, first, last, plotW);
   if (hasBars) {
-    if (view.barWidth >= 2) drawCandles(f, plotW, plotH, first, last, px);
-    else drawColumns(f, buf, plotW, plotH, first, last, px);
+    if (view.barWidth >= 2) drawCandles(f, plotW, priceH, first, last, px);
+    else drawColumns(f, buf, plotW, priceH, first, last, px);
+  }
+  if (layers) {
+    drawPriceSeries(f, ind, first, last, plotW);
+    drawMarkers(f, ind, buf, first, last, plotW);
   }
 
   const lastClose = s.count > 0 ? s.close[s.count - 1]! : NaN;
@@ -173,10 +200,26 @@ export function draw(f: FrameInput, buf: RenderBuffers): void {
     ctx.lineTo(pw, y);
     ctx.stroke();
   }
+  ctx.setLineDash([]);
+  ctx.restore();
 
+  if (ind && ind.panes.length > 0) {
+    if (layers) drawPanes(f, ind, first, last, plotW, pw, W, px);
+    // Separators only: no bars yet, but the panes keep their place.
+    else for (const p of ind.panes) {
+      ctx.fillStyle = th.line;
+      ctx.fillRect(0, Math.round(p.top * dpr), W, px);
+    }
+  }
+
+  // Crosshair: the vertical line crosses the price plot and every own pane.
   const ch = f.crosshair;
   let chX = 0;
   if (ch) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, pw, ph);
+    ctx.clip();
     chX = ch.index === null ? ch.x : indexToX(view, ch.index, plotW);
     ctx.strokeStyle = th.muted;
     ctx.setLineDash([4 * px, 4 * px]);
@@ -188,9 +231,9 @@ export function draw(f: FrameInput, buf: RenderBuffers): void {
     ctx.moveTo(0, y);
     ctx.lineTo(pw, y);
     ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
   }
-  ctx.setLineDash([]);
-  ctx.restore();
 
   // Axis borders.
   ctx.fillStyle = th.line;
@@ -209,10 +252,25 @@ export function draw(f: FrameInput, buf: RenderBuffers): void {
     if (ticksValue === prevLabel) continue;
     prevLabel = ticksValue;
     const y = f.scale.toY(t);
-    if (y < LABEL_HEIGHT / 2 || y > plotH - LABEL_HEIGHT / 2) continue;
+    if (y < LABEL_HEIGHT / 2 || y > priceH - LABEL_HEIGHT / 2) continue;
     if (Math.abs(y - lastY) < LABEL_HEIGHT) continue;
     if (ch && Math.abs(y - ch.y) < LABEL_HEIGHT) continue;
     ctx.fillText(formatPrice(ticksValue, f.priceDecimals), pw + LABEL_PAD * dpr, Math.round(y * dpr));
+  }
+
+  // Own pane labels: hidden at the pane edges and under the crosshair label.
+  let chPane: PaneFrame | null = null;
+  if (ind) {
+    for (const p of ind.panes) {
+      if (ch && ch.y >= p.top && ch.y < p.top + p.height) chPane = p;
+      if (!p.scale) continue;
+      for (const t of p.ticks) {
+        const y = p.top + p.scale.toY(t);
+        if (y < p.top + LABEL_HEIGHT / 2 || y > p.top + p.height - LABEL_HEIGHT / 2) continue;
+        if (ch && Math.abs(y - ch.y) < LABEL_HEIGHT) continue;
+        ctx.fillText(formatPaneValue(t), pw + LABEL_PAD * dpr, Math.round(y * dpr));
+      }
+    }
   }
 
   // Time axis: labels under the crosshair time label are hidden.
@@ -229,12 +287,17 @@ export function draw(f: FrameInput, buf: RenderBuffers): void {
     ctx.fillText(text, x, timeY);
   }
 
-  if (Number.isFinite(lastY) && lastY >= 0 && lastY <= plotH) {
+  if (Number.isFinite(lastY) && lastY >= 0 && lastY <= priceH) {
     priceLabel(ctx, formatPrice(lastClose, f.priceDecimals), lastY, pw, W, dpr, th.lastPriceBg, th.lastPriceText);
   }
   if (ch) {
-    const price = Math.round(f.scale.fromY(ch.y));
-    priceLabel(ctx, formatPrice(price, f.priceDecimals), ch.y, pw, W, dpr, th.crosshairLabelBg, th.fg);
+    if (ch.y < priceH) {
+      const price = Math.round(f.scale.fromY(ch.y));
+      priceLabel(ctx, formatPrice(price, f.priceDecimals), ch.y, pw, W, dpr, th.crosshairLabelBg, th.fg);
+    } else if (chPane?.scale) {
+      const value = chPane.scale.fromY(ch.y - chPane.top);
+      priceLabel(ctx, formatPaneValue(value), ch.y, pw, W, dpr, th.crosshairLabelBg, th.fg);
+    }
     if (chTime) timeLabel(ctx, f.theme, chTime, chX, ph, pw, dpr);
   }
 }

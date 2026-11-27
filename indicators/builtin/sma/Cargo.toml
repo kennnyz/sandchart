@@ -1,0 +1,14 @@
+[package]
+name = "builtin-sma"
+description = "Built-in simple moving average indicator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+sandchart-indicator = { path = "../../sdk" }

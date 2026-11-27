@@ -1,5 +1,5 @@
 use sandchart_core::{Candle, Instrument, InstrumentId, Timeframe};
-use sandchart_store::Store;
+use sandchart_store::{Store, StoredInstance, StoredModule};
 
 fn id(symbol: &str) -> InstrumentId {
     InstrumentId {
@@ -196,13 +196,85 @@ fn migrations_go_down_and_up() {
     {
         let mut store = Store::open(&path).unwrap();
         store.upsert_instruments(&[instrument("BTCUSDT")]).unwrap();
-        assert_eq!(table_count(&path), 4);
+        assert_eq!(table_count(&path), 6);
         store.migrate_down_to(0).unwrap();
         assert_eq!(table_count(&path), 0);
     }
     let store = Store::open(&path).unwrap();
-    assert_eq!(table_count(&path), 4);
+    assert_eq!(table_count(&path), 6);
     assert_eq!(store.instrument(&id("BTCUSDT")).unwrap(), None);
+}
+
+fn module(id: &str, version: &str) -> StoredModule {
+    StoredModule {
+        id: id.into(),
+        version: version.into(),
+        sha256: "ab".repeat(32),
+        repaints: false,
+        installed_at: 1_700_000_000_000,
+    }
+}
+
+fn inst(instance: &str, module_id: &str) -> StoredInstance {
+    StoredInstance {
+        instance: instance.into(),
+        module_id: module_id.into(),
+        params: r#"{"period":14}"#.into(),
+        colors: r#"{"line":2}"#.into(),
+        hidden: false,
+    }
+}
+
+#[test]
+fn indicator_migration_goes_down_to_1_and_up_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sandchart.db");
+    {
+        let mut store = Store::open(&path).unwrap();
+        store.upsert_indicator_module(&module("m", "1")).unwrap();
+        store.migrate_down_to(1).unwrap();
+        assert_eq!(rusqlite_count(&path), 4);
+    }
+    let store = Store::open(&path).unwrap();
+    assert_eq!(rusqlite_count(&path), 6);
+    assert!(store.indicator_modules().unwrap().is_empty());
+}
+
+#[test]
+fn module_upsert_replaces_the_version() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.upsert_indicator_module(&module("m", "1")).unwrap();
+    let mut v2 = module("m", "2");
+    v2.repaints = true;
+    store.upsert_indicator_module(&v2).unwrap();
+    assert_eq!(store.indicator_modules().unwrap(), vec![v2]);
+}
+
+#[test]
+fn deleting_a_module_deletes_its_instances() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.upsert_indicator_module(&module("m", "1")).unwrap();
+    store
+        .set_indicator_instances(&[inst("a", "m"), inst("b", "builtin.sma"), inst("c", "m")])
+        .unwrap();
+    store.delete_indicator_module("m").unwrap();
+    assert!(store.indicator_modules().unwrap().is_empty());
+    assert_eq!(
+        store.indicator_instances().unwrap(),
+        vec![inst("b", "builtin.sma")]
+    );
+}
+
+#[test]
+fn instances_keep_order_and_can_be_emptied() {
+    let mut store = Store::open_in_memory().unwrap();
+    let mut hidden = inst("z", "builtin.ema");
+    hidden.hidden = true;
+    let items = vec![hidden, inst("a", "builtin.sma"), inst("m", "builtin.rsi")];
+    store.set_indicator_instances(&items).unwrap();
+    assert_eq!(store.indicator_instances().unwrap(), items);
+    store.set_indicator_instances(&[]).unwrap();
+    assert!(store.indicator_instances().unwrap().is_empty());
 }
 
 /// Counts user tables by opening a second raw connection.

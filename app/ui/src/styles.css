@@ -86,7 +86,8 @@ button {
   cursor: pointer;
 }
 button:focus-visible,
-input:focus-visible {
+input:focus-visible,
+select:focus-visible {
   outline: 1px solid var(--muted);
   outline-offset: 1px;
 }
@@ -171,6 +172,8 @@ input:focus-visible {
 }
 .symbol-button:hover,
 .icon-button:hover,
+.ind-option:hover,
+.ind-action:hover,
 .tf:hover,
 .text-button:hover {
   background: var(--fg-5);
@@ -637,4 +640,266 @@ kbd.key {
   border-top: 1px solid var(--line);
   font-size: 11px;
   color: var(--muted);
+}
+
+/* ---- Indicators ---- */
+
+.text-button.with-icon {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.ind-dialog {
+  position: absolute;
+  top: 96px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 480px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 160px);
+  display: flex;
+  flex-direction: column;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+}
+.ind-dialog-header,
+.ind-settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+}
+.ind-dialog-header {
+  height: 44px;
+  flex: none;
+  padding: 0 8px 0 16px;
+  border-bottom: 1px solid var(--line);
+}
+.ind-dialog-body {
+  overflow-y: auto;
+  padding: 4px 0 8px;
+  min-height: 0;
+}
+.ind-section {
+  padding: 10px 16px 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.ind-option-row {
+  display: flex;
+  align-items: center;
+  padding-right: 8px;
+}
+.ind-option {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px;
+  text-align: left;
+}
+.ind-option .name {
+  width: 120px;
+  flex: none;
+  font-weight: 600;
+  font-size: 12px;
+}
+.ind-option .desc {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--muted);
+}
+.ind-option.failed .desc {
+  color: var(--down);
+}
+.ind-option .ver {
+  font-size: 11px;
+  color: var(--muted);
+}
+.ind-confirm,
+.ind-dialog-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px 8px 16px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+}
+.ind-confirm span {
+  flex: 1;
+}
+.ind-dialog-error {
+  color: var(--down);
+  overflow-wrap: anywhere;
+}
+.ind-dialog-footer {
+  min-height: 40px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 16px 6px 10px;
+  border-top: 1px solid var(--line);
+}
+.ind-dialog-footer .note {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* Legend rows sit on the chart; only the rows themselves take the pointer. */
+.ind-legend {
+  position: absolute;
+  z-index: 1;
+  left: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  pointer-events: none;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+.ind-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 20px;
+  padding-right: 2px;
+  border-radius: 4px;
+  pointer-events: auto;
+}
+.ind-row .ind-title {
+  color: var(--fg);
+}
+.ind-row[data-hidden="true"] .ind-title {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+.ind-actions {
+  display: flex;
+  gap: 1px;
+  opacity: 0;
+  transition: opacity 120ms;
+}
+.ind-row:hover .ind-actions,
+.ind-row:focus-within .ind-actions,
+.ind-row[data-hidden="true"] .ind-actions,
+.ind-row[data-error="true"] .ind-actions {
+  opacity: 1;
+}
+.ind-action {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  background: var(--bg);
+}
+.ind-action:hover {
+  color: var(--fg);
+}
+.ind-badge {
+  font-size: 11px;
+  line-height: 16px;
+  padding: 0 5px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--muted);
+  background: var(--bg);
+}
+.ind-error {
+  font-size: 12px;
+}
+.ind-settings {
+  position: absolute;
+  z-index: 10;
+  width: 280px;
+  padding: 6px 12px 12px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  font-size: 12px;
+}
+.ind-settings-header {
+  height: 32px;
+  margin-right: -6px;
+}
+.ind-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 32px;
+}
+.ind-field label,
+.ind-field > span {
+  color: var(--muted);
+}
+.ind-field input[type="number"],
+.ind-field select {
+  width: 110px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 12px;
+}
+.ind-field input[aria-invalid="true"] {
+  border-color: var(--down);
+}
+.ind-field input[type="checkbox"] {
+  accent-color: var(--fg);
+}
+.ind-swatches {
+  display: flex;
+  gap: 4px;
+}
+.ind-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+}
+.ind-swatch[aria-checked="true"] {
+  box-shadow: 0 0 0 1px var(--panel), 0 0 0 2px var(--fg);
+}
+.ind-settings-error {
+  padding: 6px 0 0;
+  color: var(--down);
+  overflow-wrap: anywhere;
+}
+.ind-log .ind-section {
+  padding: 8px 0 4px;
+}
+.ind-log pre {
+  margin: 0;
+  max-height: 120px;
+  overflow: auto;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--bg);
+  font-size: 11px;
+  white-space: pre-wrap;
+  user-select: text;
 }

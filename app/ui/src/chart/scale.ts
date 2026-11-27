@@ -95,13 +95,17 @@ function logTicksRaw(min: number, max: number, maxCount: number): number[] {
   return out;
 }
 
-/** Price range covering bars `range` (inclusive indices) plus `padding` of the span on both sides. */
+/**
+ * Price range covering bars `range` (inclusive indices) and the finite `extra` range
+ * (indicator overlays), plus `padding` of the span on both sides.
+ */
 export function autoscale(
   lows: Float64Array | number[],
   highs: Float64Array | number[],
   range: [number, number],
   padding = 0.08,
   mode: PriceScaleMode = "linear",
+  extra: [number, number] | null = null,
 ): [number, number] {
   let min = Infinity;
   let max = -Infinity;
@@ -110,6 +114,10 @@ export function autoscale(
     const hi = highs[i];
     if (lo !== undefined && lo < min) min = lo;
     if (hi !== undefined && hi > max) max = hi;
+  }
+  if (extra && Number.isFinite(extra[0]) && Number.isFinite(extra[1])) {
+    if (extra[0] < min) min = extra[0];
+    if (extra[1] > max) max = extra[1];
   }
   if (min > max) return [0, 1];
   if (mode === "log") {
