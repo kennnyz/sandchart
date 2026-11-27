@@ -1,7 +1,7 @@
 import { enableChartDebug } from "../chart/debug";
 import { createMockBackend } from "./mock";
 import { resetSubscriptions, tauriBackend } from "./tauri";
-import type { Backend, InstrumentId } from "./types";
+import type { Backend, ConnectionState, InstrumentId, Problem, ProblemCode } from "./types";
 
 const MOCK_WATCHLIST_KEY = "sandchart.mock.watchlist";
 
@@ -15,8 +15,10 @@ if (inTauri) void resetSubscriptions();
  * The mock used in a plain browser (`pnpm dev`, e2e). Query parameters tune it for
  * tests: `mockHistoryStart` (ms), `mockLatency` (ms), `mockPrice` (ticks),
  * `mockPriceScale`, `mockSlow` + `mockSlowLatency` (one slow symbol), `mockWarning`
- * (every page carries a provider warning), `mockConnection` (initial state) and
- * `mockWatchlist` (comma-separated symbols; empty for none). The watchlist is kept in
+ * (every page carries a provider warning; the value is its code, `network` when not
+ * one, with `mockRetryAfter` seconds), `mockConnection` (initial state), `mockSyncDelay`
+ * (ms until the instrument list exists, as on a first run) and `mockWatchlist`
+ * (comma-separated symbols; empty for none). The watchlist is kept in
  * localStorage so a reload sees the same list. Calls are counted in `window.__sandchartMock`, and the chart
  * reports draw times and axis layout into `window.__sandchartDebug` (see
  * chart/debug.ts). None of this exists inside Tauri.
@@ -27,6 +29,15 @@ function browserMock(): Backend {
   const slow = q.get("mockSlow");
   const connection = q.get("mockConnection");
   const list = q.get("mockWatchlist");
+  const warningCode = q.get("mockWarning") as ProblemCode | null;
+  const warning: Problem | undefined =
+    warningCode === null
+      ? undefined
+      : {
+          code: ["rate_limited", "blocked", "unsafe_ticks", "other"].includes(warningCode) ? warningCode : "network",
+          message: "mock: provider unreachable",
+          retryAfterS: num("mockRetryAfter"),
+        };
   const mock = createMockBackend({
     candles: 200_000,
     latencyMs: num("mockLatency") ?? 80,
@@ -34,8 +45,11 @@ function browserMock(): Backend {
     basePrice: num("mockPrice"),
     priceScale: num("mockPriceScale"),
     slow: slow ? { symbol: slow, latencyMs: num("mockSlowLatency") ?? 1_000 } : undefined,
-    warning: q.has("mockWarning") ? "mock: provider unreachable" : undefined,
-    connection: connection === "reconnecting" || connection === "offline" ? connection : undefined,
+    warning,
+    connection: ["connecting", "reconnecting", "offline"].includes(connection ?? "")
+      ? (connection as ConnectionState)
+      : undefined,
+    instrumentsAfterMs: num("mockSyncDelay"),
     watchlist: list === null ? undefined : list.split(",").filter(Boolean),
     watchlistStore: {
       load() {

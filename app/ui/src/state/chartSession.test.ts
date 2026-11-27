@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMockBackend } from "../backend/mock";
-import type { Backend, Candles, LiveCandle, LiveEvent } from "../backend/types";
+import type { Backend, CandleColumns, Candles, LiveCandle, LiveEvent, Problem } from "../backend/types";
 import { ChartSession, type SessionChart, type SessionState } from "./chartSession";
 
 const BTC = { source: "mock", symbol: "BTCUSDT" };
@@ -219,7 +219,7 @@ describe("ChartSession", () => {
   it("a page with a warning keeps the candles, shows the problem and retries", async () => {
     vi.useFakeTimers();
     const mock = createMockBackend({ candles: 3000 });
-    let warning: string | null = "connect timeout";
+    let warning: Problem | null = { code: "network", message: "connect timeout" };
     let calls = 0;
     const backend: Backend = {
       ...mock,
@@ -267,7 +267,7 @@ describe("ChartSession", () => {
   it("an older failure and recovery do not drop a pending newest-page retry", async () => {
     vi.useFakeTimers();
     const mock = createMockBackend({ candles: 3000 });
-    let latestWarning: string | null = "offline, cached";
+    let latestWarning: Problem | null = { code: "network", message: "offline, cached" };
     let olderFails = true;
     let latestCalls = 0;
     const backend: Backend = {
@@ -312,7 +312,7 @@ describe("ChartSession", () => {
     const backend: Backend = {
       ...mock,
       async getCandles(id, tf, before) {
-        return { ...(await mock.getCandles(id, tf, before)), warning: "cached only" };
+        return { ...(await mock.getCandles(id, tf, before)), warning: { code: "network", message: "cached only" } };
       },
     };
     const { chart, session, last } = setup(backend);
@@ -325,4 +325,86 @@ describe("ChartSession", () => {
     expect(last().problem?.retryAt).toBe(retryAt);
     session.close();
   });
+
+  it("appends backfilled candles after the last one", async () => {
+    const mock = createMockBackend({ candles: 3000 });
+    const { chart, session, last } = setup(mock);
+    await session.open(BTC, "1h");
+    const t0 = chart.time[chart.count - 1]!;
+    const version = last().version;
+    mock.emitLive({ kind: "backfilled", candles: columns([t0, t0 + H, t0 + 2 * H], 7), reset: false });
+    expect(chart.count).toBe(1002);
+    expect(chart.close.at(-1)).toBe(7);
+    expect(chart.calls.filter((c) => c.startsWith("setData"))).toHaveLength(1);
+    expect(last().version).toBeGreaterThan(version);
+    session.close();
+  });
+
+  it("a backfill that reset the series replaces the chart", async () => {
+    const mock = createMockBackend({ candles: 3000 });
+    const { chart, session } = setup(mock);
+    await session.open(BTC, "1h");
+    // Far ahead of the chart: appending would leave an invisible hole.
+    const t0 = chart.time[chart.count - 1]! + 5000 * H;
+    mock.emitLive({ kind: "backfilled", candles: columns([t0, t0 + H], 9), reset: true });
+    expect(chart.calls.filter((c) => c.startsWith("setData"))).toEqual(["setData BTCUSDT", "setData BTCUSDT"]);
+    expect(chart.time).toEqual([t0, t0 + H]);
+    session.close();
+  });
+
+  it("waits at least Retry-After before retrying a rate-limited page", async () => {
+    vi.useFakeTimers();
+    const mock = createMockBackend({ candles: 3000 });
+    let calls = 0;
+    const backend: Backend = {
+      ...mock,
+      async getCandles() {
+        calls++;
+        throw { code: "rate_limited", message: "rate limited, retry after 90 s", retryAfterS: 90 } satisfies Problem;
+      },
+    };
+    const { session, last } = setup(backend);
+    await session.open(BTC, "1h");
+    expect(last().problem?.code).toBe("rate_limited");
+    expect(last().problem!.retryAt! - Date.now()).toBe(90_000);
+    await vi.advanceTimersByTimeAsync(89_000);
+    expect(calls).toBe(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(calls).toBe(2);
+    session.close();
+  });
+
+  it("carries the problem code of a page warning", async () => {
+    const mock = createMockBackend({ candles: 3000, warning: { code: "blocked", message: "HTTP 451" } });
+    const { session, last } = setup(mock);
+    await session.open(BTC, "1h");
+    expect(last().problem).toMatchObject({ code: "blocked", message: "HTTP 451" });
+    session.close();
+  });
+
+  it("does not subscribe to live updates of a CSV instrument", async () => {
+    const mock = createMockBackend({ candles: 3000 });
+    let subscribed = 0;
+    const backend: Backend = {
+      ...mock,
+      getCandles: (_id, tf, before) => mock.getCandles(BTC, tf, before),
+      async subscribeLive(...args) {
+        subscribed++;
+        return mock.subscribeLive(...args);
+      },
+    };
+    const { session, last } = setup(backend);
+    await session.open({ source: "csv", symbol: "BTCUSDT" }, "1h");
+    expect(last().status).toBe("ready");
+    expect(subscribed).toBe(0);
+    expect(last().problem).toBeNull();
+    session.close();
+  });
 });
+
+const H = 3_600_000;
+
+function columns(time: number[], close: number): CandleColumns {
+  const v = time.map(() => close);
+  return { time, open: v, high: v, low: v, close: v, volume: v };
+}

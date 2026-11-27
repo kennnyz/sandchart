@@ -33,10 +33,34 @@ export interface CandleColumns {
   volume: number[];
 }
 
+/** What kind of trouble a command hit (`ProblemCode` in dto.rs). */
+export type ProblemCode = "network" | "rate_limited" | "blocked" | "unsafe_ticks" | "other";
+
+/** The error of every command and the warning of a candle page (`ProblemDto`). */
+export interface Problem {
+  code: ProblemCode;
+  /** The raw error text. */
+  message: string;
+  /** Seconds the exchange asked us to wait (`Retry-After`). */
+  retryAfterS?: number;
+}
+
+const PROBLEM_CODES: readonly string[] = ["network", "rate_limited", "blocked", "unsafe_ticks", "other"];
+
+/** A rejected command as a `Problem`; anything else (a JS error) is `other`. */
+export function toProblem(e: unknown): Problem {
+  if (typeof e === "object" && e !== null && "code" in e && "message" in e) {
+    const p = e as Problem;
+    if (PROBLEM_CODES.includes(p.code)) return p;
+  }
+  return { code: "other", message: e instanceof Error ? e.message : String(e) };
+}
+
 export interface Candles extends CandleColumns {
   instrument: Instrument;
   atHistoryStart: boolean;
-  warning: string | null;
+  /** Set when the provider failed and cached candles were served instead. */
+  warning: Problem | null;
 }
 
 export interface LiveCandle {
@@ -52,7 +76,8 @@ export interface LiveCandle {
 
 export type LiveEvent =
   | ({ kind: "candle" } & LiveCandle)
-  | { kind: "backfilled"; candles: CandleColumns }
+  /** `reset`: the cached series was replaced, so these candles replace the chart. */
+  | { kind: "backfilled"; candles: CandleColumns; reset: boolean }
   | { kind: "disconnected" };
 
 export interface DayChange {
@@ -63,7 +88,8 @@ export interface DayChange {
   changeBp: number;
 }
 
-export type ConnectionState = "connected" | "reconnecting" | "offline";
+/** `connecting`: nothing has answered yet since the app started. */
+export type ConnectionState = "connecting" | "connected" | "reconnecting" | "offline";
 
 export interface Backend {
   searchInstruments(q: string): Promise<Instrument[]>;
@@ -82,4 +108,8 @@ export interface Backend {
   getConnection(): Promise<ConnectionState>;
   /** Resolves to the function that stops listening. */
   onConnection(cb: (s: ConnectionState) => void): Promise<() => void>;
+  /** True once the instrument list was synced; ask after `onInstrumentsSynced` is set up. */
+  instrumentsReady(): Promise<boolean>;
+  /** Called when the instrument list was synced. Resolves to the function that stops listening. */
+  onInstrumentsSynced(cb: () => void): Promise<() => void>;
 }

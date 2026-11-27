@@ -1,12 +1,18 @@
-import type {
-  Backend,
-  Candles,
-  Instrument,
-  InstrumentId,
-  LiveCandle,
-  LiveEvent,
-  TimeframeCode,
+import {
+  toProblem,
+  type Backend,
+  type Candles,
+  type Instrument,
+  type InstrumentId,
+  type LiveCandle,
+  type LiveEvent,
+  type Problem,
+  type ProblemCode,
+  type TimeframeCode,
 } from "../backend/types";
+
+/** Source of imported CSV files: cache only, nothing live. */
+const CSV_SOURCE = "csv";
 
 /** What the session needs from the chart (`Chart` implements it). */
 export interface SessionChart {
@@ -23,6 +29,7 @@ export type SessionStatus = "idle" | "loading" | "ready" | "failed";
 
 /** A failed request to the provider; `retryAt` (ms) is when the next attempt runs. */
 export interface SessionProblem {
+  code: ProblemCode;
   message: string;
   retryAt: number | null;
 }
@@ -46,16 +53,12 @@ type RetryKind = "latest" | "older";
 
 /** Pending trouble of one kind of request; each kind has its own timer and backoff. */
 interface Pending {
-  message: string;
+  problem: Problem;
   /** Next attempt (ms), null while an attempt runs or when nothing is scheduled. */
   retryAt: number | null;
   timer: ReturnType<typeof setTimeout> | null;
   /** Consecutive failures, for the backoff. */
   failures: number;
-}
-
-function message(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
 }
 
 /**
@@ -117,7 +120,7 @@ export class ChartSession {
       else this.recovered("older");
       this.bump();
     } catch (e) {
-      if (gen === this.gen) this.fail("older", message(e));
+      if (gen === this.gen) this.fail("older", toProblem(e));
     } finally {
       if (gen === this.gen) this.olderInFlight = false;
     }
@@ -170,7 +173,7 @@ export class ChartSession {
     } catch (e) {
       if (gen !== this.gen) return;
       if (this.chart.count === 0) this.set({ status: "failed" });
-      this.fail("latest", message(e));
+      this.fail("latest", toProblem(e));
       return;
     }
     if (gen !== this.gen) return;
@@ -211,6 +214,7 @@ export class ChartSession {
     const { id, tf } = this.state;
     if (!id) return;
     this.liveGen = gen;
+    if (id.source === CSV_SOURCE) return; // a file does not change
     try {
       const stop = await this.backend.subscribeLive(id, tf, (e) => {
         if (gen === this.gen) this.onLive(e);
@@ -220,7 +224,7 @@ export class ChartSession {
     } catch (e) {
       if (gen !== this.gen) return;
       this.liveGen = 0;
-      this.fail("latest", message(e));
+      this.fail("latest", toProblem(e));
     }
   }
 
@@ -229,6 +233,13 @@ export class ChartSession {
       this.chart.updateLast(e);
     } else if (e.kind === "backfilled") {
       const b = e.candles;
+      const instrument = this.state.instrument;
+      if (e.reset && instrument) {
+        // The engine replaced the cached series: start over from it.
+        this.chart.setData({ instrument, ...b, atHistoryStart: false, warning: null });
+        this.bump();
+        return;
+      }
       for (let i = 0; i < b.time.length; i++) {
         this.chart.updateLast({
           time: b.time[i]!,
@@ -247,13 +258,17 @@ export class ChartSession {
     this.bump();
   }
 
-  /** A request of `kind` failed: schedules its retry with that kind's backoff. */
-  private fail(kind: RetryKind, text: string): void {
-    const p = this.pending.get(kind) ?? { message: text, retryAt: null, timer: null, failures: 0 };
-    const delay = RETRY_DELAYS_S[Math.min(p.failures, RETRY_DELAYS_S.length - 1)]! * 1000;
+  /**
+   * A request of `kind` failed: schedules its retry with that kind's backoff, but never
+   * sooner than the exchange's `Retry-After`.
+   */
+  private fail(kind: RetryKind, problem: Problem): void {
+    const p = this.pending.get(kind) ?? { problem, retryAt: null, timer: null, failures: 0 };
+    const backoff = RETRY_DELAYS_S[Math.min(p.failures, RETRY_DELAYS_S.length - 1)]! * 1000;
+    const delay = Math.max(backoff, (problem.retryAfterS ?? 0) * 1000);
     if (p.timer !== null) clearTimeout(p.timer);
     p.failures++;
-    p.message = text;
+    p.problem = problem;
     p.retryAt = Date.now() + delay;
     p.timer = setTimeout(() => void this.retry(kind), delay);
     this.pending.set(kind, p);
@@ -261,10 +276,10 @@ export class ChartSession {
   }
 
   /** A request of `kind` succeeded with a warning: shown, but nothing to retry for it. */
-  private warn(kind: RetryKind, text: string): void {
+  private warn(kind: RetryKind, problem: Problem): void {
     const p = this.pending.get(kind);
     if (p?.timer) clearTimeout(p.timer);
-    this.pending.set(kind, { message: text, retryAt: null, timer: null, failures: 0 });
+    this.pending.set(kind, { problem, retryAt: null, timer: null, failures: 0 });
     this.publishProblem();
   }
 
@@ -285,8 +300,8 @@ export class ChartSession {
       return;
     }
     const times = all.map((p) => p.retryAt).filter((t): t is number => t !== null);
-    const message = (this.pending.get("latest") ?? all[0]!).message;
-    this.set({ problem: { message, retryAt: times.length ? Math.min(...times) : null } });
+    const { code, message } = (this.pending.get("latest") ?? all[0]!).problem;
+    this.set({ problem: { code, message, retryAt: times.length ? Math.min(...times) : null } });
   }
 
   private bump(): void {

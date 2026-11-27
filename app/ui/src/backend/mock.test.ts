@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createMockBackend } from "./mock";
 
 const id = { source: "mock", symbol: "BTCUSDT" };
@@ -61,5 +61,29 @@ describe("mock backend", () => {
     const stop = await createMockBackend({ candles: 1 }).subscribeLive(id, "1h", () => {});
     expect(typeof stop).toBe("function");
     stop();
+  });
+
+  it("emits live events to open subscriptions only", async () => {
+    const b = createMockBackend({ candles: 1 });
+    const seen: string[] = [];
+    const stop = await b.subscribeLive(id, "1h", (e) => seen.push(e.kind));
+    b.emitLive({ kind: "disconnected" });
+    stop();
+    b.emitLive({ kind: "disconnected" });
+    expect(seen).toEqual(["disconnected"]);
+  });
+
+  it("has no instruments until the sync delay has passed", async () => {
+    vi.useFakeTimers();
+    const b = createMockBackend({ candles: 1, instrumentsAfterMs: 500 });
+    let synced = 0;
+    await b.onInstrumentsSynced(() => synced++);
+    expect(await b.instrumentsReady()).toBe(false);
+    expect(await b.searchInstruments("BTC")).toEqual([]);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(synced).toBe(1);
+    expect(await b.instrumentsReady()).toBe(true);
+    expect((await b.searchInstruments("BTC")).map((i) => i.id.symbol)).toContain("BTCUSDT");
+    vi.useRealTimers();
   });
 });

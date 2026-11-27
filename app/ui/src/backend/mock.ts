@@ -5,6 +5,8 @@ import {
   type ConnectionState,
   type Instrument,
   type InstrumentId,
+  type LiveEvent,
+  type Problem,
   type TimeframeCode,
 } from "./types";
 
@@ -62,9 +64,11 @@ export interface MockOptions {
   /** One instrument whose candles and live stream answer with a different delay. */
   slow?: { symbol: string; latencyMs: number };
   /** Set on every candle page, as the engine does when the provider fails. */
-  warning?: string;
+  warning?: Problem;
   /** What `getConnection` reports (default "connected"). */
   connection?: ConnectionState;
+  /** The instrument list is empty until this many ms after creation, as on a first run. */
+  instrumentsAfterMs?: number;
   /** Initial watchlist symbols (default: the first five instruments). */
   watchlist?: string[];
   /** Keeps the watchlist across page loads (the browser mock uses localStorage). */
@@ -86,7 +90,12 @@ function column(): CandleColumns {
   return { time: [], open: [], high: [], low: [], close: [], volume: [] };
 }
 
-export function createMockBackend(opts: MockOptions): Backend {
+/** The mock plus a way for tests to push live events into its open subscriptions. */
+export interface MockBackend extends Backend {
+  emitLive(e: LiveEvent): void;
+}
+
+export function createMockBackend(opts: MockOptions): MockBackend {
   const base = opts.basePrice ?? 10_000;
   const wick = base * 0.004;
   const sleep = (ms: number | undefined) =>
@@ -98,10 +107,20 @@ export function createMockBackend(opts: MockOptions): Backend {
     ? SYMBOLS.filter((i) => opts.watchlist!.includes(i.id.symbol)).map((i) => i.id)
     : SYMBOLS.slice(0, 5).map((i) => i.id);
   let watchlist: InstrumentId[] = opts.watchlistStore?.load() ?? initial;
+  const live = new Set<(e: LiveEvent) => void>();
+  const synced = new Set<() => void>();
+  let ready = !opts.instrumentsAfterMs;
+  if (!ready) {
+    setTimeout(() => {
+      ready = true;
+      for (const cb of synced) cb();
+    }, opts.instrumentsAfterMs);
+  }
 
   return {
     async searchInstruments(q) {
       await delay();
+      if (!ready) return [];
       const needle = q.trim().toUpperCase();
       return SYMBOLS.filter((i) => i.id.symbol.includes(needle));
     },
@@ -145,9 +164,16 @@ export function createMockBackend(opts: MockOptions): Backend {
       return page;
     },
 
-    async subscribeLive(id) {
+    async subscribeLive(id, _tf, onEvent) {
       await delayFor(id.symbol);
-      return () => {};
+      live.add(onEvent);
+      return () => {
+        live.delete(onEvent);
+      };
+    },
+
+    emitLive(e) {
+      for (const cb of live) cb(e);
     },
 
     async getWatchlist() {
@@ -176,6 +202,17 @@ export function createMockBackend(opts: MockOptions): Backend {
 
     async onConnection() {
       return () => {};
+    },
+
+    async instrumentsReady() {
+      return ready;
+    },
+
+    async onInstrumentsSynced(cb) {
+      synced.add(cb);
+      return () => {
+        synced.delete(cb);
+      };
     },
   };
 }
