@@ -80,6 +80,8 @@ jobs:
         working-directory: app/ui
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Check the app versions agree
+        run: sh "$GITHUB_WORKSPACE/scripts/check-version.sh"
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           package_json_file: app/ui/package.json

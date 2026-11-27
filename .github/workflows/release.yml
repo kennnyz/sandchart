@@ -38,6 +38,9 @@ jobs:
             bundles: appimage,deb
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Check the tag matches the app version
+        shell: bash
+        run: scripts/check-version.sh "${GITHUB_REF_NAME#v}"
       - name: Install Tauri system packages
         if: runner.os == 'Linux'
         run: |

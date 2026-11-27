@@ -3679,7 +3679,7 @@ dependencies = [
 
 [[package]]
 name = "sandchart-app"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "directories",
  "sandchart-core",
@@ -3696,7 +3696,7 @@ dependencies = [
 
 [[package]]
 name = "sandchart-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3705,7 +3705,7 @@ dependencies = [
 
 [[package]]
 name = "sandchart-data"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "futures",
@@ -3722,7 +3722,7 @@ dependencies = [
 
 [[package]]
 name = "sandchart-engine"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "futures",
@@ -3740,7 +3740,7 @@ dependencies = [
 
 [[package]]
 name = "sandchart-indicator-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "sandchart-indicators",
@@ -3750,7 +3750,7 @@ dependencies = [
 
 [[package]]
 name = "sandchart-indicators"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bytes",
  "rand",
@@ -3766,7 +3766,7 @@ dependencies = [
 
 [[package]]
 name = "sandchart-store"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "rusqlite",
  "sandchart-core",
