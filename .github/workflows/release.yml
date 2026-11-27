@@ -70,10 +70,10 @@ jobs:
       - run: cargo build --manifest-path indicators/Cargo.toml --target wasm32-wasip2 --release --locked
       # tauri-action without `tagName` only builds; the draft release is created in the
       # publish job once every platform has succeeded. The CLI is run with node from
-      # `app/` (where beforeBuildCommand paths resolve), so the `tauri` npm script
-      # (POSIX `cd ..`) is not used and Windows runners work. The release overlay
-      # (path relative to `app/`) turns on the signed updater bundles; the build fails
-      # if the signing key is missing.
+      # `app/`, so the `tauri` npm script (POSIX `cd ..`) is not used and Windows
+      # runners work. The release overlay (path relative to `app/`) turns on the signed
+      # updater bundles and clears beforeBuildCommand, so the signing secrets never reach
+      # npm or Vite (the UI is built above); the build fails if the signing key is missing.
       - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # action-v0.6.2
         id: tauri
         env:
@@ -165,4 +165,4 @@ jobs:
           gh release create "$TAG" dist-release/* \
             --repo "$REPO" --draft --verify-tag \
             --title "Sandchart $TAG" \
-            --notes "Not signed with an OS code-signing certificate; updates are signed with the project key. Verify with SHA256SUMS and gh attestation verify (see README)."
+            --notes "Not signed with an OS code-signing certificate; updates are signed with the project key. Verify with SHA256SUMS and gh attestation verify (see README). Version 0.1 cannot update itself: install this version by hand once. On Windows, uninstall 0.1 first (Settings > Apps > Sandchart); your data is kept."

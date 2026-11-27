@@ -5,7 +5,7 @@
 [![CI](https://github.com/kennnyz/sandchart/actions/workflows/ci.yml/badge.svg)](https://github.com/kennnyz/sandchart/actions/workflows/ci.yml)
 ![Licence: MIT OR Apache-2.0](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)
 ![Platforms: macOS, Windows, Linux](https://img.shields.io/badge/platforms-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)
-![Status: 0.1, early](https://img.shields.io/badge/status-0.2%20early-orange)
+![Status: 0.2, early](https://img.shields.io/badge/status-0.2%20early-orange)
 
 ![Sandchart showing a live BTCUSDT 1h chart from Binance](docs/screenshot.png)
 
@@ -139,6 +139,8 @@ The builds are not signed with an OS code-signing certificate yet, so the operat
 
 Version 0.2 migrates the local database (watchlist, cache, indicator settings). The data is kept, but 0.1 refuses to open the migrated database. Back up the file first if you may want to go back.
 
+Version 0.1 cannot update itself. Install 0.2 by hand once; later versions update from inside the app.
+
 ### macOS
 
 1. Open the `.dmg` and drag Sandchart to Applications. Run it from there, not from the disk image or Downloads (see [Updates](#updates)).
@@ -148,6 +150,8 @@ Version 0.2 migrates the local database (watchlist, cache, indicator settings). 
 If you prefer a terminal, `xattr -dr com.apple.quarantine /Applications/Sandchart.app` removes the quarantine flag.
 
 ### Windows
+
+Coming from 0.1? Uninstall it first (Settings → Apps → Sandchart), then run the setup. Your data is kept.
 
 Run `Sandchart_<version>_x64-setup.exe`. It installs for your user only and does not ask for administrator rights. If SmartScreen shows "Windows protected your PC", click More info, then Run anyway.
 
@@ -163,7 +167,7 @@ To check by hand, or to turn the automatic check off, click the version in the s
 
 - **macOS:** run Sandchart from `/Applications`. A copy started from the disk image or straight from Downloads is run by macOS from a read-only path (App Translocation) and cannot replace itself. The banner then asks you to move the app to Applications first.
 - **Windows:** the installer runs in passive mode (a progress window, no questions) and needs no administrator rights.
-- **Linux:** the AppImage updates in the app. A `.deb` install does not: the banner links to the release page, so install the new `.deb` yourself.
+- **Linux:** the AppImage updates in the app. A `.deb` install does not: the banner shows the release page address, so install the new `.deb` yourself.
 - A failed check at start is silent and tried again later. A failed manual check or download shows the error and a Retry button.
 
 ## Write your own indicators
