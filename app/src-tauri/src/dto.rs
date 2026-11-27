@@ -514,7 +514,8 @@ pub enum UpdateProgressDto {
     Started { total: Option<u64> },
     /// Bytes downloaded so far.
     Chunk { downloaded: u64 },
-    /// The download is verified and the install begins.
+    /// The download finished; the signature check and the install run now. Either can still
+    /// fail, so an error may come after this message.
     Installing,
 }
 

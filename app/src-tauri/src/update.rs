@@ -8,13 +8,21 @@ use std::time::{Duration, Instant};
 
 use tauri::ipc::Channel;
 use tauri::{AppHandle, State};
-use tauri_plugin_updater::{Error, Update, UpdaterExt};
+use tauri_plugin_updater::{Error, Update, Updater, UpdaterExt};
 use time::format_description::well_known::Rfc3339;
 
 use crate::dto::{InstallBlocker, ProblemDto, UpdateInfoDto, UpdateProgressDto};
 
 /// Shortest gap between two `chunk` messages: at most 20 a second reach the UI.
 const CHUNK_INTERVAL: Duration = Duration::from_millis(50);
+
+/// Longest wait for a connection to the update server or the download host.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// Longest wait for the next bytes of a response. Per read, not in total: a slow line still
+/// finishes a large download, a stalled one fails instead of hanging.
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
+/// Longest a whole check may take, over all endpoints.
+const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The update found by the last check, kept for `install_update`.
 #[derive(Default)]
@@ -52,6 +60,24 @@ fn current_blocker() -> Result<Option<InstallBlocker>, ProblemDto> {
         appimage.as_deref(),
         &exe,
     ))
+}
+
+fn with_timeouts(
+    client: reqwest::ClientBuilder,
+    connect: Duration,
+    read: Duration,
+) -> reqwest::ClientBuilder {
+    client.connect_timeout(connect).read_timeout(read)
+}
+
+/// The plugin's updater with our timeouts; its defaults have none, so a stalled connection
+/// would hang the check or the download forever. The `Update` it finds keeps the client
+/// settings, so the download gets them too.
+fn updater(app: &AppHandle) -> Result<Updater, ProblemDto> {
+    app.updater_builder()
+        .configure_client(|c| with_timeouts(c, CONNECT_TIMEOUT, READ_TIMEOUT))
+        .build()
+        .map_err(fail)
 }
 
 /// The plugin's error as a problem whose message names the cause.
@@ -126,7 +152,8 @@ impl Progress {
         out
     }
 
-    /// The download is complete and verified: flush the count, then announce the install.
+    /// The download finished: flush the count, then announce that the signature check and the
+    /// install run (the plugin calls this before it verifies, so an error can still follow).
     fn finish(&mut self) -> Vec<UpdateProgressDto> {
         let mut out = Vec::new();
         if !self.started {
@@ -150,7 +177,15 @@ pub async fn check_update(
     app: AppHandle,
     state: State<'_, UpdaterState>,
 ) -> Result<Option<UpdateInfoDto>, ProblemDto> {
-    let update = app.updater().map_err(fail)?.check().await.map_err(fail)?;
+    let update = tokio::time::timeout(CHECK_TIMEOUT, updater(&app)?.check())
+        .await
+        .map_err(|_| {
+            ProblemDto::other(format!(
+                "could not reach the update server: no answer in {} s",
+                CHECK_TIMEOUT.as_secs()
+            ))
+        })?
+        .map_err(fail)?;
     let info = match &update {
         Some(u) => Some(UpdateInfoDto {
             version: u.version.clone(),
@@ -320,6 +355,69 @@ mod tests {
             update_problem(&Error::ReleaseNotFound).code,
             crate::dto::ProblemCode::Other
         );
+    }
+
+    /// A local server that reads each request, sends `reply` and then nothing more.
+    fn stalling_server(reply: &'static [u8]) -> std::net::SocketAddr {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let mut held = Vec::new();
+            for mut s in listener.incoming().flatten() {
+                let mut request = Vec::new();
+                let mut buf = [0u8; 1024];
+                while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match s.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => request.extend_from_slice(&buf[..n]),
+                    }
+                }
+                let _ = s.write_all(reply);
+                held.push(s);
+            }
+        });
+        addr
+    }
+
+    /// GETs `url` with 1 s connect and 200 ms read timeouts and reads the whole body.
+    fn fetch_with_short_timeouts(url: String) -> reqwest::Error {
+        // The plugin installs this provider in `check()`; another test may have done it here.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        tauri::async_runtime::block_on(async move {
+            let client = with_timeouts(
+                reqwest::Client::builder().no_proxy(),
+                Duration::from_secs(1),
+                Duration::from_millis(200),
+            )
+            .build()
+            .unwrap();
+            client.get(url).send().await?.bytes().await
+        })
+        .unwrap_err()
+    }
+
+    #[test]
+    fn a_server_that_never_answers_times_out() {
+        let addr = stalling_server(b"");
+        let started = Instant::now();
+        let err = fetch_with_short_timeouts(format!("http://{addr}/latest.json"));
+        assert!(err.is_timeout(), "{err:?}");
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(
+            update_problem(&Error::Reqwest(err))
+                .message
+                .starts_with("could not reach the update server: ")
+        );
+    }
+
+    #[test]
+    fn a_download_that_stalls_halfway_times_out() {
+        let addr = stalling_server(b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\n0123456789");
+        let started = Instant::now();
+        let err = fetch_with_short_timeouts(format!("http://{addr}/update.tar.gz"));
+        assert!(err.is_timeout(), "{err:?}");
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 
     #[test]

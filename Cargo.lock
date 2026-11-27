@@ -3820,6 +3820,8 @@ name = "sandchart-app"
 version = "0.2.0"
 dependencies = [
  "directories",
+ "reqwest 0.13.5",
+ "rustls",
  "sandchart-core",
  "sandchart-data",
  "sandchart-engine",

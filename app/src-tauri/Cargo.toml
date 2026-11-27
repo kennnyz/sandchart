@@ -21,8 +21,16 @@ serde.workspace = true
 serde_json = "1"
 thiserror.workspace = true
 tauri = { version = "2", features = [] }
-tauri-plugin-updater = "2"
+# Pinned to the minor: `configure_client` hands us its reqwest builder, which may change in a minor.
+tauri-plugin-updater = "2.14"
+# Already in the tree through the updater (same 0.13); names the builder for the timeouts.
+reqwest = { version = "0.13", default-features = false }
 # Already in the tree through the updater; formats the release date as RFC 3339.
 time = { version = "0.3", features = ["formatting"] }
 # Already in the tree through Tauri; used for the sync retry delay.
 tokio = { version = "1", features = ["time"] }
+
+[dev-dependencies]
+# Already in the tree through the updater, which installs this crypto provider in `check()`;
+# the timeout tests build a client without a check first.
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
