@@ -16,7 +16,7 @@ pub struct ChartPage {
     /// True when nothing older exists, so scrolling further back is pointless.
     pub at_history_start: bool,
     /// Set when the provider failed and the cache was served instead.
-    pub warning: Option<String>,
+    pub warning: Option<ProviderError>,
 }
 
 struct CacheView {
@@ -116,7 +116,7 @@ impl Engine {
                     if cache.candles.is_empty() {
                         return Err(e.into());
                     }
-                    warning = Some(e.to_string());
+                    warning = Some(e);
                 }
             }
         }

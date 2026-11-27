@@ -317,7 +317,7 @@ async fn load_chart_serves_cache_when_provider_fails() {
         .await
         .unwrap();
     assert_eq!(page.candles, vec![candle(5), candle(4)]);
-    assert!(page.warning.is_some());
+    assert_eq!(page.warning, Some(net()));
     assert_eq!(*f.engine.connection().borrow(), ConnectionState::Offline);
 }
 

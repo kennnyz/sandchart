@@ -2,14 +2,84 @@
 //! so a 200 000-candle history is six flat arrays, not 200 000 objects.
 
 use sandchart_core::{Candle, Instrument, InstrumentId, JS_SAFE_MAX};
-use sandchart_data::DayChange;
-use sandchart_engine::{ChartPage, ConnectionState, LiveEvent};
+use sandchart_data::{DayChange, ProviderError};
+use sandchart_engine::{ChartPage, ConnectionState, EngineError, LiveEvent};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum DtoError {
     #[error("a price or volume is too large for the UI (beyond 2^53 - 1 ticks)")]
     UnsafeTicks,
+}
+
+/// What kind of trouble a command hit; the UI picks its banner text by it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProblemCode {
+    Network,
+    RateLimited,
+    Blocked,
+    UnsafeTicks,
+    Other,
+}
+
+/// The error of every command and the warning of a candle page.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProblemDto {
+    pub code: ProblemCode,
+    /// The raw error text, for a tooltip or the log.
+    pub message: String,
+    /// Set when the exchange said how long to wait (`Retry-After`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_after_s: Option<u64>,
+}
+
+impl ProblemDto {
+    pub fn other(message: impl std::fmt::Display) -> Self {
+        Self {
+            code: ProblemCode::Other,
+            message: message.to_string(),
+            retry_after_s: None,
+        }
+    }
+}
+
+impl From<&ProviderError> for ProblemDto {
+    fn from(e: &ProviderError) -> Self {
+        let (code, retry_after_s) = match e {
+            ProviderError::Network(_) => (ProblemCode::Network, None),
+            ProviderError::RateLimited { retry_after_s } => {
+                (ProblemCode::RateLimited, Some(*retry_after_s))
+            }
+            ProviderError::Blocked { .. } => (ProblemCode::Blocked, None),
+            ProviderError::Http { .. } | ProviderError::Parse(_) => (ProblemCode::Other, None),
+        };
+        Self {
+            code,
+            message: e.to_string(),
+            retry_after_s,
+        }
+    }
+}
+
+impl From<EngineError> for ProblemDto {
+    fn from(e: EngineError) -> Self {
+        match &e {
+            EngineError::Provider(p) => p.into(),
+            _ => Self::other(e),
+        }
+    }
+}
+
+impl From<DtoError> for ProblemDto {
+    fn from(e: DtoError) -> Self {
+        Self {
+            code: ProblemCode::UnsafeTicks,
+            message: e.to_string(),
+            retry_after_s: None,
+        }
+    }
 }
 
 /// JavaScript numbers hold integers exactly only up to 2^53 - 1.
@@ -100,7 +170,7 @@ pub struct CandlesDto {
     #[serde(flatten)]
     pub columns: ColumnsDto,
     pub at_history_start: bool,
-    pub warning: Option<String>,
+    pub warning: Option<ProblemDto>,
 }
 
 pub fn to_candles_dto(page: ChartPage) -> Result<CandlesDto, DtoError> {
@@ -108,7 +178,7 @@ pub fn to_candles_dto(page: ChartPage) -> Result<CandlesDto, DtoError> {
         columns: ColumnsDto::from_candles(&page.candles)?,
         instrument: page.instrument.into(),
         at_history_start: page.at_history_start,
-        warning: page.warning,
+        warning: page.warning.as_ref().map(ProblemDto::from),
     })
 }
 
@@ -230,6 +300,56 @@ mod tests {
         assert_eq!(json["time"].as_array().unwrap().len(), 3);
         assert_eq!(json["atHistoryStart"], false);
         assert_eq!(json["instrument"]["priceScale"], 2);
+    }
+
+    #[test]
+    fn problems_carry_a_code_and_the_retry_hint() {
+        let json = |e: &ProviderError| serde_json::to_value(ProblemDto::from(e)).unwrap();
+        let limited = json(&ProviderError::RateLimited { retry_after_s: 90 });
+        assert_eq!(limited["code"], "rate_limited");
+        assert_eq!(limited["retryAfterS"], 90);
+        assert!(limited["message"].as_str().unwrap().contains("90"));
+        let net = json(&ProviderError::Network("down".into()));
+        assert_eq!(net["code"], "network");
+        assert!(net.get("retryAfterS").is_none());
+        assert_eq!(
+            json(&ProviderError::Blocked { status: 451 })["code"],
+            "blocked"
+        );
+        assert_eq!(json(&ProviderError::Parse("x".into()))["code"], "other");
+
+        let engine = ProblemDto::from(EngineError::Provider(ProviderError::Blocked {
+            status: 403,
+        }));
+        assert_eq!(engine.code, ProblemCode::Blocked);
+        let unknown = ProblemDto::from(EngineError::UnknownSource("csv".into()));
+        assert_eq!(unknown.code, ProblemCode::Other);
+        assert_eq!(
+            ProblemDto::from(DtoError::UnsafeTicks).code,
+            ProblemCode::UnsafeTicks
+        );
+    }
+
+    #[test]
+    fn page_warning_is_a_problem() {
+        let mut p = page(vec![candle(0, 1)]);
+        p.warning = Some(ProviderError::RateLimited { retry_after_s: 5 });
+        let json = serde_json::to_value(to_candles_dto(p).unwrap()).unwrap();
+        assert_eq!(json["warning"]["code"], "rate_limited");
+        assert_eq!(json["warning"]["retryAfterS"], 5);
+    }
+
+    #[test]
+    fn backfilled_carries_the_reset_flag() {
+        let dto = to_live_dto(LiveEvent::Backfilled {
+            candles: vec![candle(0, 1)],
+            reset: true,
+        })
+        .unwrap();
+        let json = serde_json::to_value(dto).unwrap();
+        assert_eq!(json["kind"], "backfilled");
+        assert_eq!(json["reset"], true);
+        assert_eq!(json["candles"]["time"].as_array().unwrap().len(), 1);
     }
 
     #[test]

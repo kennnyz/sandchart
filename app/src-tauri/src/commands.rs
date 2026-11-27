@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use sandchart_core::{InstrumentId, Timeframe};
@@ -14,7 +14,7 @@ use tauri::async_runtime::{JoinHandle, spawn, spawn_blocking};
 use tauri::ipc::Channel;
 
 use crate::dto::{
-    CandlesDto, DayChangeDto, InstrumentDto, InstrumentIdDto, LiveDto, connection_name,
+    CandlesDto, DayChangeDto, InstrumentDto, InstrumentIdDto, LiveDto, ProblemDto, connection_name,
     to_candles_dto, to_day_change_dto, to_live_dto,
 };
 
@@ -80,27 +80,30 @@ fn lock(tasks: &Tasks) -> std::sync::MutexGuard<'_, HashMap<u32, JoinHandle<()>>
 pub struct AppState {
     pub engine: Arc<Engine>,
     pub subscriptions: Subscriptions,
+    /// Set once the instrument list was synced; the `instruments-synced` event follows.
+    pub instruments_ready: Arc<AtomicBool>,
 }
 
 impl AppState {
-    pub fn new(engine: Arc<Engine>) -> Self {
+    pub fn new(engine: Arc<Engine>, instruments_ready: Arc<AtomicBool>) -> Self {
         Self {
             engine,
             subscriptions: Subscriptions::default(),
+            instruments_ready,
         }
     }
 }
 
-fn err(e: impl std::fmt::Display) -> String {
-    e.to_string()
-}
+/// Every command fails with a `ProblemDto`, so the UI can tell the causes apart.
+type CmdResult<T> = Result<T, ProblemDto>;
 
-fn timeframe(code: &str) -> Result<Timeframe, String> {
-    Timeframe::from_code(code).ok_or_else(|| format!("unknown timeframe {code:?}"))
+fn timeframe(code: &str) -> CmdResult<Timeframe> {
+    Timeframe::from_code(code)
+        .ok_or_else(|| ProblemDto::other(format!("unknown timeframe {code:?}")))
 }
 
 /// Runs a sync engine call on the blocking pool.
-async fn blocking<T, F>(state: &State<'_, AppState>, f: F) -> Result<T, String>
+async fn blocking<T, F>(state: &State<'_, AppState>, f: F) -> CmdResult<T>
 where
     T: Send + 'static,
     F: FnOnce(&Engine) -> Result<T, EngineError> + Send + 'static,
@@ -108,15 +111,15 @@ where
     let engine = state.engine.clone();
     spawn_blocking(move || f(&engine))
         .await
-        .map_err(err)?
-        .map_err(err)
+        .map_err(ProblemDto::other)?
+        .map_err(ProblemDto::from)
 }
 
 #[tauri::command]
 pub async fn search_instruments(
     state: State<'_, AppState>,
     query: String,
-) -> Result<Vec<InstrumentDto>, String> {
+) -> CmdResult<Vec<InstrumentDto>> {
     let found = blocking(&state, move |e| e.search(&query, SEARCH_LIMIT)).await?;
     Ok(found.into_iter().map(Into::into).collect())
 }
@@ -128,14 +131,13 @@ pub async fn get_candles(
     symbol: String,
     tf: String,
     before: Option<i64>,
-) -> Result<CandlesDto, String> {
+) -> CmdResult<CandlesDto> {
     let id = InstrumentId { source, symbol };
     let page = state
         .engine
         .load_chart(&id, timeframe(&tf)?, before)
-        .await
-        .map_err(err)?;
-    to_candles_dto(page).map_err(err)
+        .await?;
+    Ok(to_candles_dto(page)?)
 }
 
 /// Live events arrive on `on_event`, a channel the UI creates before calling, so none is
@@ -147,14 +149,11 @@ pub async fn subscribe_live(
     symbol: String,
     tf: String,
     on_event: Channel<LiveDto>,
-) -> Result<u32, String> {
+) -> CmdResult<u32> {
     let id = InstrumentId { source, symbol };
-    let mut handle = state
-        .engine
-        .subscribe_live(&id, timeframe(&tf)?)
-        .map_err(err)?;
+    let mut handle = state.engine.subscribe_live(&id, timeframe(&tf)?)?;
     // On the cap error `handle` is dropped here, which stops the stream again.
-    state.subscriptions.start(async move {
+    let started = state.subscriptions.start(async move {
         while let Some(live) = handle.receiver().recv().await {
             match to_live_dto(live) {
                 Ok(dto) => {
@@ -165,7 +164,8 @@ pub async fn subscribe_live(
                 Err(e) => eprintln!("dropping a live event: {e}"),
             }
         }
-    })
+    });
+    started.map_err(ProblemDto::other)
 }
 
 #[tauri::command]
@@ -180,27 +180,24 @@ pub fn unsubscribe_all(state: State<'_, AppState>) {
 }
 
 #[tauri::command]
-pub async fn get_watchlist(state: State<'_, AppState>) -> Result<Vec<InstrumentIdDto>, String> {
+pub async fn get_watchlist(state: State<'_, AppState>) -> CmdResult<Vec<InstrumentIdDto>> {
     let ids = blocking(&state, |e| e.watchlist()).await?;
     Ok(ids.into_iter().map(Into::into).collect())
 }
 
 #[tauri::command]
-pub async fn set_watchlist(
-    state: State<'_, AppState>,
-    ids: Vec<InstrumentIdDto>,
-) -> Result<(), String> {
+pub async fn set_watchlist(state: State<'_, AppState>, ids: Vec<InstrumentIdDto>) -> CmdResult<()> {
     let ids: Vec<InstrumentId> = ids.into_iter().map(Into::into).collect();
     blocking(&state, move |e| e.set_watchlist(&ids)).await
 }
 
 #[tauri::command]
-pub async fn get_watchlist_quotes(state: State<'_, AppState>) -> Result<Vec<DayChangeDto>, String> {
-    let quotes = state.engine.watchlist_quotes().await.map_err(err)?;
-    quotes
+pub async fn get_watchlist_quotes(state: State<'_, AppState>) -> CmdResult<Vec<DayChangeDto>> {
+    let quotes = state.engine.watchlist_quotes().await?;
+    Ok(quotes
         .into_iter()
-        .map(|q| to_day_change_dto(q).map_err(err))
-        .collect()
+        .map(to_day_change_dto)
+        .collect::<Result<_, _>>()?)
 }
 
 #[tauri::command]
@@ -209,11 +206,18 @@ pub async fn import_csv(
     path: String,
     symbol: String,
     tf: String,
-) -> Result<InstrumentIdDto, String> {
+) -> CmdResult<InstrumentIdDto> {
     let tf = timeframe(&tf)?;
     let path = PathBuf::from(path);
     let id = blocking(&state, move |e| e.import_csv(&path, &symbol, tf)).await?;
     Ok(id.into())
+}
+
+/// True once the first instrument sync succeeded. The UI asks this after it starts
+/// listening for `instruments-synced`, so it cannot miss an event sent before.
+#[tauri::command]
+pub fn get_instruments_ready(state: State<'_, AppState>) -> bool {
+    state.instruments_ready.load(Ordering::Acquire)
 }
 
 #[tauri::command]
