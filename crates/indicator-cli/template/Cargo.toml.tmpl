@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+# Its own workspace, so it also builds inside another one (such as a Sandchart clone).
+[workspace]
+
 [lib]
 crate-type = ["cdylib"]
 

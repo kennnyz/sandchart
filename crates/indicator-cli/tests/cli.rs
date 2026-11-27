@@ -216,6 +216,34 @@ fn new_creates_the_project() {
     assert!(err(&o).contains("already exists"), "{}", err(&o));
 }
 
+/// The guide has the author run `new` inside the Sandchart clone, which is a Cargo
+/// workspace: the project must stand on its own there.
+#[test]
+fn new_project_is_its_own_workspace_inside_another() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("Cargo.toml"), "[workspace]\nmembers = []\n").unwrap();
+    let o = cli()
+        .args(["new", "demo"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", err(&o));
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    // `--no-deps --offline` reads only the manifests: no network, no git fetch.
+    let o = Command::new(cargo)
+        .args([
+            "metadata",
+            "--no-deps",
+            "--offline",
+            "--format-version",
+            "1",
+        ])
+        .current_dir(dir.path().join("demo"))
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", err(&o));
+}
+
 #[test]
 fn new_rejects_bad_names() {
     let dir = tempfile::tempdir().unwrap();
