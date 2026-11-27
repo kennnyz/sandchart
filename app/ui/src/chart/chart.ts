@@ -92,6 +92,7 @@ export class Chart {
   private crosshairIndex: number | null = null;
   private needOlderCb: (() => void) | null = null;
   private crosshairCb: ((index: number | null) => void) | null = null;
+  private historyLabel: ((firstTime: number) => [string, string]) | null = null;
   private destroyed = false;
   /** WebKit gesture events exist (macOS WKWebView); Chromium and WebView2 send ctrl+wheel. */
   private readonly hasGestures = "ongesturestart" in window;
@@ -143,6 +144,31 @@ export class Chart {
     this.olderPending = false;
     this.axisWidth = PRICE_AXIS_WIDTH;
     this.resetView();
+  }
+
+  /** Drops every candle: an empty plot until the next `setData`. */
+  clear(): void {
+    this.series = emptySeries(0);
+    this.instrument = null;
+    this.atHistoryStart = false;
+    this.olderPending = false;
+    this.axisWidth = PRICE_AXIS_WIDTH;
+    this.resetView();
+  }
+
+  /**
+   * Ends an older-page request that failed: `onNeedOlder` fires again right away if
+   * the view still needs older candles. Until this call the chart does not ask again.
+   */
+  releaseOlder(): void {
+    this.olderPending = false;
+    this.checkNeedOlder();
+  }
+
+  /** Text of the start-of-history marker (two lines) for the time of the first candle. */
+  setHistoryLabel(fn: ((firstTime: number) => [string, string]) | null): void {
+    this.historyLabel = fn;
+    this.invalidate();
   }
 
   /** Adds older candles in front; the view stays on the same bars. */
@@ -368,6 +394,8 @@ export class Chart {
     const { plotW } = this.plot();
     const inPlot = m !== null && m.x >= 0 && m.x < plotW && m.y >= 0 && m.y < plotH;
     const crosshair: Crosshair | null = inPlot ? { x: m.x, y: m.y, index: this.crosshairIndex } : null;
+    const historyStart =
+      this.atHistoryStart && s.count > 0 && this.historyLabel ? this.historyLabel(s.time[0]!) : null;
     draw(
       {
         ctx: this.ctx,
@@ -381,6 +409,7 @@ export class Chart {
         priceDecimals: decimals,
         tf: this.tf,
         crosshair,
+        historyStart,
         theme: this.theme,
       },
       this.buffers,
@@ -393,6 +422,7 @@ export class Chart {
       debug.widestLabel = axis.widest;
       debug.canvasWidth = this.width;
       debug.plotWidth = plotW;
+      debug.historyLabel = historyStart ? historyStart.join("|") : null;
     }
   };
 

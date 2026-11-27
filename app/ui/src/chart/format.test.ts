@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatCrosshairTime, formatPrice, formatTimeLabel } from "./format";
+import { formatBp, formatChange, formatCrosshairTime, formatPrice, formatTimeLabel, formatUtcClock } from "./format";
 
 describe("formatPrice", () => {
   it("formats_tiny_tick_prices", () => {
@@ -44,5 +44,33 @@ describe("formatCrosshairTime", () => {
     const t = Date.UTC(2026, 10, 27, 14, 5);
     expect(formatCrosshairTime(t, "1h")).toBe("27 Nov 2026 14:05");
     expect(formatCrosshairTime(t, "1d")).toBe("27 Nov 2026");
+  });
+});
+
+describe("formatChange", () => {
+  const M = "\u2212";
+  it("keeps the sign of the change on the percentage", () => {
+    expect(formatChange(150, 10_000, 2)).toEqual({ abs: "+1.50", pct: "+1.50%", dir: 1 });
+    expect(formatChange(-150, 10_000, 2)).toEqual({ abs: `${M}1.50`, pct: `${M}1.50%`, dir: -1 });
+  });
+  it("a change too small for the percentage still shows its sign", () => {
+    expect(formatChange(1, 10_000_000, 2)).toEqual({ abs: "+0.01", pct: "+0.00%", dir: 1 });
+    expect(formatChange(-1, 10_000_000, 2)).toEqual({ abs: `${M}0.01`, pct: `${M}0.00%`, dir: -1 });
+  });
+  it("no change has no sign", () => {
+    expect(formatChange(0, 10_000, 2)).toEqual({ abs: "0.00", pct: "0.00%", dir: 0 });
+  });
+  it("formats basis points as a signed percentage", () => {
+    expect(formatBp(184)).toBe("+1.84%");
+    expect(formatBp(-116)).toBe(`${M}1.16%`);
+    expect(formatBp(0)).toBe("0.00%");
+  });
+});
+
+describe("formatUtcClock", () => {
+  const t = (s: string) => Date.parse(s);
+  it("shows HH:MM on the same UTC day, with the date otherwise", () => {
+    expect(formatUtcClock(t("2026-11-27T09:05:00Z"), t("2026-11-27T18:00:00Z"))).toBe("09:05");
+    expect(formatUtcClock(t("2026-11-25T23:59:00Z"), t("2026-11-27T18:00:00Z"))).toBe("25 Nov 23:59");
   });
 });

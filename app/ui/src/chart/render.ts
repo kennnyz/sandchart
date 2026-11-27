@@ -1,7 +1,7 @@
 import type { TimeframeCode } from "../backend/types";
 import { formatCrosshairTime, formatPrice, formatTimeLabel } from "./format";
 import type { PriceScale } from "./scale";
-import { MONO_FAMILY, PRICE_AXIS_WIDTH, TIME_AXIS_HEIGHT, VOLUME_HEIGHT, type CandleStyle, type ChartTheme } from "./theme";
+import { MONO_FAMILY, PRICE_AXIS_WIDTH, SANS_FAMILY, TIME_AXIS_HEIGHT, VOLUME_HEIGHT, type CandleStyle, type ChartTheme } from "./theme";
 import { indexToX, visibleRange, type Viewport } from "./viewport";
 
 /** Columnar candles in typed arrays; only the first `count` entries are valid. */
@@ -37,6 +37,8 @@ export interface FrameInput {
   priceDecimals: number;
   tf: TimeframeCode;
   crosshair: Crosshair | null;
+  /** Two lines for the start-of-history marker, or null when the first candle is not the first one. */
+  historyStart: [string, string] | null;
   theme: ChartTheme;
 }
 
@@ -45,6 +47,8 @@ const LABEL_PAD = 8;
 const MIN_TIME_LABEL_SPACING = 100;
 const MIN_PRICE_TICK_SPACING = 56;
 const BODY_RATIO = 0.72;
+/** Tint of the empty area left of the first candle (Design Reference, States). */
+const HISTORY_TINT = "rgba(128,140,160,0.06)";
 
 /** Scratch memory reused across frames so a frame allocates (almost) nothing. */
 export class RenderBuffers {
@@ -147,6 +151,7 @@ export function draw(f: FrameInput, buf: RenderBuffers): void {
   ctx.beginPath();
   ctx.rect(0, 0, pw, ph);
   ctx.clip();
+  if (f.historyStart && s.count > 0) drawHistoryStart(f, plotW, plotH, px);
   if (hasBars) {
     if (view.barWidth >= 2) drawCandles(f, plotW, plotH, first, last, px);
     else drawColumns(f, buf, plotW, plotH, first, last, px);
@@ -228,6 +233,33 @@ export function draw(f: FrameInput, buf: RenderBuffers): void {
     priceLabel(ctx, formatPrice(price, f.priceDecimals), ch.y, pw, W, dpr, th.crosshairLabelBg, th.fg);
     if (chTime) timeLabel(ctx, f.theme, chTime, chX, ph, pw, dpr);
   }
+}
+
+/** Tints the area before the first candle, draws a 1 px line at its edge and the label. */
+function drawHistoryStart(f: FrameInput, plotW: number, plotH: number, px: number): void {
+  const { ctx, dpr, theme: th, view } = f;
+  const edge = indexToX(view, 0, plotW) - view.barWidth / 2;
+  if (edge <= 0 || edge >= plotW) return;
+  const x = Math.round(edge * dpr);
+  ctx.fillStyle = HISTORY_TINT;
+  ctx.fillRect(0, 0, x, Math.round(plotH * dpr));
+  ctx.fillStyle = th.muted;
+  ctx.fillRect(x, 0, px, Math.round(plotH * dpr));
+
+  const [title, detail] = f.historyStart!;
+  const gap = 10 * dpr;
+  const y = Math.round((plotH / 2) * dpr);
+  ctx.textBaseline = "middle";
+  // Left of the line when there is room for it, otherwise right of it.
+  ctx.font = `600 ${12 * dpr}px ${SANS_FAMILY}`;
+  const room = x - gap > Math.max(ctx.measureText(title).width, ctx.measureText(detail).width + 20 * dpr);
+  ctx.textAlign = room ? "right" : "left";
+  const tx = room ? x - gap : x + gap;
+  ctx.fillStyle = th.fg;
+  ctx.fillText(title, tx, y - 9 * dpr);
+  ctx.font = `${11 * dpr}px ${MONO_FAMILY}`;
+  ctx.fillStyle = th.muted;
+  ctx.fillText(detail, tx, y + 9 * dpr);
 }
 
 function priceLabel(

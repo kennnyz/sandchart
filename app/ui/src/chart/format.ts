@@ -40,3 +40,48 @@ export function formatCrosshairTime(ms: number, tf: TimeframeCode): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${date} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
 }
+
+const MINUS = "−";
+
+function signOf(n: number): string {
+  return n > 0 ? "+" : n < 0 ? MINUS : "";
+}
+
+/**
+ * Change from `base` to `base + diff` (ticks): absolute and in percent, both with the
+ * sign of `diff`, so a change too small for the percentage still reads "+0.00%".
+ */
+export function formatChange(
+  diff: number,
+  base: number,
+  scale: number,
+): { abs: string; pct: string; dir: -1 | 0 | 1 } {
+  const sign = signOf(diff);
+  // Basis points of `base`, rounded: an integer, so formatPrice gives exactly 2 decimals.
+  const bp = base !== 0 ? Math.abs(Math.round((diff * 10_000) / base)) : 0;
+  return {
+    abs: sign + formatPrice(Math.abs(diff), scale),
+    pct: sign + formatPrice(bp, 2) + "%",
+    dir: diff > 0 ? 1 : diff < 0 ? -1 : 0,
+  };
+}
+
+/** Basis points as a signed percentage: 184 -> "+1.84%". */
+export function formatBp(bp: number): string {
+  return signOf(bp) + formatPrice(Math.abs(Math.round(bp)), 2) + "%";
+}
+
+/** UTC wall time of `ms`: "HH:MM" on the UTC day of `now`, "D Mon HH:MM" before it. */
+export function formatUtcClock(ms: number, now: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const clock = `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+  if (new Date(now).toISOString().slice(0, 10) === d.toISOString().slice(0, 10)) return clock;
+  return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()] ?? ""} ${clock}`;
+}
+
+/** Date of a bar for labels: "27 Nov 2026" (UTC). */
+export function formatDate(ms: number): string {
+  const d = new Date(ms);
+  return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()] ?? ""} ${d.getUTCFullYear()}`;
+}
