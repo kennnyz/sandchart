@@ -623,3 +623,119 @@ async fn unknown_instrument_and_source_are_errors() {
     assert!(f.engine.sync_instruments("nope").await.is_err());
     assert_eq!(f.engine.search("btc", 5).unwrap().len(), 1);
 }
+
+/// Pages like the exchange returns them: `back` candles ago, ascending, newest page first.
+fn pages_back(from: i64, count: i64) -> Vec<Vec<Candle>> {
+    (0..count)
+        .map(|p| {
+            ((from + p * 1000)..(from + (p + 1) * 1000))
+                .rev()
+                .map(candle)
+                .collect()
+        })
+        .collect()
+}
+
+fn assert_contiguous(candles: &[Candle]) {
+    assert!(!candles.is_empty());
+    for w in candles.windows(2) {
+        assert_eq!(
+            w[1].open_time - w[0].open_time,
+            H,
+            "hole before {}",
+            w[1].open_time
+        );
+    }
+}
+
+#[tokio::test]
+async fn long_offline_fills_gap_without_hole() {
+    let f = fixture(&["BTCUSDT"]).await;
+    f.provider.push_page(Ok(vec![candle(2501), candle(2500)]));
+    f.engine
+        .load_chart(&id("BTCUSDT"), Timeframe::H1, None)
+        .await
+        .unwrap();
+    for page in pages_back(0, 3) {
+        f.provider.push_page(Ok(page));
+    }
+
+    let page = f
+        .engine
+        .load_chart(&id("BTCUSDT"), Timeframe::H1, None)
+        .await
+        .unwrap();
+    assert!(page.warning.is_none());
+    assert_eq!(
+        f.provider.history_calls().len(),
+        1 + 3,
+        "stops at the page that reaches the cache"
+    );
+    let stored = f
+        .store()
+        .candles_before(&id("BTCUSDT"), Timeframe::H1, None, 100_000)
+        .unwrap();
+    assert_contiguous(&stored);
+    assert_eq!(stored.first().unwrap().open_time, candle(2999).open_time);
+    assert_eq!(stored.last().unwrap().open_time, candle(0).open_time);
+    assert_eq!(page.candles.len(), 1000);
+}
+
+#[tokio::test]
+async fn very_long_offline_resets_series() {
+    let f = fixture(&["BTCUSDT"]).await;
+    f.provider
+        .push_page(Ok(vec![candle(20_001), candle(20_000)]));
+    f.engine
+        .load_chart(&id("BTCUSDT"), Timeframe::H1, None)
+        .await
+        .unwrap();
+    f.store()
+        .set_history_start(&id("BTCUSDT"), Timeframe::H1, candle(20_001).open_time)
+        .unwrap();
+    for page in pages_back(0, 10) {
+        f.provider.push_page(Ok(page));
+    }
+
+    f.engine
+        .load_chart(&id("BTCUSDT"), Timeframe::H1, None)
+        .await
+        .unwrap();
+    assert_eq!(f.provider.history_calls().len(), 1 + 10);
+    let store = f.store();
+    let stored = store
+        .candles_before(&id("BTCUSDT"), Timeframe::H1, None, 100_000)
+        .unwrap();
+    assert_contiguous(&stored);
+    assert_eq!(stored.len(), 10_000, "the old series is gone");
+    assert_eq!(stored.first().unwrap().open_time, candle(9_999).open_time);
+    assert_eq!(
+        store.history_start(&id("BTCUSDT"), Timeframe::H1).unwrap(),
+        None
+    );
+}
+
+#[tokio::test]
+async fn failed_catch_up_stores_nothing_and_warns() {
+    let f = fixture(&["BTCUSDT"]).await;
+    f.provider.push_page(Ok(vec![candle(2501), candle(2500)]));
+    f.engine
+        .load_chart(&id("BTCUSDT"), Timeframe::H1, None)
+        .await
+        .unwrap();
+    f.provider.push_page(Ok(pages_back(0, 1).remove(0)));
+    f.provider.push_page(Err(net()));
+
+    let page = f
+        .engine
+        .load_chart(&id("BTCUSDT"), Timeframe::H1, None)
+        .await
+        .unwrap();
+    assert!(page.warning.is_some());
+    assert_eq!(page.candles, vec![candle(2501), candle(2500)]);
+    let stored = f
+        .store()
+        .candles_before(&id("BTCUSDT"), Timeframe::H1, None, 100_000)
+        .unwrap();
+    assert_eq!(stored.len(), 2, "a partial walk must not leave a hole");
+}

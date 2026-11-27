@@ -246,6 +246,19 @@ impl Store {
             .optional()?)
     }
 
+    /// Removes every candle and the history-start marker of one series, atomically.
+    pub fn delete_series(&mut self, id: &InstrumentId, tf: Timeframe) -> Result<(), StoreError> {
+        let tx = self.conn.transaction()?;
+        for table in ["candles", "history_start"] {
+            tx.execute(
+                &format!("DELETE FROM {table} WHERE source = ?1 AND symbol = ?2 AND tf = ?3"),
+                params![id.source, id.symbol, tf.code()],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn watchlist(&self) -> Result<Vec<InstrumentId>, StoreError> {
         let mut stmt = self
             .conn

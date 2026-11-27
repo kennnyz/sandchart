@@ -122,6 +122,33 @@ fn newest_open_time_and_history_start() {
 }
 
 #[test]
+fn delete_series_removes_only_that_series() {
+    let mut store = Store::open_in_memory().unwrap();
+    let (btc, eth) = (id("BTCUSDT"), id("ETHUSDT"));
+    for (i, tf) in [
+        (&btc, Timeframe::H1),
+        (&btc, Timeframe::H4),
+        (&eth, Timeframe::H1),
+    ] {
+        store.upsert_candles(i, tf, &series(3)).unwrap();
+        store.set_history_start(i, tf, 1).unwrap();
+    }
+    store.delete_series(&btc, Timeframe::H1).unwrap();
+    assert!(
+        store
+            .candles_before(&btc, Timeframe::H1, None, 10)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(store.history_start(&btc, Timeframe::H1).unwrap(), None);
+    assert_eq!(store.newest_open_time(&btc, Timeframe::H1).unwrap(), None);
+    for (i, tf) in [(&btc, Timeframe::H4), (&eth, Timeframe::H1)] {
+        assert_eq!(store.candles_before(i, tf, None, 10).unwrap().len(), 3);
+        assert_eq!(store.history_start(i, tf).unwrap(), Some(1));
+    }
+}
+
+#[test]
 fn instruments_round_trip_and_update() {
     let mut store = Store::open_in_memory().unwrap();
     assert_eq!(store.instrument(&id("BTCUSDT")).unwrap(), None);
