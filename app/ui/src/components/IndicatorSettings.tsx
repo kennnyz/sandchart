@@ -20,6 +20,10 @@ export interface IndicatorSettingsProps {
 /** A number field that applies only whole, in-range values; anything else stays a draft. */
 function NumberParam({ spec, value, onValue }: { spec: ParamSpec; value: number; onValue: (v: ParamValue) => void }) {
   const [draft, setDraft] = useState(String(value));
+  // The value changed from outside (a failed save rolled it back): show it.
+  useEffect(() => {
+    setDraft((d) => (Number(d) === value && d.trim() !== "" ? d : String(value)));
+  }, [value]);
   const isInt = typeof spec.kind === "object" && "int" in spec.kind;
   const [min, max] = typeof spec.kind === "object" && "int" in spec.kind ? spec.kind.int : (spec.kind as { float: [number, number] }).float;
   const n = draft.trim() === "" ? NaN : Number(draft);
@@ -79,6 +83,7 @@ function ParamControl({ spec, value, onValue }: { spec: ParamSpec; value: ParamV
 export function IndicatorSettings({ state, instance, info, palette, log, anchor, hostHeight, onClose }: IndicatorSettingsProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [top, setTop] = useState(anchor.bottom + 4);
+  const [error, setError] = useState<string | null>(null);
   const params = resolvedParams(info.meta, instance.params);
 
   // Below the row when it fits, else above it, never off the chart.
@@ -86,7 +91,7 @@ export function IndicatorSettings({ state, instance, info, palette, log, anchor,
     const h = ref.current?.offsetHeight ?? 0;
     const below = anchor.bottom + 4;
     setTop(below + h <= hostHeight - 8 ? below : Math.max(8, anchor.top - 4 - h));
-  }, [anchor.top, anchor.bottom, hostHeight, log]);
+  }, [anchor.top, anchor.bottom, hostHeight, log, error]);
 
   useEffect(() => ref.current?.querySelector<HTMLElement>("input, select, button")?.focus(), []);
 
@@ -108,8 +113,10 @@ export function IndicatorSettings({ state, instance, info, palette, log, anchor,
     };
   }, [onClose]);
 
-  const save = (patch: Parameters<IndicatorState["update"]>[1]) =>
-    void state.update(instance.instance, patch).catch((e: unknown) => console.error("saving indicator settings failed", e));
+  const save = (patch: Parameters<IndicatorState["update"]>[1]) => {
+    setError(null);
+    state.update(instance.instance, patch).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+  };
 
   return (
     <div
@@ -156,6 +163,11 @@ export function IndicatorSettings({ state, instance, info, palette, log, anchor,
           </div>
         );
       })}
+      {error !== null && (
+        <div className="ind-settings-error" data-testid="indicator-settings-error" role="alert">
+          {error}
+        </div>
+      )}
       {log !== "" && (
         <div className="ind-log">
           <div className="ind-section">{t("indicators.log")}</div>

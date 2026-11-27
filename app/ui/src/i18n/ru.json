@@ -75,5 +75,7 @@
   "indicators.close": "Закрыть",
   "indicators.color": "Цвет: {series}",
   "indicators.swatch": "Цвет {n}",
-  "indicators.tooLarge": "Файл больше {mib} МиБ."
+  "indicators.tooLarge": "Файл больше {mib} МиБ.",
+  "indicators.loadFailed": "Индикаторы не загрузились: {error}",
+  "indicators.retry": "Повторить"
 }

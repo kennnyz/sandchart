@@ -1,4 +1,5 @@
 import { Eye, EyeOff, Settings2, X } from "lucide-react";
+import { useState } from "react";
 import type { IndicatorInfo, IndicatorInstance, ParamValue } from "../backend/types";
 import { formatValue } from "../chart/format";
 import { hasOwnPane, layoutPanes } from "../chart/indicators";
@@ -37,15 +38,16 @@ export function indicatorTitle(info: IndicatorInfo, inst: IndicatorInstance): st
 
 interface RowProps extends Omit<IndicatorLegendProps, "hostHeight"> {
   inst: IndicatorInstance;
+  /** Runs a hide, show or remove; a failure is shown under the rows. */
+  action: (p: Promise<void>) => void;
 }
 
-function Row({ state, values, theme, priceScale, onSettings, inst }: RowProps) {
+function Row({ state, values, theme, priceScale, onSettings, inst, action }: RowProps) {
   const info = state.info(inst.moduleId);
   const name = info?.meta.name ?? inst.moduleId;
   const result = inst.hidden ? undefined : state.result(inst.instance);
   const at = values.get(inst.instance);
   const error = result?.error ?? null;
-  const action = (p: Promise<void>) => void p.catch((e: unknown) => console.error("changing an indicator failed", e));
   return (
     <div
       className="ind-row"
@@ -122,13 +124,23 @@ export function IndicatorLegend(props: IndicatorLegendProps) {
   const { panes } = layoutPanes(hostHeight - TIME_AXIS_HEIGHT, own.length);
   const paneOf = new Map(own.map((l, i) => [l.instance, i]));
   const priceRows = state.instances.filter((i) => !paneOf.has(i.instance));
+  const [error, setError] = useState<string | null>(null);
+  const action = (p: Promise<void>) => {
+    setError(null);
+    p.catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+  };
   return (
     <>
-      {priceRows.length > 0 && (
+      {(priceRows.length > 0 || error !== null) && (
         <div className="ind-legend" style={{ top: PRICE_ROWS_TOP }}>
           {priceRows.map((inst) => (
-            <Row key={inst.instance} {...props} inst={inst} />
+            <Row key={inst.instance} {...props} inst={inst} action={action} />
           ))}
+          {error !== null && (
+            <span className="ind-error" data-testid="indicator-action-error" role="alert" style={{ color: props.theme.down }}>
+              {error}
+            </span>
+          )}
         </div>
       )}
       {state.instances.map((inst) => {
@@ -136,7 +148,7 @@ export function IndicatorLegend(props: IndicatorLegendProps) {
         if (pane === undefined) return null;
         return (
           <div key={inst.instance} className="ind-legend" style={{ top: panes[pane]!.top + PANE_ROWS_INSET }}>
-            <Row {...props} inst={inst} />
+            <Row {...props} inst={inst} action={action} />
           </div>
         );
       })}

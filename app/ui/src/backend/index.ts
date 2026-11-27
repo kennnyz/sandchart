@@ -20,7 +20,8 @@ if (inTauri) void resetSubscriptions();
  * (ms until the instrument list exists, as on a first run) and `mockWatchlist`
  * (comma-separated symbols; empty for none), `mockIndicators` (comma-separated built-ins,
  * e.g. `sma,bollinger,rsi,macd`, put on the chart at start) and `mockIndicatorError=1`
- * (every indicator compute fails). The watchlist is kept in
+ * (every indicator compute fails), `mockIndicatorSaveError=1` (saving the chart indicators
+ * fails) and `mockIndicatorLoadFailures` (that many indicator list calls fail first). The watchlist is kept in
  * localStorage so a reload sees the same list. Calls are counted in `window.__sandchartMock`, and the chart
  * reports draw times and axis layout into `window.__sandchartDebug` (see
  * chart/debug.ts). None of this exists inside Tauri.
@@ -54,6 +55,8 @@ function browserMock(): Backend {
     instrumentsAfterMs: num("mockSyncDelay"),
     indicators: (q.get("mockIndicators") ?? "").split(",").filter(Boolean),
     indicatorError: q.get("mockIndicatorError") === "1",
+    indicatorSaveError: q.get("mockIndicatorSaveError") === "1",
+    indicatorLoadFailures: num("mockIndicatorLoadFailures"),
     watchlist: list === null ? undefined : list.split(",").filter(Boolean),
     watchlistStore: {
       load() {

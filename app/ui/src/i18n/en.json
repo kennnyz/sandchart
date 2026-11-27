@@ -75,5 +75,7 @@
   "indicators.close": "Close",
   "indicators.color": "{series} colour",
   "indicators.swatch": "Colour {n}",
-  "indicators.tooLarge": "The file is larger than {mib} MiB."
+  "indicators.tooLarge": "The file is larger than {mib} MiB.",
+  "indicators.loadFailed": "Indicators did not load: {error}",
+  "indicators.retry": "Retry"
 }

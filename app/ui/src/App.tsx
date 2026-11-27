@@ -58,6 +58,7 @@ export function App() {
 
   // Installed modules and the chart's instances; on a cold start the engine may answer late.
   useEffect(() => {
+    // A failure stays in `loadError`: the dialog shows it and retries.
     indicators.state.load().catch((e: unknown) => console.error("loading the indicators failed", e));
   }, [indicators]);
 

@@ -49,6 +49,12 @@ export function IndicatorsDialog({ backend, store, onClose }: IndicatorsDialogPr
   const fileRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
 
+  // A failed load is retried each time the dialog opens; the Retry button does it again.
+  const reload = () => void state.load().catch(() => undefined); // shown from `state.loadError`
+  useEffect(() => {
+    if (state.loadError !== null) reload();
+  }, []);
+
   // Focus moves into the dialog and back to where it was on close.
   useEffect(() => {
     const before = document.activeElement as HTMLElement | null;
@@ -56,13 +62,15 @@ export function IndicatorsDialog({ backend, store, onClose }: IndicatorsDialogPr
     return () => before?.focus();
   }, []);
 
-  const run = async (job: () => Promise<void>) => {
+  /** Runs a backend job; its failure is shown in the dialog. */
+  const run = async (job: () => Promise<void>, fileError = false) => {
     setError(null);
     setBusy(true);
     try {
       await job();
     } catch (e) {
-      setError(t("indicators.invalidFile", { error: toProblem(e).message }));
+      const message = toProblem(e).message;
+      setError(fileError ? t("indicators.invalidFile", { error: message }) : message);
     } finally {
       setBusy(false);
     }
@@ -83,12 +91,12 @@ export function IndicatorsDialog({ backend, store, onClose }: IndicatorsDialogPr
       const inspection = await backend.inspectIndicator(bytes);
       if (inspection.replaces !== null) setConfirm({ bytes, inspection });
       else await state.install(bytes);
-    });
+    }, true);
   };
 
   const builtin = state.infos.filter((i) => i.builtin);
   const installed = state.infos.filter((i) => !i.builtin);
-  const add = (id: string) => void state.add(id).catch((e: unknown) => console.error("adding an indicator failed", e));
+  const add = (id: string) => void run(() => state.add(id));
 
   return (
     <div className="scrim" onPointerDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -112,6 +120,14 @@ export function IndicatorsDialog({ backend, store, onClose }: IndicatorsDialogPr
             <X size={16} />
           </button>
         </div>
+        {state.loadError !== null && (
+          <div className="ind-dialog-error" data-testid="indicator-load-error" role="alert">
+            <span>{t("indicators.loadFailed", { error: state.loadError })}</span>
+            <button className="text-button" onClick={reload}>
+              {t("indicators.retry")}
+            </button>
+          </div>
+        )}
         <div className="ind-dialog-body">
           <div className="ind-section">{t("indicators.builtin")}</div>
           {builtin.map((info) => (
@@ -145,7 +161,7 @@ export function IndicatorsDialog({ backend, store, onClose }: IndicatorsDialogPr
               onClick={() => {
                 const bytes = confirm.bytes;
                 setConfirm(null);
-                void run(() => state.install(bytes));
+                void run(() => state.install(bytes), true);
               }}
             >
               {t("indicators.replaceConfirm")}

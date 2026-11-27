@@ -222,4 +222,54 @@ describe("IndicatorState", () => {
     await flush();
     expect(state.layers()[0]!.error).toBe("engine closed");
   });
+
+  it("a failed save on add rolls the list back, rejects and computes nothing", async () => {
+    const { backend, calls } = fakeBackend();
+    (backend as { setChartIndicators: unknown }).setChartIndicators = async () => {
+      throw { code: "other", message: "disk full" };
+    };
+    const state = new IndicatorState(backend, () => undefined, manualScheduler().schedule);
+    await state.load();
+    state.recompute({ id: BTC, tf: "1h", fromTime: 1000 }, true);
+    await expect(state.add("builtin.sma")).rejects.toThrow("disk full");
+    expect(state.instances).toEqual([]);
+    expect(state.layers()).toEqual([]);
+    expect(calls).toHaveLength(1); // only the recompute above
+  });
+
+  it("a failed save of new params restores the saved ones", async () => {
+    const { backend, calls } = fakeBackend([
+      { instance: "a", moduleId: "builtin.sma", params: [["period", { int: 20 }]], colors: {}, hidden: false },
+    ]);
+    (backend as { setChartIndicators: unknown }).setChartIndicators = async () => {
+      throw new Error("disk full");
+    };
+    const state = new IndicatorState(backend, () => undefined, manualScheduler().schedule);
+    await state.load();
+    state.recompute({ id: BTC, tf: "1h", fromTime: 1000 }, true);
+    calls[0]!.resolve([ok("a", 1000, [1])]);
+    await flush();
+    await expect(state.update("a", { params: [["period", { int: 50 }]] })).rejects.toThrow("disk full");
+    expect(state.instances[0]!.params).toEqual([["period", { int: 20 }]]);
+    // Nothing to recompute: the engine still has period 20 and its result is shown.
+    expect(calls).toHaveLength(1);
+    expect(state.layers()[0]!.computed).not.toBeNull();
+  });
+
+  it("a failed load is kept as loadError until a retry succeeds", async () => {
+    const { backend } = fakeBackend();
+    const list = backend.listIndicators.bind(backend);
+    let fail = true;
+    (backend as { listIndicators: unknown }).listIndicators = async () => {
+      if (fail) throw { code: "other", message: "engine starting" };
+      return list();
+    };
+    const state = new IndicatorState(backend, () => undefined, manualScheduler().schedule);
+    await expect(state.load()).rejects.toThrow("engine starting");
+    expect(state.loadError).toBe("engine starting");
+    fail = false;
+    await state.load();
+    expect(state.loadError).toBeNull();
+    expect(state.infos.map((i) => i.meta.id)).toEqual(["builtin.sma", "builtin.rsi"]);
+  });
 });

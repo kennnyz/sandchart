@@ -880,6 +880,11 @@ button:disabled {
 .ind-swatch[aria-checked="true"] {
   box-shadow: 0 0 0 1px var(--panel), 0 0 0 2px var(--fg);
 }
+.ind-settings-error {
+  padding: 6px 0 0;
+  color: var(--down);
+  overflow-wrap: anywhere;
+}
 .ind-log .ind-section {
   padding: 8px 0 4px;
 }

@@ -137,3 +137,24 @@ test("install_from_file_confirms_a_replace_and_shows_repaints", async ({ page })
   await page.keyboard.press("Escape");
   await expect(rows(page)).toHaveCount(0);
 });
+
+test("a_failed_save_shows_an_error_and_adds_nothing", async ({ page }) => {
+  await openApp(page, "?mockLatency=10&mockIndicatorSaveError=1");
+  await page.getByTestId("indicators-button").click();
+  const dialog = page.getByTestId("indicators-dialog");
+  await dialog.locator('[data-testid="indicator-option"][data-id="builtin.sma"]').click();
+  await expect(dialog.getByTestId("indicator-dialog-error")).toHaveText("mock: cannot save");
+  await page.keyboard.press("Escape");
+  await expect(rows(page)).toHaveCount(0);
+});
+
+test("a_failed_load_shows_an_error_in_the_dialog_and_retry_works", async ({ page }) => {
+  // The first two list calls fail: the one at start and the retry when the dialog opens.
+  await openApp(page, "?mockLatency=10&mockIndicatorLoadFailures=2");
+  await page.getByTestId("indicators-button").click();
+  const dialog = page.getByTestId("indicators-dialog");
+  await expect(dialog.getByTestId("indicator-load-error")).toContainText("mock: engine starting");
+  await dialog.getByRole("button", { name: "Retry" }).click();
+  await expect(dialog.getByTestId("indicator-load-error")).toHaveCount(0);
+  await expect(dialog.getByTestId("indicator-option")).toHaveCount(5);
+});

@@ -50,6 +50,12 @@ function validParam(kind: IndicatorMeta["params"][number]["kind"], v: ParamValue
 export class IndicatorState {
   instances: IndicatorInstance[] = [];
   infos: IndicatorInfo[] = [];
+  /** Why the last `load` failed; null once one succeeded. */
+  loadError: string | null = null;
+  /** The list the engine has: the last one loaded or saved. A failed save goes back to it. */
+  private saved: IndicatorInstance[] = [];
+  /** Number of the latest save; only its failure rolls back (a newer save carries the change too). */
+  private saveSeq = 0;
   private results = new Map<string, Result>();
   /** Bumped on every change; `layers()` is rebuilt only when it moved. */
   private version = 0;
@@ -74,11 +80,24 @@ export class IndicatorState {
     private readonly schedule: typeof setTimeout = setTimeout,
   ) {}
 
-  /** Installed modules and the saved instances; computes if a chart is set. */
+  /**
+   * Installed modules and the saved instances; computes if a chart is set. A failure is
+   * kept in `loadError` (shown by the dialog, which retries) and rethrown.
+   */
   async load(): Promise<void> {
-    const [infos, instances] = await Promise.all([this.backend.listIndicators(), this.backend.getChartIndicators()]);
+    let infos: IndicatorInfo[];
+    let instances: IndicatorInstance[];
+    try {
+      [infos, instances] = await Promise.all([this.backend.listIndicators(), this.backend.getChartIndicators()]);
+    } catch (e) {
+      this.loadError = toProblem(e).message;
+      this.changed();
+      throw new Error(this.loadError);
+    }
+    this.loadError = null;
     this.infos = infos;
     this.instances = instances;
+    this.saved = instances;
     this.changed();
     if (this.target) void this.run(this.target);
   }
@@ -137,6 +156,7 @@ export class IndicatorState {
     const [infos, instances] = await Promise.all([this.backend.listIndicators(), this.backend.getChartIndicators()]);
     this.infos = infos;
     this.instances = instances;
+    this.saved = instances;
     this.changed();
   }
 
@@ -203,16 +223,30 @@ export class IndicatorState {
     return this.results.get(instance);
   }
 
+  /**
+   * Saves the local list, then computes it. A failed save puts the list back to what the
+   * engine has (so the legend never shows params other than the computed ones) and
+   * rejects with the reason for the caller to show.
+   */
   private async saveAndRecompute(compute = true): Promise<void> {
     this.changed();
     const items = this.instances.map((i) => ({ ...i }));
+    const seq = ++this.saveSeq;
     const save = this.saving.then(() => this.backend.setChartIndicators(items));
     this.saving = save.catch(() => undefined);
     try {
       await save;
     } catch (e) {
-      console.error("saving the chart indicators failed", e);
+      if (seq === this.saveSeq) {
+        this.instances = this.saved;
+        this.changed();
+        // A removed instance comes back without its result: compute it again.
+        const missing = this.instances.some((i) => !i.hidden && !this.results.has(i.instance));
+        if (missing && this.target) void this.run(this.target);
+      }
+      throw new Error(toProblem(e).message);
     }
+    this.saved = items;
     if (compute && this.target) void this.run(this.target);
   }
 

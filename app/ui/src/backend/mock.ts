@@ -82,6 +82,10 @@ export interface MockOptions {
   indicators?: string[];
   /** Every indicator compute answers `{ err: "mock: out of fuel" }`. */
   indicatorError?: boolean;
+  /** Every `setChartIndicators` rejects with "mock: cannot save". */
+  indicatorSaveError?: boolean;
+  /** The first this many `listIndicators` calls reject with "mock: engine starting". */
+  indicatorLoadFailures?: number;
   /** Keeps the watchlist across page loads (the browser mock uses localStorage). */
   watchlistStore?: { load(): InstrumentId[] | null; save(ids: InstrumentId[]): void };
 }
@@ -378,6 +382,7 @@ export function createMockBackend(opts: MockOptions): MockBackend {
   }
 
   let echoInstalled = false;
+  let loadFailures = opts.indicatorLoadFailures ?? 0;
   let chartIndicators: IndicatorInstance[] = (opts.indicators ?? []).map((name) => ({
     instance: `mock-${name}`,
     moduleId: `builtin.${name}`,
@@ -539,6 +544,10 @@ export function createMockBackend(opts: MockOptions): MockBackend {
 
     async listIndicators() {
       await delay();
+      if (loadFailures > 0) {
+        loadFailures--;
+        throw { code: "other", message: "mock: engine starting" };
+      }
       return infos();
     },
 
@@ -569,6 +578,7 @@ export function createMockBackend(opts: MockOptions): MockBackend {
 
     async setChartIndicators(items) {
       await delay();
+      if (opts.indicatorSaveError) throw { code: "other", message: "mock: cannot save" };
       chartIndicators = items.map((i) => ({ ...i }));
     },
 
