@@ -83,7 +83,8 @@ export class IndicatorState {
   constructor(
     private readonly backend: Backend,
     private readonly onChange: () => void,
-    private readonly schedule: typeof setTimeout = setTimeout,
+    // A wrapper, not `setTimeout` itself: called as a method, WebKit throws on the foreign `this`.
+    private readonly schedule: (fn: () => void, ms: number) => unknown = (fn, ms) => setTimeout(fn, ms),
   ) {}
 
   /**

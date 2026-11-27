@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   Backend,
   IndicatorInfo,
@@ -107,6 +107,26 @@ describe("IndicatorState", () => {
     expect(state.instances.map((i) => i.moduleId)).toEqual(["builtin.sma"]);
     // Pending until the first compute: a layer without a result or an error.
     expect(state.layers().map((l) => [l.computed, l.error])).toEqual([[null, null]]);
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  // WebKit (the macOS and Linux app) throws "Can only call Window.setTimeout on instances of
+  // Window" when setTimeout runs with another `this`; Chromium does not, so e2e missed it.
+  it("the default scheduler calls setTimeout without a foreign this", async () => {
+    const { backend } = fakeBackend([
+      { instance: "a", moduleId: "builtin.sma", params: [], colors: {}, hidden: false },
+    ]);
+    const strict = vi.fn(function (this: unknown, fn: () => void) {
+      if (this !== undefined && this !== globalThis) throw new TypeError("Can only call Window.setTimeout on instances of Window");
+      fn();
+      return 0;
+    });
+    vi.stubGlobal("setTimeout", strict);
+    const state = new IndicatorState(backend, () => undefined);
+    await state.load();
+    expect(() => state.recompute({ id: BTC, tf: "1h", fromTime: 1000 })).not.toThrow();
+    expect(strict).toHaveBeenCalled();
   });
 
   it("three live triggers in 100 ms give one compute", async () => {
