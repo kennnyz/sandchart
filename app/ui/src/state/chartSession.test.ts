@@ -328,7 +328,15 @@ describe("ChartSession", () => {
 
   it("appends backfilled candles after the last one", async () => {
     const mock = createMockBackend({ candles: 3000 });
-    const { chart, session, last } = setup(mock);
+    let latestLoads = 0;
+    const backend: Backend = {
+      ...mock,
+      async getCandles(id, tf, before) {
+        if (before === undefined) latestLoads++;
+        return mock.getCandles(id, tf, before);
+      },
+    };
+    const { chart, session, last } = setup(backend);
     await session.open(BTC, "1h");
     const t0 = chart.time[chart.count - 1]!;
     const version = last().version;
@@ -336,7 +344,32 @@ describe("ChartSession", () => {
     expect(chart.count).toBe(1002);
     expect(chart.close.at(-1)).toBe(7);
     expect(chart.calls.filter((c) => c.startsWith("setData"))).toHaveLength(1);
+    expect(latestLoads).toBe(1);
     expect(last().version).toBeGreaterThan(version);
+    session.close();
+  });
+
+  it("a backfill older than the last live bar reloads the newest page", async () => {
+    const mock = createMockBackend({ candles: 3000 });
+    let latestLoads = 0;
+    const backend: Backend = {
+      ...mock,
+      async getCandles(id, tf, before) {
+        if (before === undefined) latestLoads++;
+        return mock.getCandles(id, tf, before);
+      },
+    };
+    const { chart, session } = setup(backend);
+    await session.open(BTC, "1h");
+    const t0 = chart.time[chart.count - 1]!;
+    // The backfill failed earlier: live bars kept coming and left a gap behind them.
+    mock.emitLive({ kind: "candle", time: t0 + 3 * H, open: 1, high: 1, low: 1, close: 1, volume: 1, closed: false });
+    expect(chart.time.at(-1)).toBe(t0 + 3 * H);
+    expect(latestLoads).toBe(1);
+    // The backfill that finally succeeded starts inside the gap.
+    mock.emitLive({ kind: "backfilled", candles: columns([t0 + H, t0 + 2 * H], 7), reset: false });
+    await vi.waitFor(() => expect(latestLoads).toBe(2));
+    await vi.waitFor(() => expect(chart.calls.filter((c) => c.startsWith("setData"))).toHaveLength(2));
     session.close();
   });
 

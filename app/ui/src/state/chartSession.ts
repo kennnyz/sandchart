@@ -72,6 +72,8 @@ export class ChartSession {
   /** Generation that has, or is acquiring, the live stream. */
   private liveGen = 0;
   private olderInFlight = false;
+  /** The chart has a hole the newest page must replace, not merge into. */
+  private replaceOnLoad = false;
   private readonly pending = new Map<RetryKind, Pending>();
   private state: SessionState = {
     id: null,
@@ -159,6 +161,7 @@ export class ChartSession {
     this.stopLive = null;
     this.liveGen = 0;
     this.olderInFlight = false;
+    this.replaceOnLoad = false;
     for (const p of this.pending.values()) if (p.timer !== null) clearTimeout(p.timer);
     this.pending.clear();
     return this.gen;
@@ -177,8 +180,9 @@ export class ChartSession {
       return;
     }
     if (gen !== this.gen) return;
-    if (this.chart.count === 0) this.chart.setData(page);
+    if (this.chart.count === 0 || this.replaceOnLoad) this.chart.setData(page);
     else this.merge(page);
+    this.replaceOnLoad = false;
     this.set({ status: "ready", instrument: page.instrument });
     this.bump();
     if (page.warning) this.fail("latest", page.warning);
@@ -238,6 +242,14 @@ export class ChartSession {
         // The engine replaced the cached series: start over from it.
         this.chart.setData({ instrument, ...b, atHistoryStart: false, warning: null });
         this.bump();
+        return;
+      }
+      const last = this.chart.candle(this.chart.count - 1);
+      if (last && b.time.length > 0 && b.time[0]! < last.time) {
+        // Live bars went past a gap that this backfill fills, and the chart drops bars older
+        // than its last one: reload the newest page, the cache is complete by now.
+        this.replaceOnLoad = true;
+        void this.loadLatest(this.gen);
         return;
       }
       for (let i = 0; i < b.time.length; i++) {
