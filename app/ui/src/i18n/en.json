@@ -77,5 +77,7 @@
   "indicators.swatch": "Colour {n}",
   "indicators.tooLarge": "The file is larger than {mib} MiB.",
   "indicators.loadFailed": "Indicators did not load: {error}",
-  "indicators.retry": "Retry"
+  "indicators.retry": "Retry",
+  "indicators.removeAsk": "Remove {name}? Its indicators on the chart go too.",
+  "indicators.notLoaded": "Did not load: {error}"
 }

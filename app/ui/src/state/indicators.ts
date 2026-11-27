@@ -2,7 +2,9 @@ import {
   toProblem,
   type Backend,
   type ComputedIndicator,
+  type FailedIndicator,
   type IndicatorInfo,
+  type IndicatorList,
   type IndicatorInstance,
   type IndicatorMeta,
   type InstrumentId,
@@ -50,6 +52,10 @@ function validParam(kind: IndicatorMeta["params"][number]["kind"], v: ParamValue
 export class IndicatorState {
   instances: IndicatorInstance[] = [];
   infos: IndicatorInfo[] = [];
+  /** Modules that could not be loaded; their chart instances stay stored in the engine. */
+  failed: FailedIndicator[] = [];
+  /** Why the indicator service could not do its work, from the last list. */
+  serviceError: string | null = null;
   /** Why the last `load` failed; null once one succeeded. */
   loadError: string | null = null;
   /** The list the engine has: the last one loaded or saved. A failed save goes back to it. */
@@ -85,17 +91,17 @@ export class IndicatorState {
    * kept in `loadError` (shown by the dialog, which retries) and rethrown.
    */
   async load(): Promise<void> {
-    let infos: IndicatorInfo[];
+    let list: IndicatorList;
     let instances: IndicatorInstance[];
     try {
-      [infos, instances] = await Promise.all([this.backend.listIndicators(), this.backend.getChartIndicators()]);
+      [list, instances] = await Promise.all([this.backend.listIndicators(), this.backend.getChartIndicators()]);
     } catch (e) {
       this.loadError = toProblem(e).message;
       this.changed();
       throw new Error(this.loadError);
     }
     this.loadError = null;
-    this.infos = infos;
+    this.setList(list);
     this.instances = instances;
     this.saved = instances;
     this.changed();
@@ -105,9 +111,15 @@ export class IndicatorState {
   /** Installs (or replaces) a module; instances of a replaced module are recomputed. */
   async install(bytes: Uint8Array): Promise<void> {
     const info = await this.backend.installIndicator(bytes);
-    this.infos = await this.backend.listIndicators();
+    this.setList(await this.backend.listIndicators());
     this.changed();
     if (this.target && this.instances.some((i) => i.moduleId === info.meta.id)) void this.run(this.target);
+  }
+
+  private setList(list: IndicatorList): void {
+    this.infos = list.indicators;
+    this.failed = list.failed;
+    this.serviceError = list.error;
   }
 
   info(moduleId: string): IndicatorInfo | undefined {
@@ -153,8 +165,8 @@ export class IndicatorState {
   async uninstall(moduleId: string): Promise<void> {
     await this.saving;
     await this.backend.removeIndicator(moduleId);
-    const [infos, instances] = await Promise.all([this.backend.listIndicators(), this.backend.getChartIndicators()]);
-    this.infos = infos;
+    const [list, instances] = await Promise.all([this.backend.listIndicators(), this.backend.getChartIndicators()]);
+    this.setList(list);
     this.instances = instances;
     this.saved = instances;
     this.changed();

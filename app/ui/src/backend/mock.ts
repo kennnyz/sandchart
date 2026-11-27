@@ -84,6 +84,8 @@ export interface MockOptions {
   indicatorError?: boolean;
   /** Every `setChartIndicators` rejects with "mock: cannot save". */
   indicatorSaveError?: boolean;
+  /** `listIndicators` reports the installed module `test.broken` as failed to load, and a service error. */
+  indicatorProblems?: boolean;
   /** The first this many `listIndicators` calls reject with "mock: engine starting". */
   indicatorLoadFailures?: number;
   /** Keeps the watchlist across page loads (the browser mock uses localStorage). */
@@ -382,6 +384,7 @@ export function createMockBackend(opts: MockOptions): MockBackend {
   }
 
   let echoInstalled = false;
+  let brokenInstalled = opts.indicatorProblems ?? false;
   let loadFailures = opts.indicatorLoadFailures ?? 0;
   let chartIndicators: IndicatorInstance[] = (opts.indicators ?? []).map((name) => ({
     instance: `mock-${name}`,
@@ -548,7 +551,11 @@ export function createMockBackend(opts: MockOptions): MockBackend {
         loadFailures--;
         throw { code: "other", message: "mock: engine starting" };
       }
-      return infos();
+      return {
+        indicators: infos(),
+        failed: brokenInstalled ? [{ id: "test.broken", builtin: false, error: "mock: not an indicator component" }] : [],
+        error: opts.indicatorProblems ? "mock: cannot read the installed indicators" : null,
+      };
     },
 
     async inspectIndicator() {
@@ -564,6 +571,10 @@ export function createMockBackend(opts: MockOptions): MockBackend {
 
     async removeIndicator(id) {
       await delay();
+      if (id === "test.broken" && brokenInstalled) {
+        brokenInstalled = false;
+        return;
+      }
       if (id !== MOCK_ECHO.meta.id || !echoInstalled) {
         throw new Error(`${id} is not an installed indicator; built-in indicators cannot be removed`);
       }

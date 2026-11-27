@@ -123,6 +123,18 @@ export interface IndicatorInfo {
   /** The module changed earlier values when later bars arrived. */
   repaints: boolean;
 }
+/** A built-in or installed module that could not be loaded; its chart instances stay stored. */
+export interface FailedIndicator {
+  id: string;
+  builtin: boolean;
+  error: string;
+}
+export interface IndicatorList {
+  indicators: IndicatorInfo[];
+  failed: FailedIndicator[];
+  /** Why the indicator service could not do its work (runtime did not start, list unreadable). */
+  error: string | null;
+}
 /** A checked module file that is not installed yet. */
 export interface Inspection {
   meta: IndicatorMeta;
@@ -179,7 +191,7 @@ export interface Backend {
   instrumentsReady(): Promise<boolean>;
   /** Called when the instrument list was synced. Resolves to the function that stops listening. */
   onInstrumentsSynced(cb: () => void): Promise<() => void>;
-  listIndicators(): Promise<IndicatorInfo[]>;
+  listIndicators(): Promise<IndicatorList>;
   /** Checks a module file without installing it. */
   inspectIndicator(bytes: Uint8Array): Promise<Inspection>;
   installIndicator(bytes: Uint8Array): Promise<IndicatorInfo>;

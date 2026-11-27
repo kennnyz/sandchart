@@ -129,7 +129,9 @@ describe("mock backend", () => {
 
     it("lists the built-ins and cuts results at fromTime", async () => {
       const b = createMockBackend({ candles: 300, indicators: ["sma", "bollinger", "rsi", "macd"] });
-      const list = await b.listIndicators();
+      const { indicators: list, failed, error } = await b.listIndicators();
+      expect(failed).toEqual([]);
+      expect(error).toBeNull();
       expect(list.filter((i) => i.builtin).map((i) => i.meta.id)).toEqual(
         expect.arrayContaining(["builtin.sma", "builtin.bollinger", "builtin.rsi", "builtin.macd"]),
       );
@@ -144,6 +146,15 @@ describe("mock backend", () => {
       const bb = results[1]!;
       expect(values(bb, "fill")).toHaveLength(0);
       expect(values(bb, "upper")[0]).toBeGreaterThan(values(bb, "lower")[0]!);
+    });
+
+    it("lists a broken module and a service error with indicatorProblems, and removes it", async () => {
+      const b = createMockBackend({ candles: 300, indicatorProblems: true });
+      const list = await b.listIndicators();
+      expect(list.failed).toEqual([{ id: "test.broken", builtin: false, error: "mock: not an indicator component" }]);
+      expect(list.error).toBe("mock: cannot read the installed indicators");
+      await b.removeIndicator("test.broken");
+      expect((await b.listIndicators()).failed).toEqual([]);
     });
 
     it("answers with an error when mockIndicatorError is set", async () => {

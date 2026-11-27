@@ -52,7 +52,7 @@ function fakeBackend(saved: IndicatorInstance[] = []) {
   const calls: Call[] = [];
   const saves: IndicatorInstance[][] = [];
   const backend = {
-    listIndicators: async () => [SMA, RSI],
+    listIndicators: async () => ({ indicators: [SMA, RSI], failed: [], error: null }),
     getChartIndicators: async () => saved.map((i) => ({ ...i })),
     setChartIndicators: async (items: IndicatorInstance[]) => {
       saves.push(items.map((i) => ({ ...i })));
@@ -209,7 +209,7 @@ describe("IndicatorState", () => {
 
   it("a rejected compute shows its message on every drawn layer", async () => {
     const backend = {
-      listIndicators: async () => [SMA],
+      listIndicators: async () => ({ indicators: [SMA], failed: [], error: null }),
       getChartIndicators: async () => [{ instance: "a", moduleId: "builtin.sma", params: [], colors: {}, hidden: false }],
       setChartIndicators: async () => undefined,
       computeIndicators: async () => {
@@ -254,6 +254,24 @@ describe("IndicatorState", () => {
     // Nothing to recompute: the engine still has period 20 and its result is shown.
     expect(calls).toHaveLength(1);
     expect(state.layers()[0]!.computed).not.toBeNull();
+  });
+
+  it("keeps the modules that failed to load and the service error", async () => {
+    const { backend } = fakeBackend([
+      { instance: "a", moduleId: "me.broken", params: [], colors: {}, hidden: false },
+    ]);
+    const failed = [{ id: "me.broken", builtin: false, error: "not an indicator component" }];
+    (backend as { listIndicators: unknown }).listIndicators = async () => ({
+      indicators: [SMA],
+      failed,
+      error: "cannot read the installed indicators",
+    });
+    const state = new IndicatorState(backend, () => undefined, manualScheduler().schedule);
+    await state.load();
+    expect(state.infos).toEqual([SMA]);
+    expect(state.failed).toEqual(failed);
+    expect(state.serviceError).toBe("cannot read the installed indicators");
+    expect(state.layers()).toEqual([]);
   });
 
   it("a failed load is kept as loadError until a retry succeeds", async () => {

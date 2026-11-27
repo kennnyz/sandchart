@@ -130,10 +130,18 @@ test("install_from_file_confirms_a_replace_and_shows_repaints", async ({ page })
   await expect(row.getByTestId("indicator-repaints")).toHaveText("Repaints: past values can change");
   await expect.poll(() => panes(page)).toBe(1);
 
-  // Uninstalling the module removes its chart instance too.
+  // Uninstalling asks first, then removes the module and its chart instance.
   await page.getByTestId("indicators-button").click();
-  await page.getByTestId("indicators-dialog").getByRole("button", { name: "Remove Echo" }).click();
-  await expect(page.getByTestId("indicators-dialog").locator('[data-id="test.echo"]')).toHaveCount(0);
+  const opened = page.getByTestId("indicators-dialog");
+  await opened.getByRole("button", { name: "Remove Echo" }).click();
+  const ask = opened.getByTestId("indicator-remove");
+  await expect(ask).toContainText("Remove Echo? Its indicators on the chart go too.");
+  await ask.getByRole("button", { name: "Cancel" }).click();
+  await expect(ask).toHaveCount(0);
+  await expect(opened.locator('[data-id="test.echo"]')).toHaveCount(1);
+  await opened.getByRole("button", { name: "Remove Echo" }).click();
+  await opened.getByTestId("indicator-remove").getByRole("button", { name: "Remove" }).click();
+  await expect(opened.locator('[data-id="test.echo"]')).toHaveCount(0);
   await page.keyboard.press("Escape");
   await expect(rows(page)).toHaveCount(0);
 });
@@ -157,4 +165,19 @@ test("a_failed_load_shows_an_error_in_the_dialog_and_retry_works", async ({ page
   await dialog.getByRole("button", { name: "Retry" }).click();
   await expect(dialog.getByTestId("indicator-load-error")).toHaveCount(0);
   await expect(dialog.getByTestId("indicator-option")).toHaveCount(5);
+});
+
+test("modules_that_failed_to_load_and_the_service_error_are_shown", async ({ page }) => {
+  await openApp(page, "?mockLatency=10&mockIndicatorProblems=1");
+  await page.getByTestId("indicators-button").click();
+  const dialog = page.getByTestId("indicators-dialog");
+  await expect(dialog.getByTestId("indicator-service-error")).toHaveText(
+    "Indicators did not load: mock: cannot read the installed indicators",
+  );
+  const broken = dialog.getByTestId("indicator-failed");
+  await expect(broken).toContainText("test.broken");
+  await expect(broken).toContainText("Did not load: mock: not an indicator component");
+  await broken.getByRole("button", { name: "Remove test.broken" }).click();
+  await dialog.getByTestId("indicator-remove").getByRole("button", { name: "Remove" }).click();
+  await expect(dialog.getByTestId("indicator-failed")).toHaveCount(0);
 });

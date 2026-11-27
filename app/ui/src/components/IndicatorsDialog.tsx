@@ -1,6 +1,6 @@
 import { FileUp, X } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore, type ChangeEvent } from "react";
-import { toProblem, type Backend, type IndicatorInfo, type Inspection } from "../backend/types";
+import { toProblem, type Backend, type FailedIndicator, type IndicatorInfo, type Inspection } from "../backend/types";
 import { t } from "../i18n";
 import type { IndicatorStore } from "../state/indicators";
 
@@ -22,28 +22,44 @@ function Option({ info, onAdd, onRemove }: { info: IndicatorInfo; onAdd: () => v
         <span className="desc">{meta.description}</span>
         {!info.builtin && <span className="ver mono">{meta.version}</span>}
       </button>
-      {onRemove && (
-        <button
-          className="icon-button"
-          aria-label={`${t("indicators.remove")} ${meta.name}`}
-          title={t("indicators.remove")}
-          onClick={onRemove}
-        >
-          <X size={14} />
-        </button>
-      )}
+      {onRemove && <RemoveButton name={meta.name} onRemove={onRemove} />}
+    </div>
+  );
+}
+
+function RemoveButton({ name, onRemove }: { name: string; onRemove: () => void }) {
+  return (
+    <button className="icon-button" aria-label={`${t("indicators.remove")} ${name}`} title={t("indicators.remove")} onClick={onRemove}>
+      <X size={14} />
+    </button>
+  );
+}
+
+/** A module that did not load: its id and why, and Remove for an installed one. */
+function Failed({ failed, onRemove }: { failed: FailedIndicator; onRemove?: () => void }) {
+  return (
+    <div className="ind-option-row" data-testid="indicator-failed" data-id={failed.id}>
+      <div className="ind-option failed">
+        <span className="name mono">{failed.id}</span>
+        <span className="desc" title={failed.error}>
+          {t("indicators.notLoaded", { error: failed.error })}
+        </span>
+      </div>
+      {onRemove && <RemoveButton name={failed.id} onRemove={onRemove} />}
     </div>
   );
 }
 
 /**
  * The indicator list: a click puts one on the chart (the dialog stays open), a module
- * file is checked and installed from here, with an in-dialog confirm before a replace.
+ * file is checked and installed from here, with an in-dialog confirm before a replace
+ * and before an uninstall. Modules that did not load are listed with the reason.
  */
 export function IndicatorsDialog({ backend, store, onClose }: IndicatorsDialogProps) {
   useSyncExternalStore(store.subscribe, store.version);
   const state = store.state;
   const [confirm, setConfirm] = useState<{ bytes: Uint8Array; inspection: Inspection } | null>(null);
+  const [removing, setRemoving] = useState<{ id: string; name: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -81,6 +97,7 @@ export function IndicatorsDialog({ backend, store, onClose }: IndicatorsDialogPr
     // Cleared so that picking the same file again fires `change` again.
     e.target.value = "";
     setConfirm(null);
+    setRemoving(null);
     if (!file) return;
     if (file.size > MAX_FILE_MIB * 1024 * 1024) {
       setError(t("indicators.tooLarge", { mib: MAX_FILE_MIB }));
@@ -96,6 +113,12 @@ export function IndicatorsDialog({ backend, store, onClose }: IndicatorsDialogPr
 
   const builtin = state.infos.filter((i) => i.builtin);
   const installed = state.infos.filter((i) => !i.builtin);
+  const failedBuiltin = state.failed.filter((f) => f.builtin);
+  const failedInstalled = state.failed.filter((f) => !f.builtin);
+  const askRemove = (id: string, name: string) => {
+    setConfirm(null);
+    setRemoving({ id, name });
+  };
   const add = (id: string) => void run(() => state.add(id));
 
   return (
@@ -128,21 +151,51 @@ export function IndicatorsDialog({ backend, store, onClose }: IndicatorsDialogPr
             </button>
           </div>
         )}
+        {state.serviceError !== null && (
+          <div className="ind-dialog-error" data-testid="indicator-service-error" role="alert">
+            {t("indicators.loadFailed", { error: state.serviceError })}
+          </div>
+        )}
         <div className="ind-dialog-body">
           <div className="ind-section">{t("indicators.builtin")}</div>
           {builtin.map((info) => (
             <Option key={info.meta.id} info={info} onAdd={() => add(info.meta.id)} />
           ))}
-          {installed.length > 0 && <div className="ind-section">{t("indicators.installed")}</div>}
+          {failedBuiltin.map((f) => (
+            <Failed key={f.id} failed={f} />
+          ))}
+          {installed.length + failedInstalled.length > 0 && <div className="ind-section">{t("indicators.installed")}</div>}
           {installed.map((info) => (
             <Option
               key={info.meta.id}
               info={info}
               onAdd={() => add(info.meta.id)}
-              onRemove={() => void run(() => state.uninstall(info.meta.id))}
+              onRemove={() => askRemove(info.meta.id, info.meta.name)}
             />
           ))}
+          {failedInstalled.map((f) => (
+            <Failed key={f.id} failed={f} onRemove={() => askRemove(f.id, f.id)} />
+          ))}
         </div>
+        {removing && (
+          <div className="ind-confirm" data-testid="indicator-remove" role="alert">
+            <span>{t("indicators.removeAsk", { name: removing.name })}</span>
+            <button className="text-button" onClick={() => setRemoving(null)}>
+              {t("indicators.cancel")}
+            </button>
+            <button
+              className="primary-button"
+              disabled={busy}
+              onClick={() => {
+                const id = removing.id;
+                setRemoving(null);
+                void run(() => state.uninstall(id));
+              }}
+            >
+              {t("indicators.remove")}
+            </button>
+          </div>
+        )}
         {confirm && (
           <div className="ind-confirm" data-testid="indicator-replace" role="alert">
             <span>

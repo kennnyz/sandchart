@@ -724,6 +724,9 @@ button:disabled {
   font-size: 12px;
   color: var(--muted);
 }
+.ind-option.failed .desc {
+  color: var(--down);
+}
 .ind-option .ver {
   font-size: 11px;
   color: var(--muted);
