@@ -71,6 +71,18 @@ export function IndicatorsDialog({ backend, store, onClose }: IndicatorsDialogPr
     if (state.loadError !== null) reload();
   }, []);
 
+  // Escape is caught on the window: WebKit does not focus a button on click, so after a
+  // click focus sits on <body> and a keydown never reaches the dialog element.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   // Focus moves into the dialog and back to where it was on close.
   useEffect(() => {
     const before = document.activeElement as HTMLElement | null;
@@ -130,12 +142,6 @@ export function IndicatorsDialog({ backend, store, onClose }: IndicatorsDialogPr
         role="dialog"
         aria-modal="true"
         aria-label={t("indicators.button")}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") {
-            e.preventDefault();
-            onClose();
-          }
-        }}
       >
         <div className="ind-dialog-header">
           <span>{t("indicators.button")}</span>
