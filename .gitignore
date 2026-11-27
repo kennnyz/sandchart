@@ -2,3 +2,5 @@
 node_modules/
 .superpowers/
 .DS_Store
+/app/ui/dist/
+/app/src-tauri/gen/

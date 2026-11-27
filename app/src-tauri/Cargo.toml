@@ -1,0 +1,23 @@
+[package]
+name = "sandchart-app"
+description = "Sandchart desktop app: Tauri shell over the engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+sandchart-core = { path = "../../crates/core" }
+sandchart-data = { path = "../../crates/data" }
+sandchart-engine = { path = "../../crates/engine" }
+directories = "6"
+serde.workspace = true
+thiserror.workspace = true
+tauri = { version = "2", features = [] }
+
+[dev-dependencies]
+serde_json = "1"
