@@ -1,6 +1,14 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { Backend, ComputedIndicator, ConnectionState, IndicatorResult, LiveEvent, Marker } from "./types";
+import type {
+  Backend,
+  ComputedIndicator,
+  ConnectionState,
+  IndicatorResult,
+  LiveEvent,
+  Marker,
+  UpdateProgress,
+} from "./types";
 
 /** `compute_indicators` as Rust sends it: JSON has no NaN, so a gap is `null`. */
 interface WireResult {
@@ -95,5 +103,11 @@ export const tauriBackend: Backend = {
       fromTime,
     });
     return wire.map(fromWire);
+  },
+  checkUpdate: () => invoke("check_update"),
+  async installUpdate(onProgress) {
+    const channel = new Channel<UpdateProgress>();
+    channel.onmessage = onProgress;
+    await invoke<void>("install_update", { onProgress: channel });
   },
 };

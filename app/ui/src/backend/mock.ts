@@ -15,6 +15,7 @@ import {
   type SeriesSpec,
   type Problem,
   type TimeframeCode,
+  type UpdateInfo,
 } from "./types";
 
 const PAGE = 1000;
@@ -88,6 +89,10 @@ export interface MockOptions {
   indicatorProblems?: boolean;
   /** The first this many `listIndicators` calls reject with "mock: engine starting". */
   indicatorLoadFailures?: number;
+  /** What `checkUpdate` finds; none when absent. */
+  update?: UpdateInfo;
+  /** `check`: every `checkUpdate` rejects; `install`: every download fails halfway. */
+  updateError?: "check" | "install";
   /** Keeps the watchlist across page loads (the browser mock uses localStorage). */
   watchlistStore?: { load(): InstrumentId[] | null; save(ids: InstrumentId[]): void };
 }
@@ -386,6 +391,8 @@ export function createMockBackend(opts: MockOptions): MockBackend {
   let echoInstalled = false;
   let brokenInstalled = opts.indicatorProblems ?? false;
   let loadFailures = opts.indicatorLoadFailures ?? 0;
+  /** The last check found the update, as Rust keeps it for one install attempt. */
+  let updateChecked = false;
   let chartIndicators: IndicatorInstance[] = (opts.indicators ?? []).map((name) => ({
     instance: `mock-${name}`,
     moduleId: `builtin.${name}`,
@@ -591,6 +598,30 @@ export function createMockBackend(opts: MockOptions): MockBackend {
       await delay();
       if (opts.indicatorSaveError) throw { code: "other", message: "mock: cannot save" };
       chartIndicators = items.map((i) => ({ ...i }));
+    },
+
+    async checkUpdate() {
+      await delay();
+      if (opts.updateError === "check") throw { code: "other", message: "mock: could not reach the update server" };
+      updateChecked = opts.update !== undefined;
+      return opts.update ? { ...opts.update } : null;
+    },
+
+    // A 4 MB download in ten steps over 2 s; resolving stands for the restart (macOS, Linux).
+    async installUpdate(onProgress) {
+      await delay();
+      // As in Rust: an attempt takes the checked update, so the next one needs a new check.
+      if (!updateChecked) throw { code: "other", message: "check for updates first" };
+      updateChecked = false;
+      const total = 4_000_000;
+      onProgress({ kind: "started", total });
+      for (let i = 1; i <= 10; i++) {
+        await sleep(200);
+        if (opts.updateError === "install" && i === 6) throw { code: "other", message: "mock: connection reset" };
+        onProgress({ kind: "chunk", downloaded: (total / 10) * i });
+      }
+      onProgress({ kind: "installing" });
+      await sleep(300);
     },
 
     async computeIndicators(id, tf, fromTime) {

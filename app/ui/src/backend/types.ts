@@ -170,6 +170,24 @@ export interface IndicatorResult {
   result: { ok: ComputedIndicator } | { err: string };
 }
 
+// Updates (dto.rs).
+/** Why this copy cannot update itself; the UI links to the release page instead. */
+export type InstallBlocker = "not_appimage" | "translocated";
+/** A version newer than the running one. */
+export interface UpdateInfo {
+  version: string;
+  /** Release notes, plain text; empty when there are none. */
+  notes: string;
+  /** Publish date, RFC 3339. */
+  date: string | null;
+  blocker: InstallBlocker | null;
+}
+/** Messages of an install; `downloaded` is cumulative bytes. An error can still follow `installing`. */
+export type UpdateProgress =
+  | { kind: "started"; total: number | null }
+  | { kind: "chunk"; downloaded: number }
+  | { kind: "installing" };
+
 export interface Backend {
   searchInstruments(q: string): Promise<Instrument[]>;
   /** Up to 1000 candles ending before `before` (newest when omitted), ascending. */
@@ -201,4 +219,12 @@ export interface Backend {
   setChartIndicators(items: IndicatorInstance[]): Promise<void>;
   /** Every visible chart indicator over all cached bars, cut to bars with `time >= fromTime`. */
   computeIndicators(id: InstrumentId, tf: TimeframeCode, fromTime: number): Promise<IndicatorResult[]>;
+  /** A newer version than this one, or null. Also remembers it for `installUpdate`. */
+  checkUpdate(): Promise<UpdateInfo | null>;
+  /**
+   * Downloads, verifies and installs the update of the last check, then restarts the app. A
+   * failed attempt keeps nothing: the next one needs a new `checkUpdate`. On Windows it never
+   * resolves (the installer ends the process).
+   */
+  installUpdate(onProgress: (p: UpdateProgress) => void): Promise<void>;
 }

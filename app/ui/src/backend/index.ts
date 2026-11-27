@@ -1,7 +1,7 @@
 import { enableChartDebug } from "../chart/debug";
 import { createMockBackend } from "./mock";
 import { resetSubscriptions, tauriBackend } from "./tauri";
-import type { Backend, ConnectionState, InstrumentId, Problem, ProblemCode } from "./types";
+import type { Backend, ConnectionState, InstrumentId, Problem, ProblemCode, UpdateInfo } from "./types";
 
 const MOCK_WATCHLIST_KEY = "sandchart.mock.watchlist";
 
@@ -22,7 +22,10 @@ if (inTauri) void resetSubscriptions();
  * e.g. `sma,bollinger,rsi,macd`, put on the chart at start) and `mockIndicatorError=1`
  * (every indicator compute fails), `mockIndicatorSaveError=1` (saving the chart indicators
  * fails), `mockIndicatorLoadFailures` (that many indicator list calls fail first) and
- * `mockIndicatorProblems=1` (a module that failed to load and a service error). The watchlist is kept in
+ * `mockIndicatorProblems=1` (a module that failed to load and a service error), `mockUpdate` (the version
+ * `checkUpdate` finds; `0.3.0` when only the next two are set), `mockUpdateError=check|install` (every check
+ * fails, or every download fails halfway), `mockUpdateBlocker=translocated|not_appimage` (the update cannot be
+ * installed here) and `mockUpdateDelay` (ms until the first automatic check). The watchlist is kept in
  * localStorage so a reload sees the same list. Calls are counted in `window.__sandchartMock`, and the chart
  * reports draw times and axis layout into `window.__sandchartDebug` (see
  * chart/debug.ts). None of this exists inside Tauri.
@@ -42,6 +45,17 @@ function browserMock(): Backend {
           message: "mock: provider unreachable",
           retryAfterS: num("mockRetryAfter"),
         };
+  const updateError = q.get("mockUpdateError");
+  const blocker = q.get("mockUpdateBlocker");
+  const update: UpdateInfo | undefined =
+    q.has("mockUpdate") || updateError === "install" || blocker !== null
+      ? {
+          version: q.get("mockUpdate") || "0.3.0",
+          notes: "Faster chart redraws.\nIndicator settings keep their colours.\nFixes the watchlist order after a restart.",
+          date: "2026-11-28T10:00:00Z",
+          blocker: blocker === "translocated" || blocker === "not_appimage" ? blocker : null,
+        }
+      : undefined;
   const mock = createMockBackend({
     candles: 200_000,
     latencyMs: num("mockLatency") ?? 80,
@@ -59,6 +73,8 @@ function browserMock(): Backend {
     indicatorSaveError: q.get("mockIndicatorSaveError") === "1",
     indicatorLoadFailures: num("mockIndicatorLoadFailures"),
     indicatorProblems: q.get("mockIndicatorProblems") === "1",
+    update,
+    updateError: updateError === "check" || updateError === "install" ? updateError : undefined,
     watchlist: list === null ? undefined : list.split(",").filter(Boolean),
     watchlistStore: {
       load() {
@@ -79,7 +95,7 @@ function browserMock(): Backend {
     },
   });
   enableChartDebug();
-  const stats = { getCandles: 0 };
+  const stats = { getCandles: 0, checkUpdate: 0 };
   (window as unknown as { __sandchartMock: typeof stats }).__sandchartMock = stats;
   return {
     ...mock,
@@ -87,8 +103,20 @@ function browserMock(): Backend {
       stats.getCandles++;
       return mock.getCandles(...args);
     },
+    checkUpdate() {
+      stats.checkUpdate++;
+      return mock.checkUpdate();
+    },
   };
 }
+
+/** When the first automatic update check runs; the mock's `mockUpdateDelay`, else the default. */
+export const firstUpdateCheckMs: number | undefined = inTauri
+  ? undefined
+  : (() => {
+      const v = new URLSearchParams(window.location.search).get("mockUpdateDelay");
+      return v === null ? undefined : Number(v);
+    })();
 
 /** The Tauri backend inside the app, a mock in a plain browser. */
 export const backend: Backend = inTauri ? tauriBackend : browserMock();

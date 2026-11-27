@@ -177,4 +177,35 @@ describe("mock backend", () => {
       await expect(b.removeIndicator("builtin.sma")).rejects.toThrow();
     });
   });
+
+  it("installs a checked update once, then needs a new check", async () => {
+    const b = createMockBackend({
+      candles: 10,
+      update: { version: "0.3.0", notes: "", date: null, blocker: null },
+    });
+    await expect(b.installUpdate(() => undefined)).rejects.toMatchObject({ message: "check for updates first" });
+    expect(await b.checkUpdate()).toMatchObject({ version: "0.3.0" });
+    const kinds: string[] = [];
+    vi.useFakeTimers();
+    const done = b.installUpdate((p) => kinds.push(p.kind));
+    await vi.runAllTimersAsync();
+    await done;
+    expect(kinds).toEqual(["started", ...Array<string>(10).fill("chunk"), "installing"]);
+    await expect(b.installUpdate(() => undefined)).rejects.toMatchObject({ code: "other" });
+  });
+
+  it("fails a download halfway with updateError install", async () => {
+    const b = createMockBackend({
+      candles: 10,
+      update: { version: "0.3.0", notes: "", date: null, blocker: null },
+      updateError: "install",
+    });
+    await b.checkUpdate();
+    const kinds: string[] = [];
+    vi.useFakeTimers();
+    const failed = expect(b.installUpdate((p) => kinds.push(p.kind))).rejects.toMatchObject({ message: "mock: connection reset" });
+    await vi.runAllTimersAsync();
+    await failed;
+    expect(kinds).toEqual(["started", ...Array<string>(5).fill("chunk")]);
+  });
 });
