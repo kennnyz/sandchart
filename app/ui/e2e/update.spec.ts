@@ -23,6 +23,7 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
+// The mock answers the install, so only here the "Restarting…" phase shows; the real app restarts first.
 test("an available update installs with progress, then restarts", async ({ page }) => {
   await openApp(page, "mockUpdate=0.3.0&mockUpdateDelay=0");
   const banner = page.getByTestId("update-banner");
@@ -30,6 +31,7 @@ test("an available update installs with progress, then restarts", async ({ page 
   await banner.click();
   const panel = page.getByTestId("update-panel");
   await expect(panel).toContainText("Faster chart redraws.");
+  await expect(panel.getByTestId("release-url")).toHaveText("https://github.com/kennnyz/sandchart/releases/latest");
   await panel.getByTestId("update-install").click();
   await expect(panel.getByTestId("update-progress")).toHaveText(/^Downloading… \d+%$/);
   await expect(panel.getByTestId("update-progress")).toHaveText("Restarting…");

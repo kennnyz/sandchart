@@ -37,8 +37,11 @@ export const safeLocalStorage: KeyValueStore = {
 };
 
 /**
- * `restarting`: the install finished and the app is about to restart (macOS, Linux). On
- * Windows the installer ends the process, so the phase stays `installing` until then.
+ * `restarting`: the install finished and the app is about to restart. In the real app it is
+ * never reached: on macOS and Linux Rust restarts the app inside the install command, so the
+ * call never answers and the phase stays `installing` ("Installing…") until the process
+ * ends; on Windows the installer ends the process the same way. Only the browser mock
+ * answers, so only it (and the tests) reach `restarting`.
  */
 export type UpdatePhase = "idle" | "checking" | "downloading" | "installing" | "restarting" | "error" | "upToDate";
 

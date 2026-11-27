@@ -32,7 +32,7 @@ function ReleaseLink() {
 /**
  * The update chip on the right of the status bar while an update is available and not put
  * off with "Later". It opens a panel with the release notes and Install / Later; where this
- * copy cannot update itself it says why and gives the release page instead.
+ * copy cannot update itself it says why. The release page address is always shown.
  */
 export function UpdateBanner({ store }: { store: UpdateStore }) {
   useSyncExternalStore(store.subscribe, store.version);
@@ -72,7 +72,6 @@ export function UpdateBanner({ store }: { store: UpdateStore }) {
           {info.blocker ? (
             <>
               <p className="pop-text">{t(`update.blocked.${info.blocker}`)}</p>
-              <ReleaseLink />
               <div className="pop-actions">
                 <button className="text-button" onClick={later}>
                   {t("update.later")}
@@ -105,9 +104,9 @@ export function UpdateBanner({ store }: { store: UpdateStore }) {
                   {t("update.later")}
                 </button>
               </div>
-              {failed && <ReleaseLink />}
             </>
           )}
+          <ReleaseLink />
         </div>
       )}
     </div>
