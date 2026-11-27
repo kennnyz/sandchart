@@ -159,6 +159,31 @@ test("offline_shows_banner", async ({ page }, info) => {
   await shot(page, info, "offline-banner");
 });
 
+test("banner_names_rate_limit_and_waits_for_retry_after", async ({ page }) => {
+  await openApp(page, "?mockLatency=10&mockWarning=rate_limited&mockRetryAfter=90");
+  const banner = page.getByTestId("banner");
+  await expect(banner).toContainText("Mock is limiting requests from this computer. Showing cached candles up to");
+  await expect(banner).toContainText(/Retry in (8\d|90) s/);
+});
+
+test("banner_names_region_block", async ({ page }) => {
+  await openApp(page, "?mockLatency=10&mockWarning=blocked");
+  await expect(page.getByTestId("banner")).toContainText("Mock is not available in your region.");
+});
+
+test("status_bar_shows_connecting_before_first_contact", async ({ page }) => {
+  await openApp(page, "?mockLatency=10&mockConnection=connecting");
+  await expect(page.getByTestId("status-bar")).toContainText("Mock spot · connecting");
+  await expect(page.getByTestId("connection")).toContainText("Connecting");
+});
+
+test("first_run_opens_the_default_pair_after_the_instrument_sync", async ({ page }) => {
+  await page.goto("/?mockLatency=10&mockWatchlist=&mockSyncDelay=1000");
+  await expect(page.getByTestId("loading")).toContainText("Loading BTCUSDT");
+  await expect(legend(page)).toHaveAttribute("data-symbol", "BTCUSDT", { timeout: 5_000 });
+  await expect(legend(page)).toHaveAttribute("data-time", /^\d+$/);
+});
+
 test("no_banner_when_online", async ({ page }) => {
   await openApp(page);
   await expect(page.getByTestId("banner")).toHaveCount(0);

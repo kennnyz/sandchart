@@ -5,7 +5,7 @@ import { formatDate, formatUtcClock } from "../chart/format";
 import type { PriceScaleMode } from "../chart/scale";
 import type { ChartTheme } from "../chart/theme";
 import { t, useLanguage } from "../i18n";
-import { sourceName } from "../labels";
+import { bannerText, sourceName } from "../labels";
 import { ChartSession, type SessionState } from "../state/chartSession";
 import { Banner } from "./Banner";
 import { Legend } from "./Legend";
@@ -21,7 +21,7 @@ export interface ChartViewProps {
 }
 
 /** Five small bars, one lit, and what is being loaded (Design Reference, States). */
-function Loading({ symbol, tf, source }: { symbol: string; tf: string; source: string }) {
+export function Loading({ symbol, tf, source }: { symbol: string; tf: string; source: string }) {
   return (
     <div className="loading" data-testid="loading">
       <div className="bars">
@@ -89,11 +89,11 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection }: Cha
     const last = chart && count > 0 ? chart.candle(count - 1) : null;
     banner = (
       <Banner
-        text={
-          last
-            ? t("banner.cached", { source: sourceLabel, time: formatUtcClock(last.time, Date.now()) })
-            : t("banner.noData", { source: sourceLabel })
-        }
+        text={bannerText(
+          problem?.code ?? "network",
+          sourceLabel,
+          last ? formatUtcClock(last.time, Date.now()) : null,
+        )}
         retryAt={problem?.retryAt ?? null}
         retryLabel={(n) => t("banner.retry", { n })}
         detail={problem?.message}

@@ -117,6 +117,7 @@ input:focus-visible {
 }
 /* The chart column is a flex child so a 44 px tools rail can sit left of it later. */
 .chart-col {
+  position: relative;
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -282,6 +283,7 @@ input:focus-visible {
   border-radius: 50%;
   background: var(--fg);
 }
+.dot[data-state="connecting"],
 .dot[data-state="reconnecting"] {
   background: transparent;
   box-shadow: inset 0 0 0 1px var(--muted);

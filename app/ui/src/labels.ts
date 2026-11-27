@@ -1,3 +1,4 @@
+import type { ProblemCode } from "./backend/types";
 import { t } from "./i18n";
 
 const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
@@ -12,4 +13,23 @@ export function sourceName(source: string): string {
   const key = `source.${source}`;
   const name = t(key);
   return name === key ? source : name;
+}
+
+const BANNER_KEYS: Record<ProblemCode, string> = {
+  network: "banner.network",
+  rate_limited: "banner.rateLimited",
+  blocked: "banner.blocked",
+  other: "banner.other",
+  unsafe_ticks: "banner.unsafeTicks",
+};
+
+/**
+ * The banner sentence for a problem: what went wrong, then what the chart shows.
+ * `cachedUpTo` is the clock time of the newest candle on the chart, null without one.
+ */
+export function bannerText(code: ProblemCode, source: string, cachedUpTo: string | null): string {
+  const cause = t(BANNER_KEYS[code], { source });
+  if (code === "unsafe_ticks") return cause;
+  const shown = cachedUpTo === null ? t("banner.noCache") : t("banner.cachedUpTo", { time: cachedUpTo });
+  return `${cause} ${shown}`;
 }

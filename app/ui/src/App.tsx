@@ -2,8 +2,9 @@ import { useCallback, useEffect, useLayoutEffect, useState } from "react";
 import { backend } from "./backend";
 import type { ConnectionState, Instrument, InstrumentId, TimeframeCode } from "./backend/types";
 import { dark, light } from "./chart/theme";
-import { ChartView } from "./components/ChartView";
+import { ChartView, Loading } from "./components/ChartView";
 import { StatusBar } from "./components/StatusBar";
+import { tfLabel } from "./components/TimeframePicker";
 import { SymbolSearch } from "./components/SymbolSearch";
 import { TopBar } from "./components/TopBar";
 import { Watchlist } from "./components/Watchlist";
@@ -31,10 +32,12 @@ export function App() {
   const [current, setCurrent] = useState<InstrumentId | null>(null);
   const [tf, setTf] = useState<TimeframeCode>("1h");
   const [logScale, setLogScale] = useState(false);
-  const [connection, setConnection] = useState<ConnectionState>("connected");
+  const [connection, setConnection] = useState<ConnectionState>("connecting");
   const [watchlist, setWatchlistState] = useState<InstrumentId[]>([]);
   const [savedVersion, setSavedVersion] = useState(0);
   const [searchOpen, setSearchOpen] = useState(false);
+  /** Waiting for the instrument list to open the default pair (first run). */
+  const [waitingDefault, setWaitingDefault] = useState(true);
 
   useLayoutEffect(() => {
     document.documentElement.dataset.theme = themeName;
@@ -66,18 +69,42 @@ export function App() {
     };
   }, []);
 
-  // Startup: the watchlist, and its first pair on the chart.
+  // Startup: the watchlist, and its first pair on the chart. With an empty watchlist the
+  // default pair opens; on a first run the instrument list is still empty, so the pick is
+  // retried when the background sync reports it is done.
   useEffect(() => {
     let alive = true;
+    let stop: (() => void) | null = null;
+    const pickDefault = async () => {
+      const found = (await backend.searchInstruments(DEFAULT_SYMBOL)).find((i) => i.id.symbol === DEFAULT_SYMBOL);
+      if (!alive) return false;
+      if (found) setCurrent((c) => c ?? found.id);
+      return found !== undefined;
+    };
     void (async () => {
       const ids = await backend.getWatchlist();
       if (!alive) return;
       setWatchlistState(ids);
-      const first = ids[0] ?? (await backend.searchInstruments(DEFAULT_SYMBOL)).find((i) => i.id.symbol === DEFAULT_SYMBOL)?.id;
-      if (alive && first) setCurrent((c) => c ?? first);
-    })().catch((e: unknown) => console.error("loading the watchlist failed", e));
+      if (ids[0]) {
+        setCurrent((c) => c ?? ids[0]!);
+        return;
+      }
+      // Listen first, then look: a sync that ends in between is still seen.
+      const unlisten = await backend.onInstrumentsSynced(() => {
+        void pickDefault().then(() => alive && setWaitingDefault(false));
+      });
+      if (!alive) return unlisten();
+      stop = unlisten;
+      // Nothing more to wait for once the list is synced, found or not.
+      if ((await pickDefault()) || (await backend.instrumentsReady())) setWaitingDefault(false);
+    })()
+      .catch((e: unknown) => {
+        console.error("loading the watchlist failed", e);
+        if (alive) setWaitingDefault(false);
+      });
     return () => {
       alive = false;
+      stop?.();
     };
   }, []);
 
@@ -121,6 +148,9 @@ export function App() {
       />
       <div className="main">
         <div className="chart-col">
+          {!current && waitingDefault && (
+            <Loading symbol={DEFAULT_SYMBOL} tf={tfLabel(tf)} source={sourceName("binance")} />
+          )}
           {current && (
             <ChartView
               backend={backend}
