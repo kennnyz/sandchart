@@ -1,6 +1,8 @@
 import type { CandleColumns, Candles, Instrument, LiveCandle, TimeframeCode } from "../backend/types";
 import { chartDebug } from "./debug";
+import { alignOffset, hasOwnPane, layoutPanes, overlayRange, paneRange, seriesValues, type IndicatorLayer } from "./indicators";
 import { draw, plotSize, priceAxisWidth, RenderBuffers, type Crosshair, type Series } from "./render";
+import type { IndicatorFrame } from "./renderIndicators";
 import { autoscale, PriceScale, type PriceScaleMode } from "./scale";
 import { AXIS_FONT, PRICE_AXIS_WIDTH, type ChartTheme } from "./theme";
 import { gestureZoomFactor, panBy, visibleRange, xToIndex, zoomAt, type Viewport } from "./viewport";
@@ -52,6 +54,9 @@ function emptySeries(capacity: number): Series {
 }
 
 const KEYS = ["time", "open", "high", "low", "close", "volume"] as const;
+const NO_BARS = new Float64Array(0);
+const NO_TICKS: number[] = [];
+const PANE_PADDING = 0.08;
 
 /** WebKit's non-standard GestureEvent (trackpad pinch in Safari / WKWebView). */
 interface GestureEventLike extends UIEvent {
@@ -98,6 +103,10 @@ export class Chart {
   private readonly hasGestures = "ongesturestart" in window;
   private gestureScale = 1;
   private gestureActive = false;
+  /** Indicator layers and own panes, updated in place every frame. */
+  private readonly ind: IndicatorFrame = { layers: [], offsets: [], tickMul: 1, priceH: 0, panes: [] };
+  /** Plot height `ind.priceH` and the pane rows were laid out for; -1 forces a new layout. */
+  private layoutH = -1;
 
   constructor(
     private readonly host: HTMLElement,
@@ -237,6 +246,49 @@ export class Chart {
     this.invalidate();
   }
 
+  /**
+   * Indicator layers to draw, in order; `priceScale` is the instrument's, so that a
+   * `pane: price` value times `10 ** priceScale` is in price ticks. Each layer with an
+   * own-pane series (and no error) gets its own pane under the price plot.
+   */
+  setIndicators(layers: IndicatorLayer[], priceScale: number): void {
+    const ind = this.ind;
+    ind.layers = layers;
+    ind.tickMul = 10 ** priceScale;
+    ind.offsets = layers.map(() => null);
+    ind.panes = [];
+    layers.forEach((l, i) => {
+      if (hasOwnPane(l)) ind.panes.push({ layer: i, top: 0, height: 0, scale: null, ticks: NO_TICKS });
+    });
+    this.layoutH = -1;
+    this.afterViewChange();
+  }
+
+  /**
+   * Values of every aligned layer at chart bar `index`, for the legend: instance to
+   * series id to value. Non-finite values are left out, so an instance can map to an
+   * empty map; a layer without a result or not aligned with the bars is missing.
+   */
+  indicatorValues(index: number): Map<string, Map<string, number>> {
+    const out = new Map<string, Map<string, number>>();
+    const s = this.series;
+    if (index < 0 || index >= s.count) return out;
+    for (const layer of this.ind.layers) {
+      const c = layer.computed;
+      if (!c || layer.error !== null) continue;
+      const offset = alignOffset(s.time, s.count, c.firstTime);
+      if (offset === null) continue;
+      const k = index - offset;
+      const values = new Map<string, number>();
+      for (const spec of layer.meta.series) {
+        const v = k >= 0 ? seriesValues(c, spec.id)?.[k] : undefined;
+        if (v !== undefined && Number.isFinite(v)) values.set(spec.id, v);
+      }
+      out.set(layer.instance, values);
+    }
+    return out;
+  }
+
   setTheme(t: ChartTheme): void {
     this.theme = t;
     this.invalidate();
@@ -369,13 +421,61 @@ export class Chart {
     }
   }
 
-  private priceScale(plotH: number): PriceScale {
-    if (!this.autoScale) return new PriceScale(this.manualRange[0], this.manualRange[1], plotH, this.mode);
+  /** Lays out the price plot and own panes for the current plot height. */
+  private priceH(): number {
+    const { plotH } = this.plot();
+    const ind = this.ind;
+    if (plotH !== this.layoutH) {
+      this.layoutH = plotH;
+      const layout = layoutPanes(plotH, ind.panes.length);
+      ind.priceH = layout.priceH;
+      ind.panes.forEach((p, i) => {
+        p.top = layout.panes[i]!.top;
+        p.height = layout.panes[i]!.height;
+      });
+    }
+    return ind.priceH;
+  }
+
+  /** Chart index of value 0 of every layer; a binary search each, so it runs per frame. */
+  private refreshOffsets(): void {
+    const { layers, offsets } = this.ind;
+    const s = this.series;
+    for (let i = 0; i < layers.length; i++) {
+      const c = layers[i]!.computed;
+      offsets[i] = c ? alignOffset(s.time, s.count, c.firstTime) : null;
+    }
+  }
+
+  private priceScale(priceH: number): PriceScale {
+    this.refreshOffsets();
+    if (!this.autoScale) return new PriceScale(this.manualRange[0], this.manualRange[1], priceH, this.mode);
     const { plotW } = this.plot();
     const s = this.series;
     const range = visibleRange(this.view, plotW, s.count);
-    const [min, max] = autoscale(s.low, s.high, range, 0.08, this.mode);
-    return new PriceScale(min, max, plotH, this.mode);
+    const ind = this.ind;
+    const extra = ind.layers.length > 0 ? overlayRange(ind.layers, ind.offsets, range[0], range[1], ind.tickMul) : null;
+    const [min, max] = autoscale(s.low, s.high, range, 0.08, this.mode, extra);
+    return new PriceScale(min, max, priceH, this.mode);
+  }
+
+  /** Value scale and labels of every own pane over the visible bars. */
+  private updatePanes(): void {
+    const { plotW } = this.plot();
+    const [first, last] = visibleRange(this.view, plotW, this.series.count);
+    const ind = this.ind;
+    for (const p of ind.panes) {
+      const offset = ind.offsets[p.layer] ?? null;
+      const range = offset === null || last < first ? null : paneRange(ind.layers[p.layer]!, offset, first, last);
+      if (range && p.height > 0) {
+        const [lo, hi] = autoscale(NO_BARS, NO_BARS, [0, -1], PANE_PADDING, "linear", range);
+        p.scale = new PriceScale(lo, hi, p.height, "linear");
+        p.ticks = p.scale.ticks(3);
+      } else {
+        p.scale = null;
+        p.ticks = NO_TICKS;
+      }
+    }
   }
 
   private readonly render = (): void => {
@@ -387,19 +487,31 @@ export class Chart {
     }
     const started = performance.now();
     const { plotH } = this.plot();
+    const priceH = this.priceH();
     const decimals = this.instrument?.priceScale ?? 0;
     const s = this.series;
     const lastClose = s.count > 0 ? s.close[s.count - 1]! : NaN;
-    let scale = this.priceScale(plotH);
+    let scale = this.priceScale(priceH);
+    this.updatePanes();
     const m = this.mouse;
-    const axis = priceAxisWidth(this.ctx, this.buffers, this.dpr, scale, decimals, lastClose, m && m.y < plotH ? m.y : null);
+    const axis = priceAxisWidth(
+      this.ctx,
+      this.buffers,
+      this.dpr,
+      scale,
+      decimals,
+      lastClose,
+      m && m.y < priceH ? m.y : null,
+      this.ind.panes,
+    );
     // Grow-only within one series, so the plot does not jitter as labels change length.
     if (axis.width > this.axisWidth) {
       this.axisWidth = axis.width;
       this.clampView();
       this.updateCrosshair();
       this.checkNeedOlder();
-      scale = this.priceScale(plotH);
+      scale = this.priceScale(priceH);
+      this.updatePanes();
     }
     const { plotW } = this.plot();
     const inPlot = m !== null && m.x >= 0 && m.x < plotW && m.y >= 0 && m.y < plotH;
@@ -421,6 +533,7 @@ export class Chart {
         crosshair,
         historyStart,
         theme: this.theme,
+        indicators: this.ind,
       },
       this.buffers,
     );
@@ -434,6 +547,7 @@ export class Chart {
       debug.canvasWidth = this.width;
       debug.plotWidth = plotW;
       debug.historyLabel = historyStart ? historyStart.join("|") : null;
+      debug.panes = this.ind.panes.length;
     }
   };
 
@@ -446,7 +560,8 @@ export class Chart {
     if (e.button !== 0) return;
     const p = this.local(e);
     const { plotW } = this.plot();
-    this.drag = { kind: p.x >= plotW ? "price" : "pan", pointerId: e.pointerId, lastX: e.clientX, lastY: e.clientY };
+    const onPriceAxis = p.x >= plotW && p.y < this.priceH();
+    this.drag = { kind: onPriceAxis ? "price" : "pan", pointerId: e.pointerId, lastX: e.clientX, lastY: e.clientY };
     this.canvas.setPointerCapture(e.pointerId);
     if (this.drag.kind === "pan") this.canvas.style.cursor = "grabbing";
   };
@@ -454,7 +569,8 @@ export class Chart {
   private readonly onPointerMove = (e: PointerEvent): void => {
     const p = this.local(e);
     this.mouse = p;
-    const { plotW, plotH } = this.plot();
+    const { plotW } = this.plot();
+    const priceH = this.priceH();
     const d = this.drag;
     if (d && d.pointerId === e.pointerId) {
       const dx = e.clientX - d.lastX;
@@ -463,12 +579,12 @@ export class Chart {
       d.lastY = e.clientY;
       if (d.kind === "pan") {
         this.view = panBy(this.view, dx);
-        if (!this.autoScale) this.shiftPrice(dy, plotH);
+        if (!this.autoScale) this.shiftPrice(dy, priceH);
       } else {
-        this.stretchPrice(dy, plotH);
+        this.stretchPrice(dy, priceH);
       }
     } else {
-      this.canvas.style.cursor = p.x >= plotW ? "ns-resize" : "crosshair";
+      this.canvas.style.cursor = p.x >= plotW && p.y < priceH ? "ns-resize" : "crosshair";
     }
     this.afterViewChange();
   };
@@ -477,7 +593,8 @@ export class Chart {
     if (this.drag?.pointerId !== e.pointerId) return;
     this.drag = null;
     if (this.canvas.hasPointerCapture(e.pointerId)) this.canvas.releasePointerCapture(e.pointerId);
-    this.canvas.style.cursor = this.local(e).x >= this.plot().plotW ? "ns-resize" : "crosshair";
+    const p = this.local(e);
+    this.canvas.style.cursor = p.x >= this.plot().plotW && p.y < this.priceH() ? "ns-resize" : "crosshair";
   };
 
   private readonly onPointerLeave = (): void => {
@@ -534,22 +651,23 @@ export class Chart {
   };
 
   private readonly onDoubleClick = (e: MouseEvent): void => {
-    if (this.local(e).x < this.plot().plotW) return;
+    const p = this.local(e);
+    if (p.x < this.plot().plotW || p.y >= this.priceH()) return;
     this.autoScale = true;
     this.invalidate();
   };
 
-  private freezeScale(plotH: number): void {
+  private freezeScale(priceH: number): void {
     if (!this.autoScale) return;
-    const s = this.priceScale(plotH);
+    const s = this.priceScale(priceH);
     this.manualRange = [s.min, s.max];
     this.autoScale = false;
   }
 
   /** Drag on the price axis: down widens the range, up narrows it, around its centre. */
-  private stretchPrice(dy: number, plotH: number): void {
-    if (dy === 0 || plotH <= 0) return;
-    this.freezeScale(plotH);
+  private stretchPrice(dy: number, priceH: number): void {
+    if (dy === 0 || priceH <= 0) return;
+    this.freezeScale(priceH);
     const factor = Math.exp(dy * 0.005);
     const [lo, hi] = this.toScaleSpace(this.manualRange);
     const mid = (lo + hi) / 2;
@@ -558,10 +676,10 @@ export class Chart {
   }
 
   /** Vertical drag on the plot while autoscale is off moves the price range. */
-  private shiftPrice(dy: number, plotH: number): void {
-    if (dy === 0 || plotH <= 0) return;
+  private shiftPrice(dy: number, priceH: number): void {
+    if (dy === 0 || priceH <= 0) return;
     const [lo, hi] = this.toScaleSpace(this.manualRange);
-    const shift = (dy / plotH) * (hi - lo);
+    const shift = (dy / priceH) * (hi - lo);
     this.manualRange = this.fromScaleSpace([lo + shift, hi + shift]);
   }
 

@@ -81,4 +81,14 @@ describe("autoscale", () => {
     expect(lo).toBeLessThan(50);
     expect(hi).toBeGreaterThan(50);
   });
+
+  it("widens to include an extra range and ignores null", () => {
+    const lows = [100, 110];
+    const highs = [120, 130];
+    const [lo, hi] = autoscale(lows, highs, [0, 1], 0, "linear", [90, 150]);
+    expect([lo, hi]).toEqual([90, 150]);
+    expect(autoscale(lows, highs, [0, 1], 0, "linear", null)).toEqual([100, 130]);
+    // An extra range alone, with no bars.
+    expect(autoscale([], [], [0, -1], 0, "linear", [1, 2])).toEqual([1, 2]);
+  });
 });

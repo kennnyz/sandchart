@@ -15,12 +15,14 @@ export interface ChartDebug {
   plotWidth: number;
   /** Start-of-history marker text of the last frame ("line 1|line 2"), null when not drawn. */
   historyLabel: string | null;
+  /** Own indicator panes of the last frame. */
+  panes: number;
 }
 
 let debug: ChartDebug | null = null;
 
 export function enableChartDebug(): void {
-  debug = { drawMs: [], axisWidth: 0, widestLabel: 0, widestText: "", canvasWidth: 0, plotWidth: 0, historyLabel: null };
+  debug = { drawMs: [], axisWidth: 0, widestLabel: 0, widestText: "", canvasWidth: 0, plotWidth: 0, historyLabel: null, panes: 0 };
   (window as unknown as { __sandchartDebug: ChartDebug }).__sandchartDebug = debug;
 }
 
