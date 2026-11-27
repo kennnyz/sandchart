@@ -1,9 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMockBackend } from "./mock";
 
 const id = { source: "mock", symbol: "BTCUSDT" };
 
 describe("mock backend", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("returns ascending pages and stops at history start", async () => {
     const b = createMockBackend({ candles: 2500 });
 
@@ -84,6 +88,5 @@ describe("mock backend", () => {
     expect(synced).toBe(1);
     expect(await b.instrumentsReady()).toBe(true);
     expect((await b.searchInstruments("BTC")).map((i) => i.id.symbol)).toContain("BTCUSDT");
-    vi.useRealTimers();
   });
 });
