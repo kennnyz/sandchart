@@ -96,5 +96,9 @@
   "update.blocked.translocated": "Перенесите Sandchart в «Программы», затем обновите.",
   "update.blocked.not_appimage": "Эта копия обновляется через свой пакет. Скачайте новую версию:",
   "update.releasePage": "Страница релиза",
-  "update.version.title": "Версия и обновления"
+  "update.version.title": "Версия и обновления",
+  "tools.label": "Инструменты рисования",
+  "tools.title": "{name} ({shortcut})",
+  "tools.trend": "Трендовая линия",
+  "tools.hline": "Горизонтальный уровень"
 }

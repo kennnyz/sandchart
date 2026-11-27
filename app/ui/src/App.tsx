@@ -3,6 +3,7 @@ import { backend, firstUpdateCheckMs } from "./backend";
 import type { ConnectionState, Instrument, InstrumentId, TimeframeCode } from "./backend/types";
 import { dark, light } from "./chart/theme";
 import { ChartView, Loading } from "./components/ChartView";
+import { DrawingToolbar } from "./components/DrawingToolbar";
 import { IndicatorsDialog } from "./components/IndicatorsDialog";
 import { StatusBar } from "./components/StatusBar";
 import { tfLabel } from "./components/TimeframePicker";
@@ -11,6 +12,7 @@ import { TopBar } from "./components/TopBar";
 import { Watchlist } from "./components/Watchlist";
 import { useLanguage } from "./i18n";
 import { sourceName } from "./labels";
+import { drawingStore } from "./state/drawings";
 import { indicatorStore } from "./state/indicators";
 import { updateStore } from "./state/update";
 
@@ -56,6 +58,7 @@ export function App() {
   const [waitingDefault, setWaitingDefault] = useState(true);
   const [indicators] = useState(() => indicatorStore(backend));
   const [indicatorsOpen, setIndicatorsOpen] = useState(false);
+  const [drawings] = useState(() => drawingStore(backend));
   const [updates] = useState(() => updateStore(backend));
 
   // Update checks: the first one waits for the chart, then once a day, unless turned off. Timers
@@ -204,6 +207,7 @@ export function App() {
         onShowWatchlist={() => showWatchlist(true)}
       />
       <div className="main">
+        <DrawingToolbar store={drawings} />
         <div className="chart-col">
           {!current && waitingDefault && (
             <Loading symbol={DEFAULT_SYMBOL} tf={tfLabel(tf)} source={sourceName("binance")} />
@@ -217,6 +221,7 @@ export function App() {
               priceMode={logScale ? "log" : "linear"}
               connection={connection}
               indicators={indicators}
+              drawings={drawings}
             />
           )}
         </div>

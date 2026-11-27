@@ -96,5 +96,9 @@
   "update.blocked.translocated": "Move Sandchart to Applications, then update.",
   "update.blocked.not_appimage": "This install updates through its package. Download the new version:",
   "update.releasePage": "Release page",
-  "update.version.title": "Version and updates"
+  "update.version.title": "Version and updates",
+  "tools.label": "Drawing tools",
+  "tools.title": "{name} ({shortcut})",
+  "tools.trend": "Trend line",
+  "tools.hline": "Horizontal line"
 }

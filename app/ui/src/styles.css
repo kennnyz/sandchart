@@ -126,6 +126,37 @@ select:focus-visible {
   background: var(--bg);
 }
 
+/* ---- Drawing tools rail ---- */
+
+.tools {
+  width: 44px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 0;
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+}
+.tool-button {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+}
+.tool-button:hover {
+  background: var(--fg-5);
+  color: var(--fg);
+}
+.tool-button[aria-pressed="true"] {
+  background: var(--fg-8);
+  color: var(--fg);
+}
+
 /* ---- Top bar ---- */
 
 .topbar {

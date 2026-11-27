@@ -7,6 +7,7 @@ import type { ChartTheme } from "../chart/theme";
 import { t, useLanguage } from "../i18n";
 import { bannerText, sourceName } from "../labels";
 import { ChartSession, type SessionState } from "../state/chartSession";
+import type { DrawingStore } from "../state/drawings";
 import type { IndicatorStore } from "../state/indicators";
 import { Banner } from "./Banner";
 import { IndicatorLegend } from "./IndicatorLegend";
@@ -22,6 +23,7 @@ export interface ChartViewProps {
   priceMode: PriceScaleMode;
   connection: ConnectionState;
   indicators: IndicatorStore;
+  drawings: DrawingStore;
 }
 
 const NO_VALUES = new Map<string, Map<string, number>>();
@@ -42,7 +44,7 @@ export function Loading({ symbol, tf, source }: { symbol: string; tf: string; so
 }
 
 /** The chart column: banner, canvas with legend and states; a `ChartSession` feeds it. */
-export function ChartView({ backend, id, tf, theme, priceMode, connection, indicators }: ChartViewProps) {
+export function ChartView({ backend, id, tf, theme, priceMode, connection, indicators, drawings }: ChartViewProps) {
   const lang = useLanguage();
   const hostRef = useRef<HTMLDivElement>(null);
   const [parts, setParts] = useState<{ chart: Chart; session: ChartSession } | null>(null);
@@ -84,7 +86,14 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
     chart?.setHistoryLabel((first) => [t("history.start"), t("history.first", { date: formatDate(first) })]);
   }, [chart, lang]);
 
+  // The chart reports drawing changes to the controller, which stores them; attached before the first load.
+  useEffect(() => (chart ? drawings.state.attach(chart) : undefined), [chart, drawings]);
+
   const { source, symbol } = id;
+  useEffect(() => {
+    if (chart) void drawings.state.open({ source, symbol });
+  }, [chart, drawings, source, symbol]);
+
   useEffect(() => {
     if (!parts) return;
     // Results of the old chart would align by time on the new one: drop them first.
