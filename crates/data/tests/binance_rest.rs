@@ -205,15 +205,8 @@ async fn day_changes_of_nothing_makes_no_request() {
 }
 
 #[tokio::test]
-async fn provider_is_object_safe_and_live_is_a_stub() {
-    use futures::StreamExt;
+async fn provider_is_object_safe() {
     let server = MockServer::start().await;
     let p: std::sync::Arc<dyn Provider> = std::sync::Arc::new(provider(&server));
     assert_eq!(p.source(), "binance");
-    let mut s = p.live(&instrument("BTCUSDT", 2, 5), Timeframe::M1);
-    assert!(matches!(
-        s.next().await,
-        Some(Err(ProviderError::Network(_)))
-    ));
-    assert!(s.next().await.is_none());
 }

@@ -2,11 +2,12 @@
 
 mod rest;
 mod wire;
+mod ws;
 
 use std::time::Duration;
 
 use async_trait::async_trait;
-use futures::{StreamExt, stream::BoxStream};
+use futures::stream::BoxStream;
 use sandchart_core::{Candle, Instrument, Timeframe};
 use url::Url;
 
@@ -16,12 +17,14 @@ const SOURCE: &str = "binance";
 const REST_BASE: &str = "https://data-api.binance.vision";
 const WS_BASE: &str = "wss://data-stream.binance.vision";
 const TIMEOUT: Duration = Duration::from_secs(10);
+const RECONNECT_INITIAL: Duration = Duration::from_secs(1);
+const RECONNECT_MAX: Duration = Duration::from_secs(30);
 
 pub struct Binance {
     rest_base: Url,
-    #[expect(dead_code, reason = "used by the WebSocket stream in the next task")]
     ws_base: Url,
     http: reqwest::Client,
+    backoff: ws::Backoff,
 }
 
 impl Binance {
@@ -35,7 +38,14 @@ impl Binance {
             rest_base,
             ws_base,
             http,
+            backoff: ws::Backoff::new(RECONNECT_INITIAL, RECONNECT_MAX),
         }
+    }
+
+    /// Override the live-stream reconnect delays (default 1 s up to 30 s).
+    pub fn with_reconnect_backoff(mut self, initial: Duration, max: Duration) -> Binance {
+        self.backoff = ws::Backoff::new(initial, max);
+        self
     }
 
     pub fn default_hosts() -> Binance {
@@ -68,15 +78,10 @@ impl Provider for Binance {
 
     fn live(
         &self,
-        _inst: &Instrument,
-        _tf: Timeframe,
+        inst: &Instrument,
+        tf: Timeframe,
     ) -> BoxStream<'static, Result<LiveCandle, ProviderError>> {
-        futures::stream::once(async {
-            Err(ProviderError::Network(
-                "live stream not implemented yet".into(),
-            ))
-        })
-        .boxed()
+        self.live_stream(inst, tf)
     }
 
     async fn day_changes(&self, insts: &[Instrument]) -> Result<Vec<DayChange>, ProviderError> {

@@ -4,7 +4,7 @@ use sandchart_core::{Candle, Instrument, InstrumentId, parse_scaled, scale_from_
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::{DayChange, ProviderError};
+use crate::{DayChange, LiveCandle, ProviderError};
 
 use super::SOURCE;
 
@@ -85,6 +85,50 @@ pub fn parse_kline(row: &[Value], inst: &Instrument) -> Result<Candle, ProviderE
         volume: parse_scaled(volume, inst.qty_scale)
             .map_err(|e| ProviderError::Parse(format!("kline volume: {e}")))?,
     })
+}
+
+/// A WebSocket message; only kline events carry a `k` object.
+#[derive(Deserialize)]
+pub struct WsEvent {
+    k: Option<WsKline>,
+}
+
+#[derive(Deserialize)]
+struct WsKline {
+    t: i64,
+    o: String,
+    h: String,
+    l: String,
+    c: String,
+    v: String,
+    x: bool,
+}
+
+impl WsEvent {
+    /// `Ok(None)` for messages that are not klines.
+    pub fn parse(text: &str, inst: &Instrument) -> Result<Option<LiveCandle>, ProviderError> {
+        let event: WsEvent = serde_json::from_str(text)
+            .map_err(|e| ProviderError::Parse(format!("live message: {e}")))?;
+        let Some(k) = event.k else {
+            return Ok(None);
+        };
+        let price = |s: &str| {
+            parse_scaled(s, inst.price_scale)
+                .map_err(|e| ProviderError::Parse(format!("live kline price: {e}")))
+        };
+        Ok(Some(LiveCandle {
+            candle: Candle {
+                open_time: k.t,
+                open: price(&k.o)?,
+                high: price(&k.h)?,
+                low: price(&k.l)?,
+                close: price(&k.c)?,
+                volume: parse_scaled(&k.v, inst.qty_scale)
+                    .map_err(|e| ProviderError::Parse(format!("live kline volume: {e}")))?,
+            },
+            closed: k.x,
+        }))
+    }
 }
 
 #[derive(Deserialize)]
