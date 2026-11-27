@@ -14,7 +14,15 @@ interface Plot {
 
 interface Stored {
   id: string;
-  body: { kind: string; p?: number; a?: { t: number; p: number }; b?: { t: number; p: number } };
+  body: {
+    kind: string;
+    p?: number;
+    a?: { t: number; p: number };
+    b?: { t: number; p: number };
+    levels?: number[];
+    points?: { t: number; p: number }[];
+    extendRight?: boolean;
+  };
 }
 
 interface Debug {
@@ -23,6 +31,7 @@ interface Debug {
   drawingsPainted: number;
   selectedDrawing: string | null;
   hoveredDrawing: string | null;
+  ruler: string | null;
 }
 
 async function openChart(page: Page): Promise<Plot> {
@@ -60,6 +69,17 @@ async function debug(page: Page): Promise<Debug> {
     const d = (window as unknown as { __sandchartDebug: Debug }).__sandchartDebug;
     return { ...d };
   });
+}
+
+/** The debug state once the base layer has stopped redrawing (a late font or page load redraws it once more). */
+async function settled(page: Page): Promise<Debug> {
+  let last = await debug(page);
+  for (;;) {
+    await page.waitForTimeout(150);
+    const now = await debug(page);
+    if (now.baseDraws === last.baseDraws) return now;
+    last = now;
+  }
 }
 
 /** RGBA of one CSS pixel of the chart's base canvas. WebKit rounds mouse positions: sample at whole px. */
@@ -225,6 +245,139 @@ test("hovering_drawings_redraws_only_the_overlay", async ({ page }) => {
   // The cursor says what a press would do.
   await page.mouse.move(plot.left + 140, y);
   await expect(page.getByTestId("chart").locator("canvas").first()).toHaveCSS("cursor", "move");
+});
+
+test("places_a_rect_a_fib_and_a_brush_stroke_that_survive_a_reload", async ({ page }) => {
+  const plot = await openChart(page);
+  const cx = Math.round(plot.left + plot.width / 2);
+  const cy = Math.round(plot.top + plot.height / 2);
+
+  await page.keyboard.press("Alt+KeyB");
+  await expect(page.getByTestId("tool-rect")).toHaveAttribute("aria-pressed", "true");
+  await page.mouse.click(cx - 300, cy - 150);
+  await page.mouse.click(cx - 150, cy - 50);
+  const [rect] = await storedCount(page, 1);
+  expect(rect!.body).toMatchObject({ kind: "rect", extendRight: false });
+  await expect(page.getByTestId("tool-rect")).toHaveAttribute("aria-pressed", "false");
+  // The zone is filled lightly in its colour: inside it the ground turns a little blue.
+  await nextFrame(page);
+  const inside = await basePixel(page, cx - 225, cy - 100);
+  expect(inside[2]!).toBeGreaterThan(inside[0]! + 4);
+
+  await page.getByTestId("tool-fib").click();
+  await page.mouse.click(cx - 50, cy + 150);
+  await page.mouse.click(cx + 150, cy - 150);
+  const fib = (await storedCount(page, 2)).find((d) => d.body.kind === "fib")!;
+  expect(fib.body.levels).toEqual([0, 0.236, 0.382, 0.5, 0.618, 0.786, 1, 1.272, 1.618]);
+  expect(fib.body.a!.t).toBeLessThan(fib.body.b!.t);
+
+  // The brush strokes while pressed and stays picked until Esc.
+  await page.keyboard.press("Alt+KeyP");
+  await page.mouse.move(cx + 200, cy + 100);
+  await page.mouse.down();
+  for (let i = 1; i <= 60; i++) await page.mouse.move(cx + 200 + i * 4, cy + 100 + Math.sin(i / 6) * 60);
+  await page.mouse.up();
+  const brush = (await storedCount(page, 3)).find((d) => d.body.kind === "brush")!;
+  expect(brush.body.points!.length).toBeGreaterThanOrEqual(2);
+  expect(brush.body.points!.length).toBeLessThanOrEqual(61);
+  await expect(page.getByTestId("tool-brush")).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("tool-brush")).toHaveAttribute("aria-pressed", "false");
+  const saved = await stored(page);
+
+  await page.reload();
+  await expect(page.getByTestId("legend")).toHaveAttribute("data-time", /^\d+$/);
+  await expect.poll(async () => (await debug(page)).drawingsPainted).toBe(3);
+  expect(await stored(page)).toEqual(saved);
+});
+
+test("ruler_measures_on_shift_drag_without_panning_or_storing", async ({ page }) => {
+  const plot = await openChart(page);
+  const cx = Math.round(plot.left + plot.width / 2);
+  const cy = Math.round(plot.top + plot.height / 2);
+  await page.mouse.move(cx, cy);
+  const before = await settled(page);
+  const legendTime = await page.getByTestId("legend").getAttribute("data-time");
+
+  await page.keyboard.down("Shift");
+  await drag(page, [cx - 100, cy + 80], [cx + 100, cy - 80]);
+  await page.keyboard.up("Shift");
+  const after = await debug(page);
+  // Up and to the right: a positive change, 20 bars of 10 px.
+  expect(after.ruler).toMatch(/^\+[\d\u2009.]+ \(\+[\d.]+%\)\|\d+ bars, \d+[dhm]/);
+  // Neither the chart moved nor the base was redrawn, and nothing was stored.
+  expect(after.baseDraws).toBe(before.baseDraws);
+  await page.mouse.move(cx, cy);
+  await expect(page.getByTestId("legend")).toHaveAttribute("data-time", legendTime!);
+  await page.waitForTimeout(200);
+  expect(await stored(page)).toEqual([]);
+
+  // A click puts it away.
+  await page.mouse.click(cx, cy + 200);
+  expect((await debug(page)).ruler).toBeNull();
+
+  // Alt+R arms it for one drag with a tool picked; Esc removes it.
+  await page.keyboard.press("Alt+KeyT");
+  await page.keyboard.press("Alt+KeyR");
+  await drag(page, [cx + 100, cy - 80], [cx - 100, cy + 80]);
+  expect((await debug(page)).ruler).toMatch(/^\u2212/);
+  await expect(page.getByTestId("tool-trend")).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("Escape");
+  expect((await debug(page)).ruler).toBeNull();
+  expect(await stored(page)).toEqual([]);
+  expect((await debug(page)).baseDraws).toBe(before.baseDraws);
+});
+
+/** Ticks of a price as the legend shows it ("1 234.50" -> 123450). */
+const ticksOf = (text: string) => Number(text.replace(/[\u2009\s.]/g, ""));
+
+test("magnet_snaps_a_level_to_a_candle_high", async ({ page }) => {
+  const plot = await openChart(page);
+  const cx = Math.round(plot.left + plot.width / 2);
+  const y1 = Math.round(plot.top + plot.height * 0.2);
+  const y2 = Math.round(plot.top + plot.height * 0.8);
+  // Two levels without the magnet give the price of every y (linear scale).
+  await page.keyboard.press("Alt+KeyH");
+  await page.mouse.click(plot.left + 60, y1);
+  await page.keyboard.press("Alt+KeyH");
+  await page.mouse.click(plot.left + 60, y2);
+  const [l1, l2] = await storedCount(page, 2);
+  const yOf = (p: number) => y1 + ((p - l1!.body.p!) * (y2 - y1)) / (l2!.body.p! - l1!.body.p!);
+
+  // The high of the bar under the centre, from the legend.
+  await page.mouse.move(cx, plot.top + plot.height / 2);
+  const legend = page.getByTestId("legend");
+  const high = ticksOf((await legend.locator("span").nth(5).textContent())!);
+  const yHigh = Math.round(yOf(high));
+
+  await expect(page.getByTestId("tool-magnet")).toHaveAttribute("aria-pressed", "false");
+  await page.keyboard.press("Alt+KeyM");
+  await expect(page.getByTestId("tool-magnet")).toHaveAttribute("aria-pressed", "true");
+  expect(await page.evaluate(() => localStorage.getItem("sandchart.drawings.magnet"))).toBe("1");
+
+  await page.keyboard.press("Alt+KeyH");
+  // Moving with a tool and the magnet on still redraws only the overlay.
+  const before = await settled(page);
+  for (let i = 0; i < 20; i++) {
+    await page.mouse.move(cx - 40 + i * 4, yHigh + 30 - i);
+    await nextFrame(page);
+  }
+  expect((await debug(page)).baseDraws).toBe(before.baseDraws);
+  await page.mouse.click(cx, yHigh + 5);
+  const snapped = (await storedCount(page, 3)).map((d) => d.body.p).filter((p) => p !== l1!.body.p && p !== l2!.body.p);
+  expect(snapped).toEqual([high]);
+
+  // ⌘ (Ctrl) inverts the magnet for that click.
+  await page.keyboard.press("Alt+KeyH");
+  await page.keyboard.down("ControlOrMeta");
+  await page.mouse.click(cx, yHigh + 5);
+  await page.keyboard.up("ControlOrMeta");
+  const all = await storedCount(page, 4);
+  expect(all.filter((d) => d.body.p === high)).toHaveLength(1);
+
+  // The switch is kept across a reload.
+  await page.reload();
+  await expect(page.getByTestId("tool-magnet")).toHaveAttribute("aria-pressed", "true");
 });
 
 test("base_frame_with_500_drawings_under_budget @perf", async ({ page }) => {
