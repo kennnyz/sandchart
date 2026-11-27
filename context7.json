@@ -1,0 +1,17 @@
+{
+  "$schema": "https://context7.com/schema/context7.json",
+  "projectTitle": "Sandchart",
+  "description": "Open-source desktop chart app (Rust + Tauri). Indicators are sandboxed WebAssembly components written with the sandchart-indicator Rust SDK and built and tested with the sandchart-indicator CLI.",
+  "folders": ["docs", "indicators/sdk", "crates/indicator-cli/template"],
+  "excludeFolders": ["target", "indicators/target", "indicators/testguests", "app/ui/node_modules", "app/ui/e2e"],
+  "rules": [
+    "An indicator is a WebAssembly component that exports sandchart:indicator/indicator@0.1.0 and imports only WASI 0.2. Build it for the wasm32-wasip2 target.",
+    "Start a new indicator with `sandchart-indicator new <name>`, build with `sandchart-indicator build`, and check it with `sandchart-indicator test <file.wasm>`; fix every warning, including repaints.",
+    "Implement the `Indicator` trait (`meta()` and `compute(params, candles)`) and export it with `sandchart_indicator::export!(MyIndicator with_types_in sandchart_indicator::bindings)`.",
+    "`compute` is a pure function over all candles, oldest first; never read bars after the one being computed.",
+    "Line and Histogram series return exactly one value per candle; use NaN where there is no value.",
+    "Read parameters through `Params::new(params)` and its `int`, `float`, `boolean` and `choice` getters; use the helpers in `sandchart_indicator::ta` (sma, ema, rma, stdev, highest, lowest).",
+    "Series colours are palette slots 0 to 7, never RGB values. A Markers series must be on Pane::Price; Band(a, b) names two Line series of the same module on the same pane.",
+    "Indicators have no files, network, environment or real clock; use the candle `time` field (Unix milliseconds) for time."
+  ]
+}
