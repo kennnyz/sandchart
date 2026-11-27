@@ -93,7 +93,7 @@ jobs:
       - run: pnpm test
 
   e2e:
-    name: e2e (chromium)
+    name: e2e (chromium, webkit)
     runs-on: ubuntu-22.04
     defaults:
       run:
@@ -109,7 +109,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: app/ui/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm exec playwright install --with-deps chromium webkit
       - run: pnpm exec playwright test
         env:
           CI: "true"
