@@ -3,6 +3,7 @@ import { backend } from "./backend";
 import type { ConnectionState, Instrument, InstrumentId, TimeframeCode } from "./backend/types";
 import { dark, light } from "./chart/theme";
 import { ChartView, Loading } from "./components/ChartView";
+import { IndicatorsDialog } from "./components/IndicatorsDialog";
 import { StatusBar } from "./components/StatusBar";
 import { tfLabel } from "./components/TimeframePicker";
 import { SymbolSearch, type SearchMode } from "./components/SymbolSearch";
@@ -10,6 +11,7 @@ import { TopBar } from "./components/TopBar";
 import { Watchlist } from "./components/Watchlist";
 import { useLanguage } from "./i18n";
 import { sourceName } from "./labels";
+import { indicatorStore } from "./state/indicators";
 
 type ThemeName = "dark" | "light";
 const THEME_KEY = "sandchart.theme";
@@ -51,6 +53,13 @@ export function App() {
   const [watchlistVisible, setWatchlistVisible] = useState(storedWatchlistVisible);
   /** Waiting for the instrument list to open the default pair (first run). */
   const [waitingDefault, setWaitingDefault] = useState(true);
+  const [indicators] = useState(() => indicatorStore(backend));
+  const [indicatorsOpen, setIndicatorsOpen] = useState(false);
+
+  // Installed modules and the chart's instances; on a cold start the engine may answer late.
+  useEffect(() => {
+    indicators.state.load().catch((e: unknown) => console.error("loading the indicators failed", e));
+  }, [indicators]);
 
   useLayoutEffect(() => {
     document.documentElement.dataset.theme = themeName;
@@ -172,6 +181,7 @@ export function App() {
         theme={themeName}
         onTheme={changeTheme}
         onSearch={() => setSearchMode("open")}
+        onIndicators={() => setIndicatorsOpen(true)}
         watchlistHidden={!watchlistVisible}
         onShowWatchlist={() => showWatchlist(true)}
       />
@@ -188,6 +198,7 @@ export function App() {
               theme={theme}
               priceMode={logScale ? "log" : "linear"}
               connection={connection}
+              indicators={indicators}
             />
           )}
         </div>
@@ -205,6 +216,9 @@ export function App() {
         )}
       </div>
       <StatusBar source={sourceName(current?.source ?? "binance")} connection={connection} />
+      {indicatorsOpen && (
+        <IndicatorsDialog backend={backend} store={indicators} onClose={() => setIndicatorsOpen(false)} />
+      )}
       {searchMode && (
         <SymbolSearch
           backend={backend}

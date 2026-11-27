@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page, type TestInfo } from "@playwright/test";
 
 // Layout constants from the Design Reference: price axis 72 px, time axis 26 px.
 const PRICE_AXIS = 72;
@@ -143,6 +143,7 @@ interface ChartDebug {
   widestText: string;
   canvasWidth: number;
   plotWidth: number;
+  panes: number;
 }
 
 async function chartDebug(page: Page): Promise<ChartDebug> {
@@ -178,8 +179,10 @@ for (const [name, query, sample] of [
   });
 }
 
-test("draw_time_under_budget @perf", async ({ page }, info) => {
-  const plot = await openChart(page);
+/** Drags the chart for 2 s and checks the mean draw time of those frames. */
+async function drawTimeUnderBudget(page: Page, info: TestInfo, query: string, ready?: () => Promise<void>): Promise<void> {
+  const plot = await openChart(page, query);
+  await ready?.();
   const x = plot.left + plot.width / 2;
   const y = plot.top + plot.height / 2;
   // Zoom out so a full screen of bars (the per-column path) is drawn every frame.
@@ -229,4 +232,19 @@ test("draw_time_under_budget @perf", async ({ page }, info) => {
   info.annotations.push({ type: "draw-time", description: note });
   expect(draws.length).toBeGreaterThan(30);
   expect(mean).toBeLessThan(8);
+}
+
+test("draw_time_under_budget @perf", async ({ page }, info) => {
+  await drawTimeUnderBudget(page, info, "");
+});
+
+test("draw_time_with_indicators_under_budget @perf", async ({ page }, info) => {
+  // Measure once every indicator has a result to draw (each legend row shows a value).
+  await drawTimeUnderBudget(page, info, "?mockIndicators=sma,bollinger,rsi,macd", async () => {
+    const rows = page.getByTestId("indicator-legend-row");
+    await expect(rows).toHaveCount(4);
+    for (let i = 0; i < 4; i++) await expect(rows.nth(i).getByTestId("indicator-value").first()).toHaveText(/\d/);
+  });
+  // The indicators were drawn: RSI and MACD each have a pane.
+  expect((await chartDebug(page)).panes).toBe(2);
 });

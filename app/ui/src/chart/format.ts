@@ -85,3 +85,15 @@ export function formatDate(ms: number): string {
   const d = new Date(ms);
   return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()] ?? ""} ${d.getUTCFullYear()}`;
 }
+
+/**
+ * An indicator value (a float in price units) with `decimals` places, the integer part
+ * grouped like prices and a real minus sign. Display only: the value is already a float.
+ */
+export function formatValue(v: number, decimals: number): string {
+  const s = Math.abs(v).toFixed(decimals);
+  const dot = s.indexOf(".");
+  const intPart = dot < 0 ? s : s.slice(0, dot);
+  const grouped = intPart.replace(/\B(?=(\d{3})+$)/g, THIN_SPACE) + (dot < 0 ? "" : s.slice(dot));
+  return (v < 0 && Number(s) !== 0 ? MINUS : "") + grouped;
+}
