@@ -1,11 +1,14 @@
 import type { LiveCandle } from "../backend/types";
-import { formatPrice } from "../chart/format";
+import { formatChange, formatPrice } from "../chart/format";
 import { MONO_FAMILY, type ChartTheme } from "../chart/theme";
+import { t } from "../i18n";
 
 export interface LegendProps {
   symbol: string;
   /** Timeframe and source, e.g. "1h · Binance". */
   subtitle: string;
+  /** Symbol of the candles actually on the chart; empty while the chart is loading. */
+  dataSymbol: string;
   candle: LiveCandle | null;
   /** Close of the bar before `candle`; the change is measured from it (from the open when absent). */
   prevClose: number | null;
@@ -19,19 +22,15 @@ function trimZeros(s: string): string {
 }
 
 /** Symbol, timeframe and O H L C V of the candle under the crosshair (or the last one). */
-export function Legend({ symbol, subtitle, candle, prevClose, priceScale, qtyScale, theme }: LegendProps) {
+export function Legend({ symbol, subtitle, dataSymbol, candle, prevClose, priceScale, qtyScale, theme }: LegendProps) {
   const label = { color: theme.muted };
   const value = { color: theme.fg, marginRight: 10 };
   let change = null;
   if (candle) {
-    const base = prevClose ?? candle.open;
-    const diff = candle.close - base;
-    // Basis points of `base`, rounded: an integer, so formatPrice gives exactly 2 decimals.
-    const bp = base !== 0 ? Math.round((diff * 10_000) / base) : 0;
-    const sign = diff > 0 ? "+" : "";
+    const c = formatChange(candle.close - (prevClose ?? candle.open), prevClose ?? candle.open, priceScale);
     change = (
-      <span style={{ color: diff >= 0 ? theme.up : theme.down, marginRight: 10 }}>
-        {sign + formatPrice(diff, priceScale)} ({sign + formatPrice(bp, 2)}%)
+      <span style={{ color: c.dir < 0 ? theme.down : theme.up, marginRight: 10 }}>
+        {c.abs} ({c.pct})
       </span>
     );
   }
@@ -39,6 +38,7 @@ export function Legend({ symbol, subtitle, candle, prevClose, priceScale, qtySca
     <div
       data-testid="legend"
       data-time={candle?.time ?? ""}
+      data-symbol={dataSymbol}
       style={{
         position: "absolute",
         zIndex: 1,
@@ -58,16 +58,16 @@ export function Legend({ symbol, subtitle, candle, prevClose, priceScale, qtySca
       </div>
       {candle && (
         <div>
-          <span style={label}>O </span>
+          <span style={label}>{t("legend.open")} </span>
           <span style={value}>{formatPrice(candle.open, priceScale)}</span>
-          <span style={label}>H </span>
+          <span style={label}>{t("legend.high")} </span>
           <span style={value}>{formatPrice(candle.high, priceScale)}</span>
-          <span style={label}>L </span>
+          <span style={label}>{t("legend.low")} </span>
           <span style={value}>{formatPrice(candle.low, priceScale)}</span>
-          <span style={label}>C </span>
+          <span style={label}>{t("legend.close")} </span>
           <span style={value}>{formatPrice(candle.close, priceScale)}</span>
           {change}
-          <span style={label}>V </span>
+          <span style={label}>{t("legend.volume")} </span>
           <span style={value}>{trimZeros(formatPrice(candle.volume, qtyScale))}</span>
         </div>
       )}

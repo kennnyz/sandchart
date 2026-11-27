@@ -2,6 +2,7 @@ import {
   type Backend,
   type CandleColumns,
   type Candles,
+  type ConnectionState,
   type Instrument,
   type InstrumentId,
   type TimeframeCode,
@@ -35,6 +36,10 @@ const SYMBOLS: Instrument[] = [
   ["ETH", "USDT"],
   ["SOL", "USDT"],
   ["BNB", "USDT"],
+  ["XRP", "USDT"],
+  ["DOGE", "USDT"],
+  ["ADA", "USDT"],
+  ["ETH", "BTC"],
 ].map(([base, quote]) => ({
   id: { source: "mock", symbol: `${base}${quote}` },
   base: base!,
@@ -54,6 +59,16 @@ export interface MockOptions {
   basePrice?: number;
   /** Decimal places of a price tick for every instrument (default 2). */
   priceScale?: number;
+  /** One instrument whose candles and live stream answer with a different delay. */
+  slow?: { symbol: string; latencyMs: number };
+  /** Set on every candle page, as the engine does when the provider fails. */
+  warning?: string;
+  /** What `getConnection` reports (default "connected"). */
+  connection?: ConnectionState;
+  /** Initial watchlist symbols (default: the first five instruments). */
+  watchlist?: string[];
+  /** Keeps the watchlist across page loads (the browser mock uses localStorage). */
+  watchlistStore?: { load(): InstrumentId[] | null; save(ids: InstrumentId[]): void };
 }
 
 /** Deterministic pseudo-random value in [0, 1) for candle number `n`. */
@@ -74,9 +89,15 @@ function column(): CandleColumns {
 export function createMockBackend(opts: MockOptions): Backend {
   const base = opts.basePrice ?? 10_000;
   const wick = base * 0.004;
-  const delay = () =>
-    opts.latencyMs ? new Promise<void>((r) => setTimeout(r, opts.latencyMs)) : Promise.resolve();
-  let watchlist: InstrumentId[] = SYMBOLS.slice(0, 2).map((i) => i.id);
+  const sleep = (ms: number | undefined) =>
+    ms ? new Promise<void>((r) => setTimeout(r, ms)) : Promise.resolve();
+  const delay = () => sleep(opts.latencyMs);
+  const delayFor = (symbol: string) =>
+    sleep(opts.slow?.symbol === symbol ? opts.slow.latencyMs : opts.latencyMs);
+  const initial = opts.watchlist
+    ? SYMBOLS.filter((i) => opts.watchlist!.includes(i.id.symbol)).map((i) => i.id)
+    : SYMBOLS.slice(0, 5).map((i) => i.id);
+  let watchlist: InstrumentId[] = opts.watchlistStore?.load() ?? initial;
 
   return {
     async searchInstruments(q) {
@@ -86,7 +107,7 @@ export function createMockBackend(opts: MockOptions): Backend {
     },
 
     async getCandles(id, tf, before) {
-      await delay();
+      await delayFor(id.symbol);
       const instrument = SYMBOLS.find((i) => i.id.symbol === id.symbol);
       if (!instrument) throw new Error(`unknown instrument ${id.source}/${id.symbol}`);
       const step = STEP_MS[tf];
@@ -119,13 +140,13 @@ export function createMockBackend(opts: MockOptions): Backend {
         instrument: { ...instrument, priceScale: opts.priceScale ?? instrument.priceScale },
         ...out,
         atHistoryStart: start <= first,
-        warning: null,
+        warning: opts.warning ?? null,
       };
       return page;
     },
 
-    async subscribeLive() {
-      await delay();
+    async subscribeLive(id) {
+      await delayFor(id.symbol);
       return () => {};
     },
 
@@ -137,15 +158,20 @@ export function createMockBackend(opts: MockOptions): Backend {
     async setWatchlist(ids) {
       await delay();
       watchlist = [...ids];
+      opts.watchlistStore?.save(watchlist);
     },
 
     async getWatchlistQuotes() {
       await delay();
-      return watchlist.map((id, i) => ({ id, last: priceAt(opts.candles, base) + i, changeBp: 184 - 300 * i }));
+      // Per instrument, so the numbers follow a row when the list is reordered.
+      return watchlist.map((id) => {
+        const i = SYMBOLS.findIndex((s) => s.id.symbol === id.symbol);
+        return { id, last: priceAt(opts.candles, base) + 37 * i, changeBp: [184, -116, 412, 0, -27][i % 5]! };
+      });
     },
 
     async getConnection() {
-      return "connected";
+      return opts.connection ?? "connected";
     },
 
     async onConnection() {

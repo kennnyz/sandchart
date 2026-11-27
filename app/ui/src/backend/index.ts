@@ -1,7 +1,9 @@
 import { enableChartDebug } from "../chart/debug";
 import { createMockBackend } from "./mock";
 import { resetSubscriptions, tauriBackend } from "./tauri";
-import type { Backend } from "./types";
+import type { Backend, InstrumentId } from "./types";
+
+const MOCK_WATCHLIST_KEY = "sandchart.mock.watchlist";
 
 export * from "./types";
 
@@ -11,20 +13,47 @@ if (inTauri) void resetSubscriptions();
 
 /**
  * The mock used in a plain browser (`pnpm dev`, e2e). Query parameters tune it for
- * tests: `mockHistoryStart` (ms), `mockLatency` (ms), `mockPrice` (ticks) and
- * `mockPriceScale`. Calls are counted in `window.__sandchartMock`, and the chart
+ * tests: `mockHistoryStart` (ms), `mockLatency` (ms), `mockPrice` (ticks),
+ * `mockPriceScale`, `mockSlow` + `mockSlowLatency` (one slow symbol), `mockWarning`
+ * (every page carries a provider warning), `mockConnection` (initial state) and
+ * `mockWatchlist` (comma-separated symbols; empty for none). The watchlist is kept in
+ * localStorage so a reload sees the same list. Calls are counted in `window.__sandchartMock`, and the chart
  * reports draw times and axis layout into `window.__sandchartDebug` (see
  * chart/debug.ts). None of this exists inside Tauri.
  */
 function browserMock(): Backend {
   const q = new URLSearchParams(window.location.search);
   const num = (k: string) => (q.has(k) ? Number(q.get(k)) : undefined);
+  const slow = q.get("mockSlow");
+  const connection = q.get("mockConnection");
+  const list = q.get("mockWatchlist");
   const mock = createMockBackend({
     candles: 200_000,
     latencyMs: num("mockLatency") ?? 80,
     historyStartAt: num("mockHistoryStart"),
     basePrice: num("mockPrice"),
     priceScale: num("mockPriceScale"),
+    slow: slow ? { symbol: slow, latencyMs: num("mockSlowLatency") ?? 1_000 } : undefined,
+    warning: q.has("mockWarning") ? "mock: provider unreachable" : undefined,
+    connection: connection === "reconnecting" || connection === "offline" ? connection : undefined,
+    watchlist: list === null ? undefined : list.split(",").filter(Boolean),
+    watchlistStore: {
+      load() {
+        try {
+          const raw = localStorage.getItem(MOCK_WATCHLIST_KEY);
+          return raw ? (JSON.parse(raw) as InstrumentId[]) : null;
+        } catch {
+          return null;
+        }
+      },
+      save(ids) {
+        try {
+          localStorage.setItem(MOCK_WATCHLIST_KEY, JSON.stringify(ids));
+        } catch {
+          // No storage: the list lasts for this page load.
+        }
+      },
+    },
   });
   enableChartDebug();
   const stats = { getCandles: 0 };
