@@ -1,0 +1,33 @@
+package sandchart:indicator@0.1.0;
+
+interface types {
+  record candle { time: s64, open: f64, high: f64, low: f64, close: f64, volume: f64 }
+
+  variant param-value { int(s64), float(f64), boolean(bool), choice(string) }
+  variant param-kind { int(tuple<s64, s64>), float(tuple<f64, f64>), boolean, choice(list<string>) }
+  record param-spec { id: string, label: string, kind: param-kind, default: param-value }
+
+  enum pane { price, %own }
+  variant series-kind { line, histogram, markers, band(tuple<string, string>) }
+  record series-spec { id: string, label: string, kind: series-kind, pane: pane, color: u8 }
+
+  record meta {
+    id: string, name: string, version: string, description: string,
+    params: list<param-spec>, series: list<series-spec>,
+  }
+
+  enum marker-shape { up, down, dot }
+  record marker { index: u32, shape: marker-shape, text: option<string> }
+
+  variant series-data { values(list<f64>), markers(list<marker>) }
+  record series-out { id: string, data: series-data }
+}
+
+interface indicator {
+  use types.{meta as meta-info, candle, param-value, series-out};
+  meta: func() -> meta-info;
+  compute: func(params: list<tuple<string, param-value>>, candles: list<candle>)
+    -> result<list<series-out>, string>;
+}
+
+world plugin { export indicator; }
