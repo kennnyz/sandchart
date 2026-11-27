@@ -88,7 +88,7 @@ function ok(instance: string, firstTime: number, values: number[]): IndicatorRes
 }
 
 describe("IndicatorState", () => {
-  it("add saves the list with default params and the spec colours", async () => {
+  it("add saves default params and no colours, so the spec defaults and the histogram up/down colours apply", async () => {
     const { backend, saves } = fakeBackend();
     const state = new IndicatorState(backend, () => undefined, manualScheduler().schedule);
     await state.load();
@@ -102,7 +102,7 @@ describe("IndicatorState", () => {
       ["period", { int: 20 }],
       ["source", { choice: "close" }],
     ]);
-    expect(inst!.colors).toEqual({ sma: 0 });
+    expect(inst!.colors).toEqual({});
     expect(inst!.hidden).toBe(false);
     expect(state.instances.map((i) => i.moduleId)).toEqual(["builtin.sma"]);
     // Pending until the first compute: a layer without a result or an error.
@@ -110,6 +110,27 @@ describe("IndicatorState", () => {
   });
 
   afterEach(() => vi.unstubAllGlobals());
+
+  // A module that failed to load keeps its instances in the engine; installing a fixed build
+  // must bring them back, or the next save (which sends the whole list) deletes them.
+  it("install re-reads the chart instances so kept instances survive the next save", async () => {
+    const kept: IndicatorInstance = { instance: "k", moduleId: "test.echo", params: [], colors: {}, hidden: false };
+    const { backend, saves } = fakeBackend();
+    let afterInstall = false;
+    Object.assign(backend, {
+      getChartIndicators: async () => (afterInstall ? [{ ...kept }] : []),
+      installIndicator: async () => {
+        afterInstall = true;
+        return { ...SMA, meta: { ...SMA.meta, id: "test.echo" }, builtin: false };
+      },
+    });
+    const state = new IndicatorState(backend, () => undefined, manualScheduler().schedule);
+    await state.load();
+    await state.install(new Uint8Array([0]));
+    expect(state.instances.map((i) => i.instance)).toEqual(["k"]);
+    await state.add("builtin.sma");
+    expect(saves.at(-1)!.map((i) => i.instance)).toContain("k");
+  });
 
   // WebKit (the macOS and Linux app) throws "Can only call Window.setTimeout on instances of
   // Window" when setTimeout runs with another `this`; Chromium does not, so e2e missed it.

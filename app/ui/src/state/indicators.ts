@@ -111,8 +111,14 @@ export class IndicatorState {
 
   /** Installs (or replaces) a module; instances of a replaced module are recomputed. */
   async install(bytes: Uint8Array): Promise<void> {
+    await this.saving;
     const info = await this.backend.installIndicator(bytes);
-    this.setList(await this.backend.listIndicators());
+    // Re-read the instances too: the engine kept those of a module that had failed to load,
+    // and the next save sends the whole list, so a stale list would delete them.
+    const [list, instances] = await Promise.all([this.backend.listIndicators(), this.backend.getChartIndicators()]);
+    this.setList(list);
+    this.instances = instances;
+    this.saved = instances;
     this.changed();
     if (this.target && this.instances.some((i) => i.moduleId === info.meta.id)) void this.run(this.target);
   }
@@ -127,12 +133,14 @@ export class IndicatorState {
     return this.infos.find((i) => i.meta.id === moduleId);
   }
 
-  /** Puts a new instance of `moduleId` on the chart with default params and colours. */
+  /**
+   * Puts a new instance of `moduleId` on the chart with default params. `colors` holds only
+   * what the user picks: the spec slot applies otherwise, and a histogram keeps up/down colours.
+   */
   async add(moduleId: string): Promise<void> {
     const info = this.info(moduleId);
     if (!info) return;
     const colors: Record<string, number> = {};
-    for (const s of info.meta.series) colors[s.id] = s.color;
     this.instances = [
       ...this.instances,
       {
