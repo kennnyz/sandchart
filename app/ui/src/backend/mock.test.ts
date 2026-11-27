@@ -43,4 +43,8 @@ describe("mock backend", () => {
       expect(col.every(Number.isInteger)).toBe(true);
     }
   });
+
+  it("reports the connection state", async () => {
+    expect(await createMockBackend({ candles: 1 }).getConnection()).toBe("connected");
+  });
 });

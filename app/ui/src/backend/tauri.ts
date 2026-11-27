@@ -27,6 +27,7 @@ export const tauriBackend: Backend = {
   getWatchlist: () => invoke("get_watchlist"),
   setWatchlist: (ids) => invoke("set_watchlist", { ids }),
   getWatchlistQuotes: () => invoke("get_watchlist_quotes"),
+  getConnection: () => invoke("get_connection"),
   onConnection: (cb) =>
     listen<ConnectionState>("connection", (e) => cb(e.payload)),
 };

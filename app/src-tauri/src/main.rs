@@ -58,6 +58,7 @@ fn main() {
             commands::set_watchlist,
             commands::get_watchlist_quotes,
             commands::import_csv,
+            commands::get_connection,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Sandchart");

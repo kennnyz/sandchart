@@ -78,6 +78,8 @@ export interface Backend {
   getWatchlist(): Promise<InstrumentId[]>;
   setWatchlist(ids: InstrumentId[]): Promise<void>;
   getWatchlistQuotes(): Promise<DayChange[]>;
+  /** The current state; `onConnection` only reports changes after it. */
+  getConnection(): Promise<ConnectionState>;
   /** Resolves to the function that stops listening. */
   onConnection(cb: (s: ConnectionState) => void): Promise<() => void>;
 }

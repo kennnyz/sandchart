@@ -138,6 +138,10 @@ export function createMockBackend(opts: MockOptions): Backend {
       return watchlist.map((id, i) => ({ id, last: priceAt(opts.candles) + i, changeBp: 184 - 300 * i }));
     },
 
+    async getConnection() {
+      return "connected";
+    },
+
     async onConnection() {
       return () => {};
     },

@@ -12,8 +12,8 @@ use tauri::async_runtime::{JoinHandle, spawn, spawn_blocking};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::dto::{
-    CandlesDto, DayChangeDto, InstrumentDto, InstrumentIdDto, to_candles_dto, to_day_change_dto,
-    to_live_dto,
+    CandlesDto, DayChangeDto, InstrumentDto, InstrumentIdDto, connection_name, to_candles_dto,
+    to_day_change_dto, to_live_dto,
 };
 
 /// Most results one search returns.
@@ -166,4 +166,9 @@ pub async fn import_csv(
     let path = PathBuf::from(path);
     let id = blocking(&state, move |e| e.import_csv(&path, &symbol, tf)).await?;
     Ok(id.into())
+}
+
+#[tauri::command]
+pub fn get_connection(state: State<'_, AppState>) -> &'static str {
+    connection_name(*state.engine.connection().borrow())
 }
