@@ -3912,6 +3912,7 @@ version = "0.2.0"
 dependencies = [
  "rusqlite",
  "sandchart-core",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.21",
 ]
