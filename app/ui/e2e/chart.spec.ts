@@ -140,6 +140,7 @@ interface ChartDebug {
   drawMs: number[];
   axisWidth: number;
   widestLabel: number;
+  widestText: string;
   canvasWidth: number;
   plotWidth: number;
 }
@@ -165,13 +166,10 @@ for (const [name, query, sample] of [
     await nextFrame(page);
     await nextFrame(page);
     const d = await chartDebug(page);
-    // The mock really produced labels of the expected length.
-    const sampleWidth = await page.evaluate((text) => {
-      const ctx = document.createElement("canvas").getContext("2d")!;
-      ctx.font = '11px "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-      return ctx.measureText(text).width;
-    }, sample);
-    expect(d.widestLabel).toBeGreaterThanOrEqual(sampleWidth - 0.5);
+    // The mock really produced labels as long as the sample. Compare text, not pixel
+    // widths: glyph advances are rounded differently across platforms (Linux Chromium
+    // rounds them to whole pixels), so a width measured elsewhere is not comparable.
+    expect(d.widestText.length).toBeGreaterThanOrEqual(sample.length);
     expect(d.axisWidth).toBeGreaterThanOrEqual(PRICE_AXIS);
     expect(d.axisWidth).toBeGreaterThanOrEqual(d.widestLabel + 16);
     // Labels start 8 px into the axis; the axis ends at the canvas edge.

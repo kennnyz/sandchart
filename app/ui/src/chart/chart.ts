@@ -430,6 +430,7 @@ export class Chart {
       debug.drawMs.push(performance.now() - started);
       debug.axisWidth = this.axisWidth;
       debug.widestLabel = axis.widest;
+      debug.widestText = axis.widestText;
       debug.canvasWidth = this.width;
       debug.plotWidth = plotW;
       debug.historyLabel = historyStart ? historyStart.join("|") : null;

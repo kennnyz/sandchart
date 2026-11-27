@@ -102,17 +102,21 @@ export function priceAxisWidth(
   decimals: number,
   lastClose: number,
   crosshairY: number | null,
-): { width: number; widest: number } {
+): { width: number; widest: number; widestText: string } {
   ctx.font = buf.axisFont(dpr);
   let widest = 0;
+  let widestText = "";
   const measure = (text: string) => {
     const w = ctx.measureText(text).width / dpr;
-    if (w > widest) widest = w;
+    if (w > widest) {
+      widest = w;
+      widestText = text;
+    }
   };
   for (const t of priceTicks(scale)) measure(formatPrice(Math.round(t), decimals));
   if (Number.isFinite(lastClose)) measure(formatPrice(lastClose, decimals));
   if (crosshairY !== null) measure(formatPrice(Math.round(scale.fromY(crosshairY)), decimals));
-  return { width: Math.max(PRICE_AXIS_WIDTH, Math.ceil(widest + 2 * LABEL_PAD)), widest };
+  return { width: Math.max(PRICE_AXIS_WIDTH, Math.ceil(widest + 2 * LABEL_PAD)), widest, widestText };
 }
 
 export function draw(f: FrameInput, buf: RenderBuffers): void {

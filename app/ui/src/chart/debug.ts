@@ -8,6 +8,8 @@ export interface ChartDebug {
   /** Price axis width and the widest price label of the last frame, in CSS px. */
   axisWidth: number;
   widestLabel: number;
+  /** The text of that widest label. */
+  widestText: string;
   /** Canvas width and plot width of the last frame, in CSS px. */
   canvasWidth: number;
   plotWidth: number;
@@ -18,7 +20,7 @@ export interface ChartDebug {
 let debug: ChartDebug | null = null;
 
 export function enableChartDebug(): void {
-  debug = { drawMs: [], axisWidth: 0, widestLabel: 0, canvasWidth: 0, plotWidth: 0, historyLabel: null };
+  debug = { drawMs: [], axisWidth: 0, widestLabel: 0, widestText: "", canvasWidth: 0, plotWidth: 0, historyLabel: null };
   (window as unknown as { __sandchartDebug: ChartDebug }).__sandchartDebug = debug;
 }
 
