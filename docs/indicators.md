@@ -111,9 +111,11 @@ The JSON object has these fields: `id`, `version`, `bars`, `series` (a list of `
 
 ## Add it to the app
 
-Open Sandchart, click Indicators, then Add from file, and pick the `.wasm`. The app checks it, runs it on 2000 sample bars to see whether it repaints, and shows the result. It then appears under Installed in the same dialog. Click an indicator in the list to add it to the chart.
+Open Sandchart, click Indicators, then Add from file, and pick the `.wasm`. The app checks it, runs it on 2000 sample bars with the default parameters to see whether it repaints, and shows the result. (`sandchart-indicator test` uses the `--param` values you pass, so the two can differ for an indicator that repaints only with some parameters.) It then appears under Installed in the same dialog. Click an indicator in the list to add it to the chart.
 
-Installing a module with the id of an installed one replaces it, after a confirmation. Your parameter values stay where they still fit: a saved value that no longer exists, has the wrong kind or is out of range is dropped, and the default is used.
+Installing a module with the id of an installed one replaces it, after a confirmation. Removing one (the cross next to it) asks first and removes its indicators from the chart too.
+
+If an installed module cannot be loaded when the app starts (its file was changed or deleted, or a newer app rejects it), the dialog lists it under Installed with the reason. Its indicators stay saved, hidden from the chart, and come back once the module loads again; install a fixed build or remove it. Your parameter values stay where they still fit: a saved value that no longer exists, has the wrong kind or is out of range is dropped, and the default is used.
 
 ## The contract
 
@@ -123,20 +125,20 @@ What `meta()` returns:
 
 | Field | Meaning |
 | --- | --- |
-| `id` | `author.name`: lower-case letters, digits, `_` and `-`, exactly one `.`, each part starting with a letter or digit. Must not start with `builtin.` (reserved for the indicators inside the app). |
-| `name` | Shown in the app. Not empty. |
-| `version` | Semver, such as `0.1.0`. |
-| `description` | One line. |
-| `params` | The parameters the user can set. |
-| `series` | The series you return. At least one. |
+| `id` | `author.name`: lower-case letters, digits, `_` and `-`, exactly one `.`, each part starting with a letter or digit, at most 64 bytes. Must not start with `builtin.` (reserved for the indicators inside the app; `build` refuses it too). |
+| `name` | Shown in the app. Not empty, at most 128 bytes. |
+| `version` | Semver, such as `0.1.0`, at most 64 bytes. |
+| `description` | One line, at most 4 KiB. |
+| `params` | The parameters the user can set. At most 64. |
+| `series` | The series you return. At least one, at most 64. |
 
-A parameter has an `id`, a `label`, a `kind` and a `default`. The kinds are `Int((min, max))`, `Float((min, max))`, `Boolean` and `Choice(options)`. Parameter ids are unique and not empty. The default must be of the kind and inside the range or list. An int range needs `min <= max`, a float range must not contain NaN, and a choice needs at least one option.
+A parameter has an `id`, a `label`, a `kind` and a `default`. The kinds are `Int((min, max))`, `Float((min, max))`, `Boolean` and `Choice(options)`. Parameter ids are unique, not empty, at most 64 bytes, and use only lower-case letters, digits, `_` and `-`; a label is at most 64 bytes. The default must be of the kind and inside the range or list. An int range needs `min <= max` with both bounds within ±(2^53 − 1), the largest integers the app's UI holds exactly. A float range needs `min <= max` with both bounds finite: no NaN and no infinity, because the app sends parameters as JSON, which has neither. A choice needs 1 to 256 options, each not empty, at most 64 bytes and listed once.
 
 A series has an `id`, a `label`, a `kind`, a `pane` and a `color`. The kinds are `Line`, `Histogram`, `Markers` and `Band(a, b)`. The pane is `Pane::Price` (over the candles) or `Pane::Own` (a pane of its own under the chart). The `color` is a palette slot from 0 to 7. Each theme maps the slots to colours, so an indicator never picks its own colours.
 
 Rules the app enforces on `meta`:
 
-- Series ids are unique and not empty.
+- Series ids are unique, not empty, at most 64 bytes, and use only lower-case letters, digits, `_` and `-`. Series labels are at most 64 bytes.
 - `color` is at most 7.
 - A `Markers` series is on `Pane::Price`.
 - `Band(a, b)` names two different `Line` series of the same module, on the same pane as the band.
@@ -147,11 +149,11 @@ Rules the app enforces on what `compute` returns:
 
 - Every declared series is returned exactly once, and no undeclared series. The order does not matter.
 - `Line` and `Histogram` series return `Values` with exactly one value per candle.
-- A `Markers` series returns `Markers`, and every marker `index` is below the number of candles.
+- A `Markers` series returns `Markers`, every marker `index` is below the number of candles, and a marker `text` is at most 64 bytes.
 - A `Band` series carries no data of its own. Return an empty list of values for it; the app ignores what is there and fills between the two lines.
 - `+inf` and `-inf` in values become `NaN`, so they draw as gaps. Autoscale ignores non-finite values.
 
-`compute` gets every parameter, resolved: the saved value when it still fits the spec, the default otherwise. So `params.int("period")` is always present and in range. `compute` can also return an error string. The app shows it as "the indicator returned an error: …" and draws nothing for that indicator.
+`compute` gets every parameter, resolved: the saved value when it still fits the spec, the default otherwise. So `params.int("period")` is always present and in range. `compute` can also return an error string. The app shows it as "the indicator returned an error: …" (cut to its first 1 KiB) and draws nothing for that indicator.
 
 ## The SDK
 
@@ -341,6 +343,7 @@ Limits of every `compute` call:
 | Candles | The newest 100 000 cached candles of the chart. |
 | File size | 20 MiB per `.wasm`. Build in release mode with `strip = true`. |
 | Log | The first 16 KiB of what the module prints. The rest is dropped. |
+| Output | 64 MiB copied out of the module per call: enough for 64 series of 100 000 values. |
 
 A call that hits a limit stops. Other indicators on the chart keep working.
 
@@ -364,7 +367,7 @@ When a call to `compute` fails, the chart shows "<name> stopped: <reason>" for t
 | `the indicator hit the memory limit` | Allocate less, for example reuse buffers. |
 | `the indicator crashed: …` | A panic or a trap. For a Rust panic the message holds the panic text and the source line, then the module's own output. |
 | `the indicator returned an error: …` | `compute` returned `Err`; the text is yours. |
-| `the indicator returned invalid output: …` | The output broke a rule in [The contract](#the-contract), such as `series "x" has 3 values for 5 bars` or `series "y" is missing`. |
+| `the indicator returned invalid output: …` | The output broke a rule in [The contract](#the-contract), such as `series "x" has 3 values for 5 bars` or `series "y" is missing`, or it returned more than 64 MiB. |
 
 ## Other languages
 
@@ -375,5 +378,5 @@ The contract is a standard WebAssembly Component Model interface (WIT), so a com
 Paste this into your coding agent, with the indicator you want at the end:
 
 ```text
-Write a Sandchart indicator. Run `sandchart-indicator new <name>`, then read the generated AGENTS.md and src/lib.rs, and read https://github.com/kennnyz/sandchart/blob/main/docs/indicators.md for the rules. Edit src/lib.rs, run `sandchart-indicator build`, then `sandchart-indicator test target/wasm32-wasip2/release/<name>.wasm` (use --json and your own --csv candles if it helps). Fix every error and every warning, including "repaints". Return NaN where there is no value, one value per candle for line and histogram series, and never look at bars after the one you compute. When build says ok and test exits 0 with no warning, check a few numbers by hand and tell me the path of the .wasm file. The indicator I want:
+Write a Sandchart indicator. Run `sandchart-indicator new <name>`, then read the generated AGENTS.md and src/lib.rs, and read https://github.com/kennnyz/sandchart/blob/main/docs/indicators.md for the rules. Edit src/lib.rs, run `sandchart-indicator build`, then `sandchart-indicator test target/wasm32-wasip2/release/<name>.wasm` (with every `-` in <name> written as `_`) (use --json and your own --csv candles if it helps). Fix every error and every warning, including "repaints". Return NaN where there is no value, one value per candle for line and histogram series, and never look at bars after the one you compute. When build says ok and test exits 0 with no warning, check a few numbers by hand and tell me the path of the .wasm file. The indicator I want:
 ```
