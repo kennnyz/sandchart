@@ -22,6 +22,16 @@ const MAX_DESCRIPTION: usize = 4096;
 /// The largest integer a JavaScript number holds exactly: the UI gets params as JSON.
 const SAFE_INT: std::ops::RangeInclusive<i64> = -((1 << 53) - 1)..=(1 << 53) - 1;
 
+/// A guest string as it may appear in a message: at most [`MAX_SHORT`] bytes,
+/// cut at a character boundary and marked with "…", so a module cannot make
+/// an error message (which reaches the UI) large.
+pub(crate) fn shown(s: &str) -> String {
+    if s.len() <= MAX_SHORT {
+        return s.to_owned();
+    }
+    format!("{}…", &s[..s.floor_char_boundary(MAX_SHORT)])
+}
+
 fn short(what: &str, s: &str) -> Result<(), String> {
     if s.len() > MAX_SHORT {
         return Err(format!(
@@ -37,7 +47,7 @@ fn part_id(what: &str, id: &str) -> Result<(), String> {
     if id.is_empty() {
         return Err(format!("a {what} has an empty id"));
     }
-    short(&format!("{what} id \"{id}\""), id)?;
+    short(&format!("{what} id \"{}\"", shown(id)), id)?;
     if !id
         .chars()
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
@@ -55,10 +65,10 @@ pub(crate) fn meta(m: &Meta) -> Result<(), String> {
         return Err(format!(
             "id \"{}\" must look like \"author.name\": lowercase letters, digits, '_' and '-', \
              with exactly one '.'",
-            m.id
+            shown(&m.id)
         ));
     }
-    short(&format!("id \"{}\"", m.id), &m.id)?;
+    short(&format!("id \"{}\"", shown(&m.id)), &m.id)?;
     if m.name.trim().is_empty() {
         return Err("name is empty".into());
     }
@@ -86,6 +96,7 @@ pub(crate) fn meta(m: &Meta) -> Result<(), String> {
             m.series.len()
         ));
     }
+    short(&format!("version \"{}\"", shown(&m.version)), &m.version)?;
     if let Err(e) = semver::Version::parse(&m.version) {
         return Err(format!(
             "version \"{}\" is not a semver version such as \"0.1.0\": {e}",
@@ -163,7 +174,7 @@ pub(crate) fn meta(m: &Meta) -> Result<(), String> {
             }
             SeriesKind::Band(a, b) => {
                 if a == b {
-                    return Err(format!("band \"{}\" names \"{a}\" twice", s.id));
+                    return Err(format!("band \"{}\" names \"{}\" twice", s.id, shown(a)));
                 }
                 // A linear search per band: at most MAX_SERIES series, so this stays cheap.
                 for line in [a, b] {
@@ -172,14 +183,16 @@ pub(crate) fn meta(m: &Meta) -> Result<(), String> {
                         Some(t) if t.kind == SeriesKind::Line && t.pane == s.pane => {}
                         Some(t) if t.kind == SeriesKind::Line => {
                             return Err(format!(
-                                "band \"{}\" names \"{line}\", which is on another pane",
-                                s.id
+                                "band \"{}\" names \"{}\", which is on another pane",
+                                s.id,
+                                shown(line)
                             ));
                         }
                         _ => {
                             return Err(format!(
-                                "band \"{}\" names \"{line}\", which is not a line series",
-                                s.id
+                                "band \"{}\" names \"{}\", which is not a line series",
+                                s.id,
+                                shown(line)
                             ));
                         }
                     }
@@ -249,7 +262,10 @@ pub(crate) fn output(
     let mut seen = HashSet::new();
     for s in &out {
         if !m.series.iter().any(|spec| spec.id == s.id) {
-            return Err(format!("series \"{}\" is not declared in meta", s.id));
+            return Err(format!(
+                "series \"{}\" is not declared in meta",
+                shown(&s.id)
+            ));
         }
         if !seen.insert(s.id.as_str()) {
             return Err(format!("series \"{}\" is returned twice", s.id));
@@ -484,6 +500,33 @@ mod tests {
         m.description = long(4096);
         m.params[0].label = long(64);
         meta(&m).unwrap();
+    }
+
+    #[test]
+    fn messages_stay_short_for_huge_guest_strings() {
+        let huge = "é".repeat(500_000);
+        let small = |msg: String| {
+            assert!(
+                msg.len() < 512,
+                "{} bytes: {}",
+                msg.len(),
+                msg.chars().take(80).collect::<String>()
+            );
+        };
+        small(err(|m| m.id = huge.clone()));
+        small(err(|m| m.id = format!("me.{huge}")));
+        small(err(|m| m.version = huge.clone()));
+        small(err(|m| m.params[0].id = huge.clone()));
+        small(err(|m| m.series[3].id = huge.clone()));
+        small(err(|m| {
+            m.series[2].kind = SeriesKind::Band(huge.clone(), "lower".into())
+        }));
+        small(err(|m| {
+            m.series[2].kind = SeriesKind::Band(huge.clone(), huge.clone())
+        }));
+        let mut out = good_output();
+        out.push(values(&huge, vec![]));
+        small(output(&base(), out, 2).unwrap_err());
     }
 
     #[test]

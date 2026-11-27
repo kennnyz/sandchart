@@ -9,6 +9,7 @@ use wasmtime::component::{Component, Linker, ResourceTable, ResourceTableError};
 use wasmtime::{Config, Engine, ResourceLimiter, Store, Trap, WasmBacktrace, WasmFeatures};
 use wasmtime_wasi::{HostWallClock, WasiCtx, WasiCtxView, WasiView};
 
+use crate::validate::shown;
 use crate::wasi::{LogPipe, add_frozen_clock};
 
 use crate::{
@@ -98,26 +99,28 @@ pub(crate) fn prepare(
         // has nothing to give for it, so a function in it would fail to link.
         let contract_types = name.starts_with("sandchart:indicator/types@");
         if !wasi_02 && !contract_types {
-            return Err(LoadError::ForbiddenImport(name.to_string()));
+            return Err(LoadError::ForbiddenImport(shown(name)));
         }
     }
-    let exports: Vec<&str> = ty.exports(engine).map(|(name, _)| name).collect();
-    if !exports
+    let names: Vec<&str> = ty.exports(engine).map(|(name, _)| name).collect();
+    let exports = export_list(&names);
+    if !names
         .iter()
         .any(|n| n.starts_with("sandchart:indicator/indicator@"))
     {
         return Err(LoadError::WrongContract(format!(
-            "it exports {exports:?} and no sandchart:indicator/indicator interface; implement the \
+            "it exports {exports} and no sandchart:indicator/indicator interface; implement the \
              SDK's Indicator trait and export it with export!"
         )));
     }
     let pre = linker
         .instantiate_pre(component)
-        .map_err(|e| LoadError::ForbiddenImport(format!("{e:#}")))?;
+        .map_err(|e| LoadError::ForbiddenImport(cut_error(format!("{e:#}"))))?;
     PluginPre::new(pre).map_err(|e| {
         LoadError::WrongContract(format!(
-            "it exports {exports:?}, this host needs {CONTRACT} ({e:#}); rebuild it with \
-             sandchart-indicator 0.1"
+            "it exports {exports}, this host needs {CONTRACT} ({}); rebuild it with \
+             sandchart-indicator 0.1",
+            cut_error(format!("{e:#}"))
         ))
     })
 }
@@ -208,25 +211,36 @@ fn run_error(e: wasmtime::Error, store: &Store<HostState>, log: &str) -> RunErro
     }
     // The cause first (for a Rust panic the output below holds the message
     // and the source line), then the wasm stack.
-    let mut msg = e.root_cause().to_string();
+    let mut msg = cut_error(e.root_cause().to_string());
     if !log.is_empty() {
         msg.push_str("\nindicator output:\n");
         msg.push_str(log.trim());
     }
     if let Some(trace) = e.downcast_ref::<WasmBacktrace>() {
-        msg.push_str(&format!("\n{trace}"));
+        // Frame names come from the module, so the trace is cut too.
+        msg.push_str(&format!("\n{}", cut_error(trace.to_string())));
     }
     RunError::Trap(msg)
 }
 
-/// Keeps the first [`ERROR_BYTES`] of a guest's error message, cut at a
-/// character boundary.
+/// Keeps the first [`ERROR_BYTES`] of a message that carries guest text (an
+/// error the guest returned, or a wasmtime error naming its imports, exports
+/// or functions), cut at a character boundary.
 fn cut_error(mut msg: String) -> String {
     if msg.len() > ERROR_BYTES {
         msg.truncate(msg.floor_char_boundary(ERROR_BYTES));
         msg.push_str("\n[cut at 1 KiB]");
     }
     msg
+}
+
+/// At most 8 export names, each cut by [`shown`], for a message.
+fn export_list(exports: &[&str]) -> String {
+    let mut names: Vec<String> = exports.iter().take(8).map(|n| shown(n)).collect();
+    if exports.len() > 8 {
+        names.push(format!("and {} more", exports.len() - 8));
+    }
+    format!("[{}]", names.join(", "))
 }
 
 fn log_text(pipe: &LogPipe) -> String {
