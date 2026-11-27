@@ -55,6 +55,25 @@ async fn parses_exchange_info() {
 }
 
 #[tokio::test]
+async fn exchange_info_asks_only_for_trading_spot_pairs() {
+    // The unfiltered response is ~18 MB; the filtered one ~2.6 MB.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v3/exchangeInfo"))
+        .and(query_param("permissions", "SPOT"))
+        .and(query_param("symbolStatus", "TRADING"))
+        .and(query_param("showPermissionSets", "false"))
+        .respond_with(json(EXCHANGE_INFO))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let insts = provider(&server).instruments().await.unwrap();
+
+    assert_eq!(insts.len(), 2);
+}
+
+#[tokio::test]
 async fn parses_klines_ascending() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))

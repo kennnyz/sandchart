@@ -1,6 +1,6 @@
 //! REST calls: exchange info, klines and 24 h tickers.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Duration};
 
 use reqwest::{Response, StatusCode, header::RETRY_AFTER};
 use sandchart_core::{Candle, Instrument, Timeframe};
@@ -14,13 +14,27 @@ use super::{
 use crate::{DayChange, ProviderError};
 
 const DEFAULT_RETRY_AFTER_S: u64 = 60;
+/// The pair list is megabytes even when filtered; slow links need far more
+/// than the client-wide timeout.
+const EXCHANGE_INFO_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_KLINES: u16 = 1000;
 const MAX_ERROR_BODY: usize = 512;
 
 impl Binance {
     pub(super) async fn fetch_instruments(&self) -> Result<Vec<Instrument>, ProviderError> {
         let url = self.endpoint("api/v3/exchangeInfo")?;
-        let info: ExchangeInfo = self.get_json(self.http.get(url)).await?;
+        // Unfiltered, Binance returns every symbol with every permission set
+        // (~18 MB); asking only for trading spot pairs cuts it to ~2.6 MB.
+        let request = self
+            .http
+            .get(url)
+            .query(&[
+                ("permissions", "SPOT"),
+                ("symbolStatus", "TRADING"),
+                ("showPermissionSets", "false"),
+            ])
+            .timeout(EXCHANGE_INFO_TIMEOUT);
+        let info: ExchangeInfo = self.get_json(request).await?;
         Ok(info
             .symbols
             .into_iter()
