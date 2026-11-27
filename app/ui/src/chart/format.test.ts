@@ -6,16 +6,16 @@ describe("formatPrice", () => {
     expect(formatPrice(1234, 8)).toBe("0.00001234");
   });
   it("formats large prices with thin space", () => {
-    expect(formatPrice(123456789, 2)).toBe("1 234 567.89");
+    expect(formatPrice(123456789, 2)).toBe("1\u2009234\u2009567.89");
   });
   it("handles scale 0, zero and negatives", () => {
-    expect(formatPrice(1234567, 0)).toBe("1 234 567");
+    expect(formatPrice(1234567, 0)).toBe("1\u2009234\u2009567");
     expect(formatPrice(0, 2)).toBe("0.00");
-    expect(formatPrice(-123456, 2)).toBe("-1 234.56");
+    expect(formatPrice(-123456, 2)).toBe("-1\u2009234.56");
     expect(formatPrice(-5, 3)).toBe("-0.005");
   });
   it("is exact beyond 2^31 and near 2^53", () => {
-    expect(formatPrice(9007199254740991, 2)).toBe("90 071 992 547 409.91");
+    expect(formatPrice(9007199254740991, 2)).toBe("90\u2009071\u2009992\u2009547\u2009409.91");
   });
 });
 

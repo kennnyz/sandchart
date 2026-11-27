@@ -1,6 +1,6 @@
 import type { TimeframeCode } from "../backend/types";
 
-const THIN_SPACE = " ";
+const THIN_SPACE = "\u2009";
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 /** Exact decimal rendering of an integer tick count; no floating division. */
