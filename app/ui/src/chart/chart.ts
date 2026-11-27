@@ -2,7 +2,7 @@ import type { CandleColumns, Candles, Instrument, LiveCandle, TimeframeCode } fr
 import { chartDebug } from "./debug";
 import { draw, plotSize, priceAxisWidth, RenderBuffers, type Crosshair, type Series } from "./render";
 import { autoscale, PriceScale, type PriceScaleMode } from "./scale";
-import { PRICE_AXIS_WIDTH, type ChartTheme } from "./theme";
+import { AXIS_FONT, PRICE_AXIS_WIDTH, type ChartTheme } from "./theme";
 import { gestureZoomFactor, panBy, visibleRange, xToIndex, zoomAt, type Viewport } from "./viewport";
 
 const DEFAULT_BAR_WIDTH = 8;
@@ -126,8 +126,18 @@ export class Chart {
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(host);
     this.resize();
-    // Axis text is measured with the web font once it has loaded.
-    void document.fonts?.ready.then(() => this.invalidate());
+    // Canvas text does not make the browser load a web font by itself, and
+    // `document.fonts.ready` can resolve before the axis font was ever requested.
+    // Ask for it explicitly, then re-measure the axis from scratch: labels drawn
+    // with a fallback font have a different width.
+    void document.fonts
+      ?.load(AXIS_FONT)
+      .catch(() => undefined)
+      .then(() => {
+        if (this.destroyed) return;
+        this.axisWidth = PRICE_AXIS_WIDTH;
+        this.invalidate();
+      });
   }
 
   // ---- Public API ----

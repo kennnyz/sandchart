@@ -229,10 +229,14 @@ test("start_of_history_is_marked", async ({ page }) => {
   // 300 bars only: the whole history fits on screen.
   const start = Date.UTC(2026, 10, 27) - 299 * 3_600_000;
   await openApp(page, `?mockLatency=10&mockHistoryStart=${start}`);
-  const label = await page.evaluate(
-    () => (window as unknown as { __sandchartDebug: { historyLabel: string | null } }).__sandchartDebug.historyLabel,
-  );
-  expect(label).toBe("Start of history|First candle 14 Nov 2026");
+  // The label appears on the frame after the history start is known; wait for it.
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window as unknown as { __sandchartDebug: { historyLabel: string | null } }).__sandchartDebug.historyLabel,
+      ),
+    )
+    .toBe("Start of history|First candle 14 Nov 2026");
 });
 
 test("screens_match_design", async ({ page }, info) => {

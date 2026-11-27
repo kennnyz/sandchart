@@ -160,6 +160,9 @@ for (const [name, query, sample] of [
     const plot = await openChart(page, `${query}&mockLatency=0`);
     // Crosshair on, so its price label is part of the measurement too.
     await hover(page, plot.left + plot.width / 2, plot.top + plot.height / 2);
+    // The axis is re-measured once the web font has loaded (slow on CI runners).
+    await page.evaluate(() => document.fonts.load('11px "IBM Plex Mono"'));
+    await nextFrame(page);
     await nextFrame(page);
     const d = await chartDebug(page);
     // The mock really produced labels of the expected length.
