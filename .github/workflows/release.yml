@@ -165,4 +165,4 @@ jobs:
           gh release create "$TAG" dist-release/* \
             --repo "$REPO" --draft --verify-tag \
             --title "Sandchart $TAG" \
-            --notes "Unsigned builds. Verify with SHA256SUMS and gh attestation verify (see README)."
+            --notes "Not signed with an OS code-signing certificate; updates are signed with the project key. Verify with SHA256SUMS and gh attestation verify (see README)."
