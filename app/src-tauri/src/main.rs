@@ -54,6 +54,7 @@ fn main() {
             std::fs::create_dir_all(dirs.data_dir())?;
             let engine = Arc::new(Engine::open(
                 dirs.data_dir(),
+                Some(&dirs.cache_dir().join("indicators")),
                 vec![Arc::new(Binance::default_hosts())],
             )?);
 

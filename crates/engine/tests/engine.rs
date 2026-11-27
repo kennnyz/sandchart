@@ -168,6 +168,7 @@ async fn fixture(symbols: &[&str]) -> Fixture {
     let (provider, live_tx) = FakeProvider::new(symbols.iter().map(|s| inst(s)).collect());
     let engine = Engine::open_with_clock(
         dir.path(),
+        None,
         vec![provider.clone() as Arc<dyn Provider>],
         Arc::new(|| NOW),
     )
@@ -507,7 +508,7 @@ async fn dropping_the_handle_stops_the_stream() {
 fn subscribe_outside_a_runtime_is_an_error() {
     let dir = tempfile::tempdir().unwrap();
     let (provider, _tx) = FakeProvider::new(vec![]);
-    let engine = Engine::open(dir.path(), vec![provider as Arc<dyn Provider>]).unwrap();
+    let engine = Engine::open(dir.path(), None, vec![provider as Arc<dyn Provider>]).unwrap();
     assert!(
         engine
             .subscribe_live(&id("BTCUSDT"), Timeframe::H1)
@@ -982,6 +983,7 @@ async fn starts_connecting_until_first_contact() {
     let (provider, _tx) = FakeProvider::new(vec![inst("BTCUSDT")]);
     let engine = Engine::open_with_clock(
         dir.path(),
+        None,
         vec![provider as Arc<dyn Provider>],
         Arc::new(|| NOW),
     )

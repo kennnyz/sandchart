@@ -6,6 +6,7 @@
 
 mod chart;
 mod csv_import;
+mod indicators;
 mod live;
 
 use std::collections::HashMap;
@@ -18,6 +19,10 @@ use sandchart_store::{Store, StoreError};
 use tokio::sync::watch;
 
 pub use chart::ChartPage;
+pub use indicators::{
+    Computed, IndicatorInfo, IndicatorStats, Inspection, Instance, InstanceResult,
+    MAX_INDICATOR_BARS,
+};
 pub use live::{ConnectionState, LiveEvent, LiveHandle};
 
 /// Candles per provider request and per chart page.
@@ -49,6 +54,8 @@ pub enum EngineError {
     Task(String),
     #[error("live updates need a running tokio runtime")]
     NoRuntime,
+    #[error("{0}")]
+    Indicator(String),
 }
 
 type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
@@ -68,12 +75,15 @@ pub(crate) struct Shared {
     pub store: Arc<Mutex<Store>>,
     connection: Arc<watch::Sender<ConnectionState>>,
     inputs: Arc<Mutex<ConnectionInputs>>,
+    /// Bars of the open chart for indicators; see `indicators.rs` for the lock order.
+    bars: Arc<Mutex<indicators::BarState>>,
 }
 
 pub struct Engine {
     shared: Shared,
     providers: HashMap<String, Arc<dyn Provider>>,
     clock: Clock,
+    indicators: indicators::Service,
 }
 
 /// Locks the store; a poisoned lock is safe to reuse because every store write is a transaction.
@@ -147,29 +157,39 @@ impl Shared {
 
 impl Engine {
     /// Opens `data_dir/sandchart.db` and registers the providers by their source name.
-    pub fn open(data_dir: &Path, providers: Vec<Arc<dyn Provider>>) -> Result<Engine, EngineError> {
-        Self::open_with_clock(data_dir, providers, Arc::new(system_now_ms))
+    /// Installed indicators live in `data_dir/indicators`; compiled modules are cached in
+    /// `cache_dir` when given. Returns at once: indicators load in the background.
+    pub fn open(
+        data_dir: &Path,
+        cache_dir: Option<&Path>,
+        providers: Vec<Arc<dyn Provider>>,
+    ) -> Result<Engine, EngineError> {
+        Self::open_with_clock(data_dir, cache_dir, providers, Arc::new(system_now_ms))
     }
 
     /// Like [`Engine::open`] with an explicit clock (milliseconds since the Unix epoch).
     pub fn open_with_clock(
         data_dir: &Path,
+        cache_dir: Option<&Path>,
         providers: Vec<Arc<dyn Provider>>,
         clock: Clock,
     ) -> Result<Engine, EngineError> {
-        let store = Store::open(&data_dir.join("sandchart.db"))?;
+        let store = Arc::new(Mutex::new(Store::open(&data_dir.join("sandchart.db"))?));
+        let indicators = indicators::Service::start(data_dir, cache_dir, Arc::clone(&store))?;
         let (connection, _) = watch::channel(ConnectionState::Connecting);
         Ok(Engine {
             shared: Shared {
-                store: Arc::new(Mutex::new(store)),
+                store,
                 connection: Arc::new(connection),
                 inputs: Arc::default(),
+                bars: Arc::default(),
             },
             providers: providers
                 .into_iter()
                 .map(|p| (p.source().to_owned(), p))
                 .collect(),
             clock,
+            indicators,
         })
     }
 

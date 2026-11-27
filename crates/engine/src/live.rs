@@ -195,6 +195,7 @@ async fn run(
                     {
                         continue;
                     }
+                    shared.live_bar(&inst, tf, &live.candle);
                 }
                 LiveEvent::Candle(live)
             }
@@ -235,13 +236,16 @@ async fn backfill(
             .collect()
     };
     let (id, to_store) = (inst.id.clone(), candles);
-    blocking(&shared.store, move |s| {
+    let written = blocking(&shared.store, move |s| {
         if reset {
             s.delete_series(&id, tf)?;
         }
         s.upsert_candles(&id, tf, &to_store)
     })
-    .await?;
+    .await;
+    // Dropped even on an error: the series may have been reset before it.
+    shared.drop_bars(&inst.id, tf);
+    written?;
     Ok(Fetched {
         candles: missed,
         reset,
