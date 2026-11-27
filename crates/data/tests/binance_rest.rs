@@ -197,6 +197,33 @@ async fn parses_day_changes() {
 }
 
 #[tokio::test]
+async fn malformed_ticker_rows_are_skipped() {
+    let server = MockServer::start().await;
+    let body = r#"[
+      { "symbol": "BTCUSDT", "priceChangePercent": "1.840", "lastPrice": "61791.77000000" },
+      { "symbol": "ETHUSDT", "priceChangePercent": "abc", "lastPrice": "3000.00" },
+      { "symbol": "SOLUSDT", "lastPrice": "150.00" },
+      { "symbol": "PEPEUSDT", "priceChangePercent": "-2.345", "lastPrice": "0.00001234" }
+    ]"#;
+    Mock::given(method("GET"))
+        .and(path("/api/v3/ticker/24hr"))
+        .respond_with(json(body))
+        .mount(&server)
+        .await;
+    let insts = [
+        instrument("BTCUSDT", 2, 5),
+        instrument("ETHUSDT", 2, 4),
+        instrument("SOLUSDT", 2, 3),
+        instrument("PEPEUSDT", 8, 0),
+    ];
+
+    let changes = provider(&server).day_changes(&insts).await.unwrap();
+
+    let symbols: Vec<_> = changes.iter().map(|c| c.id.symbol.as_str()).collect();
+    assert_eq!(symbols, ["BTCUSDT", "PEPEUSDT"]);
+}
+
+#[tokio::test]
 async fn day_changes_of_nothing_makes_no_request() {
     let server = MockServer::start().await;
     let changes = provider(&server).day_changes(&[]).await.unwrap();

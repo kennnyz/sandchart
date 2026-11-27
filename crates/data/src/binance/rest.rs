@@ -67,17 +67,25 @@ impl Binance {
         let symbols =
             serde_json::to_string(&symbols).map_err(|e| ProviderError::Parse(e.to_string()))?;
         let url = self.endpoint("api/v3/ticker/24hr")?;
-        let tickers: Vec<Ticker24h> = self
+        let rows: Vec<Value> = self
             .get_json(self.http.get(url).query(&[("symbols", symbols)]))
             .await?;
-        tickers
-            .into_iter()
-            .filter_map(|t| {
-                by_symbol
-                    .get(t.symbol())
-                    .map(|inst| t.into_day_change(inst))
-            })
-            .collect()
+        // One bad row must not cost the whole watchlist its quotes: skip it and say so.
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let parsed = serde_json::from_value::<Ticker24h>(row)
+                .map_err(|e| ProviderError::Parse(e.to_string()))
+                .and_then(|t| match by_symbol.get(t.symbol()) {
+                    Some(inst) => t.into_day_change(inst).map(Some),
+                    None => Ok(None),
+                });
+            match parsed {
+                Ok(Some(change)) => out.push(change),
+                Ok(None) => {}
+                Err(e) => eprintln!("warning: skipping a 24h ticker row: {e}"),
+            }
+        }
+        Ok(out)
     }
 
     fn endpoint(&self, path: &str) -> Result<url::Url, ProviderError> {
