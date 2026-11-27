@@ -178,6 +178,31 @@ fn returns_err_is_indicator_error() {
 }
 
 #[test]
+fn long_indicator_error_is_cut_at_1_kib() {
+    let params = [("long".to_string(), ParamValue::Boolean(true))];
+    match load("returns_err").compute(&params, &bars(&[1.0])) {
+        Err(RunError::Indicator(msg)) => {
+            assert!(
+                msg.len() <= 1024 + "[cut at 1 KiB]".len() + 1,
+                "{} bytes",
+                msg.len()
+            );
+            assert!(msg.starts_with("€€€"), "{msg}");
+            assert!(msg.ends_with("[cut at 1 KiB]"), "{msg}");
+        }
+        other => panic!("expected an indicator error, got {other:?}"),
+    }
+}
+
+#[test]
+fn oversized_meta_rejected() {
+    match runtime().load(&guest("oversized_meta")) {
+        Err(LoadError::BadMeta(msg)) => assert!(msg.contains("64 series"), "{msg}"),
+        other => panic!("expected BadMeta, got {:?}", other.err()),
+    }
+}
+
+#[test]
 fn reads_file_sees_no_files() {
     // The guest returns `io::Error::kind()`; with no preopened directory the
     // path does not exist for it.

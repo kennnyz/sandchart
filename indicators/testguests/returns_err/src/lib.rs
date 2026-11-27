@@ -1,7 +1,8 @@
-//! Test guest: returns an error from compute
+//! Test guest: returns an error from compute; with `long` set, one of 3000 bytes
 
 use sandchart_indicator::{
-    Candle, Indicator, Meta, Pane, ParamValue, SeriesKind, SeriesOut, SeriesSpec,
+    Candle, Indicator, Meta, Pane, ParamKind, ParamSpec, ParamValue, SeriesKind, SeriesOut,
+    SeriesSpec,
 };
 
 struct Guest;
@@ -13,7 +14,12 @@ impl Indicator for Guest {
             name: "test.returns_err".into(),
             version: "0.1.0".into(),
             description: "returns an error from compute".into(),
-            params: vec![],
+            params: vec![ParamSpec {
+                id: "long".into(),
+                label: "long".into(),
+                kind: ParamKind::Boolean,
+                default: ParamValue::Boolean(false),
+            }],
             series: vec![SeriesSpec {
                 id: "out".into(),
                 label: "out".into(),
@@ -25,11 +31,19 @@ impl Indicator for Guest {
     }
 
     fn compute(
-        _params: Vec<(String, ParamValue)>,
+        params: Vec<(String, ParamValue)>,
         candles: Vec<Candle>,
     ) -> Result<Vec<SeriesOut>, String> {
         let _ = candles;
-        Err("bad period".into())
+        let long = params
+            .iter()
+            .any(|(id, v)| id == "long" && matches!(v, ParamValue::Boolean(true)));
+        // '€' is 3 bytes, so a cut at 1 KiB falls inside a character.
+        Err(if long {
+            "€".repeat(1000)
+        } else {
+            "bad period".into()
+        })
     }
 }
 

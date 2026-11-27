@@ -301,6 +301,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "testguest-oversized-meta"
+version = "0.1.0"
+dependencies = [
+ "sandchart-indicator",
+]
+
+[[package]]
 name = "testguest-panics"
 version = "0.1.0"
 dependencies = [

@@ -36,6 +36,16 @@ const RANDOM_SEED: u64 = 0x5A4D_C4A7;
 /// The log returned in `Output` is cut to this size; the rest is dropped.
 const LOG_BYTES: usize = 16 * 1024;
 
+/// An error message returned by `compute` is cut to this size.
+const ERROR_BYTES: usize = 1024;
+
+/// Bytes the host may copy out of the guest in one call (wasmtime's hostcall
+/// fuel, which bounds what the host allocates for the returned lists and
+/// strings). The largest valid output is 100 000 bars x 64 series x 8 bytes,
+/// about 49 MiB; 64 MiB leaves room for markers, ids and the log. wasmtime's
+/// default is 128 MiB.
+const HOSTCALL_BYTES: usize = 64 * 1024 * 1024;
+
 /// WASI handles (streams, pollables) one call may hold in the host table.
 const MAX_HANDLES: usize = 10_000;
 
@@ -168,7 +178,7 @@ pub(crate) fn call_compute(
             fuel_used: limits.fuel - store.get_fuel().unwrap_or(0),
             log,
         }),
-        Ok(Err(msg)) => Err(RunError::Indicator(msg)),
+        Ok(Err(msg)) => Err(RunError::Indicator(cut_error(msg))),
         Err(e) => Err(run_error(e, &store, &log)),
     }
 }
@@ -178,6 +188,13 @@ fn run_error(e: wasmtime::Error, store: &Store<HostState>, log: &str) -> RunErro
     match e.downcast_ref::<Trap>() {
         Some(Trap::OutOfFuel) => return RunError::OutOfFuel,
         Some(Trap::Interrupt) => return RunError::Timeout,
+        Some(Trap::HostcallFuelExhausted) => {
+            return RunError::BadOutput(format!(
+                "the indicator returned more than {} MiB; return at most one value per bar \
+                 for each declared series",
+                HOSTCALL_BYTES / (1024 * 1024)
+            ));
+        }
         _ => {}
     }
     if store.data().limiter.refused {
@@ -200,6 +217,16 @@ fn run_error(e: wasmtime::Error, store: &Store<HostState>, log: &str) -> RunErro
         msg.push_str(&format!("\n{trace}"));
     }
     RunError::Trap(msg)
+}
+
+/// Keeps the first [`ERROR_BYTES`] of a guest's error message, cut at a
+/// character boundary.
+fn cut_error(mut msg: String) -> String {
+    if msg.len() > ERROR_BYTES {
+        msg.truncate(msg.floor_char_boundary(ERROR_BYTES));
+        msg.push_str("\n[cut at 1 KiB]");
+    }
+    msg
 }
 
 fn log_text(pipe: &LogPipe) -> String {
@@ -331,6 +358,7 @@ fn new_store(engine: &Engine, limits: &Limits) -> (Store<HostState>, LogPipe) {
     };
     let mut store = Store::new(engine, state);
     store.limiter(|s| &mut s.limiter);
+    store.set_hostcall_fuel(HOSTCALL_BYTES);
     store
         .set_fuel(limits.fuel)
         .expect("the engine is configured with consume_fuel");

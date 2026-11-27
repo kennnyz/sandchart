@@ -10,6 +10,45 @@ use crate::{Meta, Pane, ParamKind, SeriesData, SeriesKind, SeriesOut};
 /// The highest palette slot a series may use.
 const MAX_COLOR: u8 = 7;
 
+/// Caps on what a module declares and returns, so a module cannot make the host
+/// or the UI hold or draw unbounded text and lists.
+pub(crate) const MAX_PARAMS: usize = 64;
+pub(crate) const MAX_SERIES: usize = 64;
+const MAX_CHOICES: usize = 256;
+/// Ids, labels, choice options and marker text.
+const MAX_SHORT: usize = 64;
+const MAX_NAME: usize = 128;
+const MAX_DESCRIPTION: usize = 4096;
+/// The largest integer a JavaScript number holds exactly: the UI gets params as JSON.
+const SAFE_INT: std::ops::RangeInclusive<i64> = -((1 << 53) - 1)..=(1 << 53) - 1;
+
+fn short(what: &str, s: &str) -> Result<(), String> {
+    if s.len() > MAX_SHORT {
+        return Err(format!(
+            "{what} is {} bytes long; the limit is {MAX_SHORT} bytes",
+            s.len()
+        ));
+    }
+    Ok(())
+}
+
+/// A param or series id: `[a-z0-9_-]+`, at most 64 bytes.
+fn part_id(what: &str, id: &str) -> Result<(), String> {
+    if id.is_empty() {
+        return Err(format!("a {what} has an empty id"));
+    }
+    short(&format!("{what} id \"{id}\""), id)?;
+    if !id
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+    {
+        return Err(format!(
+            "{what} id \"{id}\" may only use lowercase letters, digits, '_' and '-'"
+        ));
+    }
+    Ok(())
+}
+
 /// Checks the rules of the contract for `meta`.
 pub(crate) fn meta(m: &Meta) -> Result<(), String> {
     if !valid_id(&m.id) {
@@ -19,8 +58,33 @@ pub(crate) fn meta(m: &Meta) -> Result<(), String> {
             m.id
         ));
     }
+    short(&format!("id \"{}\"", m.id), &m.id)?;
     if m.name.trim().is_empty() {
         return Err("name is empty".into());
+    }
+    if m.name.len() > MAX_NAME {
+        return Err(format!(
+            "name is {} bytes long; the limit is {MAX_NAME} bytes",
+            m.name.len()
+        ));
+    }
+    if m.description.len() > MAX_DESCRIPTION {
+        return Err(format!(
+            "description is {} bytes long; the limit is 4 KiB",
+            m.description.len()
+        ));
+    }
+    if m.params.len() > MAX_PARAMS {
+        return Err(format!(
+            "{} params declared; the limit is {MAX_PARAMS} params",
+            m.params.len()
+        ));
+    }
+    if m.series.len() > MAX_SERIES {
+        return Err(format!(
+            "{} series declared; the limit is {MAX_SERIES} series",
+            m.series.len()
+        ));
     }
     if let Err(e) = semver::Version::parse(&m.version) {
         return Err(format!(
@@ -31,15 +95,28 @@ pub(crate) fn meta(m: &Meta) -> Result<(), String> {
 
     let mut param_ids = HashSet::new();
     for p in &m.params {
-        if p.id.is_empty() {
-            return Err("a param has an empty id".into());
-        }
+        part_id("param", &p.id)?;
         if !param_ids.insert(p.id.as_str()) {
             return Err(format!("param id \"{}\" is used twice", p.id));
         }
+        short(&format!("the label of param \"{}\"", p.id), &p.label)?;
         match &p.kind {
             ParamKind::Int { min, max } if min > max => {
                 return Err(format!("param \"{}\" has min {min} above max {max}", p.id));
+            }
+            ParamKind::Int { min, max } if !SAFE_INT.contains(min) || !SAFE_INT.contains(max) => {
+                return Err(format!(
+                    "param \"{}\" has a range {min}..{max} outside ±(2^53 - 1), which the UI \
+                     cannot hold exactly",
+                    p.id
+                ));
+            }
+            ParamKind::Float { min, max } if !min.is_finite() || !max.is_finite() => {
+                return Err(format!(
+                    "param \"{}\" has a float range {min}..{max}; both bounds must be finite \
+                     numbers",
+                    p.id
+                ));
             }
             // `partial_cmp` is `None` when a bound is NaN.
             ParamKind::Float { min, max }
@@ -50,9 +127,7 @@ pub(crate) fn meta(m: &Meta) -> Result<(), String> {
                     p.id
                 ));
             }
-            ParamKind::Choice(options) if options.is_empty() => {
-                return Err(format!("choice param \"{}\" has no options", p.id));
-            }
+            ParamKind::Choice(options) => choices(&p.id, options)?,
             _ => {}
         }
         if !fits(&p.kind, &p.default) {
@@ -68,12 +143,11 @@ pub(crate) fn meta(m: &Meta) -> Result<(), String> {
     }
     let mut series_ids = HashSet::new();
     for s in &m.series {
-        if s.id.is_empty() {
-            return Err("a series has an empty id".into());
-        }
+        part_id("series", &s.id)?;
         if !series_ids.insert(s.id.as_str()) {
             return Err(format!("series id \"{}\" is used twice", s.id));
         }
+        short(&format!("the label of series \"{}\"", s.id), &s.label)?;
         if s.color > MAX_COLOR {
             return Err(format!(
                 "series \"{}\" has color {}; use a palette slot from 0 to {MAX_COLOR}",
@@ -91,6 +165,7 @@ pub(crate) fn meta(m: &Meta) -> Result<(), String> {
                 if a == b {
                     return Err(format!("band \"{}\" names \"{a}\" twice", s.id));
                 }
+                // A linear search per band: at most MAX_SERIES series, so this stays cheap.
                 for line in [a, b] {
                     let target = m.series.iter().find(|t| t.id == *line);
                     match target {
@@ -111,6 +186,31 @@ pub(crate) fn meta(m: &Meta) -> Result<(), String> {
                 }
             }
             _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn choices(param: &str, options: &[String]) -> Result<(), String> {
+    if options.is_empty() {
+        return Err(format!("choice param \"{param}\" has no options"));
+    }
+    if options.len() > MAX_CHOICES {
+        return Err(format!(
+            "choice param \"{param}\" has {} options; the limit is {MAX_CHOICES} options",
+            options.len()
+        ));
+    }
+    let mut seen = HashSet::new();
+    for o in options {
+        if o.is_empty() {
+            return Err(format!("choice param \"{param}\" has an empty option"));
+        }
+        short(&format!("an option of choice param \"{param}\""), o)?;
+        if !seen.insert(o.as_str()) {
+            return Err(format!(
+                "choice param \"{param}\" lists the option \"{o}\" twice"
+            ));
         }
     }
     Ok(())
@@ -183,6 +283,17 @@ pub(crate) fn output(
                         "series \"{}\" has a marker at bar {} of {count}",
                         s.id, bad.index
                     ));
+                }
+                for mk in markers.iter() {
+                    if let Some(text) = &mk.text {
+                        short(
+                            &format!(
+                                "the text of a marker at bar {} of series \"{}\"",
+                                mk.index, s.id
+                            ),
+                            text,
+                        )?;
+                    }
                 }
             }
             (SeriesKind::Markers, SeriesData::Values(_)) => {
@@ -294,6 +405,103 @@ mod tests {
             })
             .contains("NaN")
         );
+    }
+
+    #[test]
+    fn numbers_must_survive_json() {
+        let float = |min: f64, max: f64, default: f64| {
+            err(|m| {
+                m.params[0].kind = ParamKind::Float { min, max };
+                m.params[0].default = ParamValue::Float(default);
+            })
+        };
+        assert!(float(f64::NEG_INFINITY, 1.0, 0.5).contains("finite"));
+        assert!(float(0.0, f64::INFINITY, 0.5).contains("finite"));
+        assert!(float(0.0, f64::INFINITY, f64::INFINITY).contains("finite"));
+        let int = |min: i64, max: i64| {
+            err(|m| {
+                m.params[0].kind = ParamKind::Int { min, max };
+                m.params[0].default = ParamValue::Int(0);
+            })
+        };
+        assert!(int(-(1 << 53), 0).contains("2^53"));
+        assert!(int(0, 1 << 53).contains("2^53"));
+        assert!(int(i64::MIN, i64::MAX).contains("2^53"));
+        let mut m = base();
+        m.params[0].kind = ParamKind::Int {
+            min: -((1 << 53) - 1),
+            max: (1 << 53) - 1,
+        };
+        meta(&m).unwrap();
+    }
+
+    #[test]
+    fn sizes_are_capped() {
+        let long = |n: usize| "a".repeat(n);
+        assert!(err(|m| m.id = format!("me.{}", long(62))).contains("64 bytes"));
+        assert!(err(|m| m.name = long(129)).contains("128 bytes"));
+        assert!(err(|m| m.description = long(4097)).contains("4 KiB"));
+        assert!(err(|m| m.params[0].id = long(65)).contains("64 bytes"));
+        assert!(err(|m| m.params[0].label = long(65)).contains("64 bytes"));
+        assert!(err(|m| m.series[3].id = long(65)).contains("64 bytes"));
+        assert!(err(|m| m.series[3].label = long(65)).contains("64 bytes"));
+        assert!(err(|m| m.params[0].id = "Period".into()).contains("Period"));
+        assert!(err(|m| m.series[3].id = "h i".into()).contains("h i"));
+        assert!(
+            err(|m| {
+                let p = m.params[0].clone();
+                m.params = (0..65)
+                    .map(|i| ParamSpec {
+                        id: format!("p{i}"),
+                        ..p.clone()
+                    })
+                    .collect();
+            })
+            .contains("64 params")
+        );
+        assert!(
+            err(|m| {
+                m.series = (0..65)
+                    .map(|i| series(&format!("s{i}"), SeriesKind::Line, Pane::Own))
+                    .collect();
+            })
+            .contains("64 series")
+        );
+        let choice = |options: Vec<String>| {
+            err(|m| {
+                m.params[0].default = ParamValue::Choice(options[0].clone());
+                m.params[0].kind = ParamKind::Choice(options);
+            })
+        };
+        assert!(choice((0..257).map(|i| i.to_string()).collect()).contains("256 options"));
+        assert!(choice(vec!["a".into(), "a".into()]).contains("twice"));
+        assert!(choice(vec!["a".into(), String::new()]).contains("empty"));
+        assert!(choice(vec![long(65)]).contains("64 bytes"));
+
+        let mut m = base();
+        m.id = format!("me.{}", long(61));
+        m.name = long(128);
+        m.description = long(4096);
+        m.params[0].label = long(64);
+        meta(&m).unwrap();
+    }
+
+    #[test]
+    fn marker_text_is_capped() {
+        let mut out = good_output();
+        out[0].data = SeriesData::Markers(vec![Marker {
+            index: 0,
+            shape: MarkerShape::Up,
+            text: Some("x".repeat(65)),
+        }]);
+        assert!(output(&base(), out, 2).unwrap_err().contains("64 bytes"));
+        let mut out = good_output();
+        out[0].data = SeriesData::Markers(vec![Marker {
+            index: 0,
+            shape: MarkerShape::Up,
+            text: Some("x".repeat(64)),
+        }]);
+        output(&base(), out, 2).unwrap();
     }
 
     fn values(id: &str, v: Vec<f64>) -> SeriesOut {
