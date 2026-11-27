@@ -13,9 +13,12 @@ use tauri::State;
 use tauri::async_runtime::{JoinHandle, spawn, spawn_blocking};
 use tauri::ipc::Channel;
 
+use sandchart_indicators::MAX_MODULE_BYTES;
+
 use crate::dto::{
-    CandlesDto, DayChangeDto, InstrumentDto, InstrumentIdDto, LiveDto, ProblemDto, connection_name,
-    to_candles_dto, to_day_change_dto, to_live_dto,
+    CandlesDto, DayChangeDto, IndicatorInfoDto, InspectionDto, InstanceDto, InstanceResultDto,
+    InstrumentDto, InstrumentIdDto, LiveDto, ProblemDto, connection_name, to_candles_dto,
+    to_day_change_dto, to_live_dto,
 };
 
 /// Most results one search returns.
@@ -225,11 +228,101 @@ pub fn get_connection(state: State<'_, AppState>) -> &'static str {
     connection_name(*state.engine.connection().borrow())
 }
 
+fn check_module_size(bytes: &[u8]) -> CmdResult<()> {
+    if bytes.len() > MAX_MODULE_BYTES {
+        return Err(ProblemDto::other(format!(
+            "the indicator file is {} MiB; the limit is {} MiB",
+            bytes.len() / (1024 * 1024),
+            MAX_MODULE_BYTES / (1024 * 1024)
+        )));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn list_indicators(state: State<'_, AppState>) -> CmdResult<Vec<IndicatorInfoDto>> {
+    Ok(state
+        .engine
+        .indicators()
+        .await
+        .into_iter()
+        .map(Into::into)
+        .collect())
+}
+
+#[tauri::command]
+pub async fn inspect_indicator(
+    state: State<'_, AppState>,
+    bytes: Vec<u8>,
+) -> CmdResult<InspectionDto> {
+    check_module_size(&bytes)?;
+    Ok(state.engine.inspect_indicator(&bytes).await?.into())
+}
+
+#[tauri::command]
+pub async fn install_indicator(
+    state: State<'_, AppState>,
+    bytes: Vec<u8>,
+) -> CmdResult<IndicatorInfoDto> {
+    check_module_size(&bytes)?;
+    Ok(state.engine.install_indicator(bytes).await?.into())
+}
+
+#[tauri::command]
+pub async fn remove_indicator(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    Ok(state.engine.remove_indicator(&id).await?)
+}
+
+#[tauri::command]
+pub async fn get_chart_indicators(state: State<'_, AppState>) -> CmdResult<Vec<InstanceDto>> {
+    Ok(state
+        .engine
+        .chart_indicators()
+        .await?
+        .into_iter()
+        .map(Into::into)
+        .collect())
+}
+
+#[tauri::command]
+pub async fn set_chart_indicators(
+    state: State<'_, AppState>,
+    items: Vec<InstanceDto>,
+) -> CmdResult<()> {
+    Ok(state
+        .engine
+        .set_chart_indicators(items.into_iter().map(Into::into).collect())
+        .await?)
+}
+
+#[tauri::command]
+pub async fn compute_indicators(
+    state: State<'_, AppState>,
+    source: String,
+    symbol: String,
+    tf: String,
+    from_time: i64,
+) -> CmdResult<Vec<InstanceResultDto>> {
+    let id = InstrumentId { source, symbol };
+    let results = state
+        .engine
+        .compute_indicators(&id, timeframe(&tf)?, from_time)
+        .await?;
+    Ok(results.into_iter().map(Into::into).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
     use super::*;
+
+    #[test]
+    fn oversized_module_files_are_rejected_early() {
+        assert!(check_module_size(&[0; 16]).is_ok());
+        let err = check_module_size(&vec![0; MAX_MODULE_BYTES + 1]).unwrap_err();
+        assert!(err.message.contains("20 MiB"));
+    }
 
     #[test]
     fn finished_forwarder_removes_its_entry() {

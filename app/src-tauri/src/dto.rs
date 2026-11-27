@@ -3,8 +3,15 @@
 
 use sandchart_core::{Candle, Instrument, InstrumentId, JS_SAFE_MAX};
 use sandchart_data::{DayChange, ProviderError};
-use sandchart_engine::{ChartPage, ConnectionState, EngineError, LiveEvent};
+use sandchart_engine::{
+    ChartPage, Computed, ConnectionState, EngineError, IndicatorInfo, Inspection, Instance,
+    InstanceResult, LiveEvent,
+};
+use sandchart_indicators::{
+    Marker, Meta, ParamKind, ParamSpec, ParamValue, SeriesData, SeriesOut, SeriesSpec,
+};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum DtoError {
@@ -251,6 +258,207 @@ pub fn connection_name(state: ConnectionState) -> &'static str {
     }
 }
 
+// Indicators. The host types serialize `ParamKind` as `{ int: { min, max } }`; the UI
+// wants `{ int: [min, max] }`, so params get their own DTOs. Everything else reuses the
+// host's JSON (single-word field names, snake_case enums).
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParamKindDto {
+    Int((i64, i64)),
+    Float((f64, f64)),
+    Boolean,
+    Choice(Vec<String>),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ParamSpecDto {
+    pub id: String,
+    pub label: String,
+    pub kind: ParamKindDto,
+    pub default: ParamValue,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct MetaDto {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    pub params: Vec<ParamSpecDto>,
+    pub series: Vec<SeriesSpec>,
+}
+
+impl From<ParamSpec> for ParamSpecDto {
+    fn from(p: ParamSpec) -> Self {
+        let kind = match p.kind {
+            ParamKind::Int { min, max } => ParamKindDto::Int((min, max)),
+            ParamKind::Float { min, max } => ParamKindDto::Float((min, max)),
+            ParamKind::Boolean => ParamKindDto::Boolean,
+            ParamKind::Choice(options) => ParamKindDto::Choice(options),
+        };
+        Self {
+            id: p.id,
+            label: p.label,
+            kind,
+            default: p.default,
+        }
+    }
+}
+
+impl From<Meta> for MetaDto {
+    fn from(m: Meta) -> Self {
+        Self {
+            id: m.id,
+            name: m.name,
+            version: m.version,
+            description: m.description,
+            params: m.params.into_iter().map(Into::into).collect(),
+            series: m.series,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndicatorInfoDto {
+    pub meta: MetaDto,
+    pub builtin: bool,
+    pub repaints: bool,
+}
+
+impl From<IndicatorInfo> for IndicatorInfoDto {
+    fn from(i: IndicatorInfo) -> Self {
+        Self {
+            meta: i.meta.into(),
+            builtin: i.builtin,
+            repaints: i.repaints,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InspectionDto {
+    pub meta: MetaDto,
+    pub replaces: Option<String>,
+}
+
+impl From<Inspection> for InspectionDto {
+    fn from(i: Inspection) -> Self {
+        Self {
+            meta: i.meta.into(),
+            replaces: i.replaces,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstanceDto {
+    pub instance: String,
+    pub module_id: String,
+    pub params: Vec<(String, ParamValue)>,
+    pub colors: HashMap<String, u8>,
+    pub hidden: bool,
+}
+
+impl From<Instance> for InstanceDto {
+    fn from(i: Instance) -> Self {
+        Self {
+            instance: i.instance,
+            module_id: i.module_id,
+            params: i.params,
+            colors: i.colors,
+            hidden: i.hidden,
+        }
+    }
+}
+
+impl From<InstanceDto> for Instance {
+    fn from(i: InstanceDto) -> Self {
+        Self {
+            instance: i.instance,
+            module_id: i.module_id,
+            params: i.params,
+            colors: i.colors,
+            hidden: i.hidden,
+        }
+    }
+}
+
+/// Values use `null` for a gap: JSON has no NaN. The UI turns `null` back into NaN.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SeriesDataDto {
+    Values(Vec<Option<f64>>),
+    Markers(Vec<Marker>),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SeriesOutDto {
+    pub id: String,
+    pub data: SeriesDataDto,
+}
+
+impl From<SeriesOut> for SeriesOutDto {
+    fn from(s: SeriesOut) -> Self {
+        let data = match s.data {
+            SeriesData::Values(v) => {
+                SeriesDataDto::Values(v.into_iter().map(|x| x.is_finite().then_some(x)).collect())
+            }
+            SeriesData::Markers(m) => SeriesDataDto::Markers(m),
+        };
+        Self { id: s.id, data }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputedDto {
+    pub first_time: i64,
+    pub last_time: i64,
+    pub series: Vec<SeriesOutDto>,
+    pub log: String,
+}
+
+impl From<Computed> for ComputedDto {
+    fn from(c: Computed) -> Self {
+        Self {
+            first_time: c.first_time,
+            last_time: c.last_time,
+            series: c.series.into_iter().map(Into::into).collect(),
+            log: c.log,
+        }
+    }
+}
+
+/// `{ ok: ... }` or `{ err: "..." }`; serde's own `Result` shape is `Ok`/`Err`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ComputeOutcomeDto {
+    Ok(ComputedDto),
+    Err(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct InstanceResultDto {
+    pub instance: String,
+    pub result: ComputeOutcomeDto,
+}
+
+impl From<InstanceResult> for InstanceResultDto {
+    fn from(r: InstanceResult) -> Self {
+        Self {
+            instance: r.instance,
+            result: match r.result {
+                Ok(c) => ComputeOutcomeDto::Ok(c.into()),
+                Err(e) => ComputeOutcomeDto::Err(e),
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -359,5 +567,116 @@ mod tests {
         let err = to_candles_dto(page(vec![candle(0, -JS_SAFE_MAX - 1)])).unwrap_err();
         assert!(matches!(err, DtoError::UnsafeTicks));
         assert!(to_candles_dto(page(vec![candle(0, JS_SAFE_MAX)])).is_ok());
+    }
+
+    #[test]
+    fn computed_values_map_nan_to_null_and_errors_to_err() {
+        use sandchart_engine::{Computed, InstanceResult};
+        use sandchart_indicators::{SeriesData, SeriesOut};
+        let ok = InstanceResult {
+            instance: "a".into(),
+            result: Ok(Computed {
+                first_time: 10,
+                last_time: 30,
+                series: vec![SeriesOut {
+                    id: "sma".into(),
+                    data: SeriesData::Values(vec![f64::NAN, 1.5, f64::INFINITY]),
+                }],
+                log: String::new(),
+            }),
+        };
+        let json = serde_json::to_value(InstanceResultDto::from(ok)).unwrap();
+        assert_eq!(json["instance"], "a");
+        assert_eq!(json["result"]["ok"]["firstTime"], 10);
+        let values = &json["result"]["ok"]["series"][0]["data"]["values"];
+        assert_eq!(values, &serde_json::json!([null, 1.5, null]));
+
+        let err = InstanceResult {
+            instance: "b".into(),
+            result: Err("out of fuel".into()),
+        };
+        let json = serde_json::to_value(InstanceResultDto::from(err)).unwrap();
+        assert_eq!(json["result"], serde_json::json!({ "err": "out of fuel" }));
+    }
+
+    #[test]
+    fn meta_json_matches_the_ui_types() {
+        use sandchart_indicators::{Meta, ParamKind, ParamSpec, ParamValue, SeriesSpec};
+        use sandchart_indicators::{Pane, SeriesKind};
+        let meta = Meta {
+            id: "builtin.x".into(),
+            name: "X".into(),
+            version: "0.2.0".into(),
+            description: "d".into(),
+            params: vec![
+                ParamSpec {
+                    id: "n".into(),
+                    label: "N".into(),
+                    kind: ParamKind::Int { min: 1, max: 9 },
+                    default: ParamValue::Int(3),
+                },
+                ParamSpec {
+                    id: "m".into(),
+                    label: "M".into(),
+                    kind: ParamKind::Float { min: 0.5, max: 2.0 },
+                    default: ParamValue::Float(1.0),
+                },
+                ParamSpec {
+                    id: "s".into(),
+                    label: "S".into(),
+                    kind: ParamKind::Choice(vec!["close".into(), "open".into()]),
+                    default: ParamValue::Choice("close".into()),
+                },
+            ],
+            series: vec![SeriesSpec {
+                id: "f".into(),
+                label: "F".into(),
+                kind: SeriesKind::Band("a".into(), "b".into()),
+                pane: Pane::Own,
+                color: 3,
+            }],
+        };
+        let json = serde_json::to_value(MetaDto::from(meta)).unwrap();
+        assert_eq!(
+            json["params"][0]["kind"],
+            serde_json::json!({ "int": [1, 9] })
+        );
+        assert_eq!(
+            json["params"][0]["default"],
+            serde_json::json!({ "int": 3 })
+        );
+        assert_eq!(
+            json["params"][1]["kind"],
+            serde_json::json!({ "float": [0.5, 2.0] })
+        );
+        assert_eq!(
+            json["params"][2]["kind"],
+            serde_json::json!({ "choice": ["close", "open"] })
+        );
+        assert_eq!(
+            json["series"][0]["kind"],
+            serde_json::json!({ "band": ["a", "b"] })
+        );
+        assert_eq!(json["series"][0]["pane"], "own");
+    }
+
+    #[test]
+    fn instance_dto_is_camel_case_and_round_trips() {
+        let json = serde_json::json!({
+            "instance": "i1", "moduleId": "builtin.sma",
+            "params": [["period", { "int": 20 }]],
+            "colors": { "sma": 2 }, "hidden": false
+        });
+        let dto: InstanceDto = serde_json::from_value(json.clone()).unwrap();
+        let inst = sandchart_engine::Instance::from(dto);
+        assert_eq!(inst.module_id, "builtin.sma");
+        assert_eq!(serde_json::to_value(InstanceDto::from(inst)).unwrap(), json);
+    }
+
+    #[test]
+    fn indicator_errors_are_problems_with_their_message() {
+        let p = ProblemDto::from(EngineError::Indicator("module is too big".into()));
+        assert_eq!(p.code, ProblemCode::Other);
+        assert!(p.message.contains("module is too big"));
     }
 }

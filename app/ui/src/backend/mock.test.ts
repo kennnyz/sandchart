@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createMockBackend } from "./mock";
+import { createMockBackend, mockSma } from "./mock";
+import type { IndicatorInstance, IndicatorResult } from "./types";
 
 const id = { source: "mock", symbol: "BTCUSDT" };
 
@@ -88,5 +89,81 @@ describe("mock backend", () => {
     expect(synced).toBe(1);
     expect(await b.instrumentsReady()).toBe(true);
     expect((await b.searchInstruments("BTC")).map((i) => i.id.symbol)).toContain("BTCUSDT");
+  });
+
+  describe("indicators", () => {
+    const inst = (moduleId: string, params: IndicatorInstance["params"] = []): IndicatorInstance => ({
+      instance: `i-${moduleId}`,
+      moduleId,
+      params,
+      colors: {},
+      hidden: false,
+    });
+    const ok = (r: IndicatorResult) => {
+      if (!("ok" in r.result)) throw new Error(r.result.err);
+      return r.result.ok;
+    };
+    const values = (r: IndicatorResult, series: string) => {
+      const d = ok(r).series.find((s) => s.id === series)!.data;
+      if (!("values" in d)) throw new Error("not values");
+      return d.values;
+    };
+
+    it("sma 2 over [1, 2, 3] is [NaN, 1.5, 2.5]", () => {
+      expect(Array.from(mockSma([1, 2, 3], 2))).toEqual([NaN, 1.5, 2.5]);
+    });
+
+    it("computes the sma of the closes in price units", async () => {
+      const b = createMockBackend({ candles: 300 });
+      await b.setChartIndicators([inst("builtin.sma", [["period", { int: 2 }]])]);
+      const page = await b.getCandles(id, "1h");
+      const [r] = await b.computeIndicators(id, "1h", page.time[0]!);
+      const v = values(r!, "sma");
+      const closes = page.close.map((c) => c / 100);
+      expect(v).toHaveLength(page.time.length);
+      expect(v[0]).toBeNaN();
+      expect(v[5]).toBeCloseTo((closes[4]! + closes[5]!) / 2, 9);
+      expect(ok(r!).firstTime).toBe(page.time[0]);
+      expect(ok(r!).lastTime).toBe(page.time.at(-1));
+    });
+
+    it("lists the built-ins and cuts results at fromTime", async () => {
+      const b = createMockBackend({ candles: 300, indicators: ["sma", "bollinger", "rsi", "macd"] });
+      const list = await b.listIndicators();
+      expect(list.filter((i) => i.builtin).map((i) => i.meta.id)).toEqual(
+        expect.arrayContaining(["builtin.sma", "builtin.bollinger", "builtin.rsi", "builtin.macd"]),
+      );
+      expect((await b.getChartIndicators()).map((i) => i.instance)).toEqual([
+        "mock-sma", "mock-bollinger", "mock-rsi", "mock-macd",
+      ]);
+      const page = await b.getCandles(id, "1h");
+      const from = page.time[250]!;
+      const results = await b.computeIndicators(id, "1h", from);
+      expect(results).toHaveLength(4);
+      for (const r of results) expect(ok(r).firstTime).toBe(from);
+      const bb = results[1]!;
+      expect(values(bb, "fill")).toHaveLength(0);
+      expect(values(bb, "upper")[0]).toBeGreaterThan(values(bb, "lower")[0]!);
+    });
+
+    it("answers with an error when mockIndicatorError is set", async () => {
+      const b = createMockBackend({ candles: 300, indicators: ["sma"], indicatorError: true });
+      const [r] = await b.computeIndicators(id, "1h", 0);
+      expect(r!.result).toEqual({ err: "mock: out of fuel" });
+    });
+
+    it("installs any bytes as test.echo and removes it with its instances", async () => {
+      const b = createMockBackend({ candles: 300 });
+      const checked = await b.inspectIndicator(new Uint8Array([1]));
+      expect(checked.meta.id).toBe("test.echo");
+      expect(checked.replaces).toBeNull();
+      const info = await b.installIndicator(new Uint8Array([1]));
+      expect(info.repaints).toBe(true);
+      expect((await b.inspectIndicator(new Uint8Array([1]))).replaces).toBe(info.meta.version);
+      await b.setChartIndicators([inst("test.echo")]);
+      await b.removeIndicator("test.echo");
+      expect(await b.getChartIndicators()).toEqual([]);
+      await expect(b.removeIndicator("builtin.sma")).rejects.toThrow();
+    });
   });
 });

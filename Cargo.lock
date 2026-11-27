@@ -3577,6 +3577,7 @@ dependencies = [
  "sandchart-core",
  "sandchart-data",
  "sandchart-engine",
+ "sandchart-indicators",
  "serde",
  "serde_json",
  "tauri",

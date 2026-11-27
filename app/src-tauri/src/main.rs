@@ -101,6 +101,13 @@ fn main() {
             commands::import_csv,
             commands::get_connection,
             commands::get_instruments_ready,
+            commands::list_indicators,
+            commands::inspect_indicator,
+            commands::install_indicator,
+            commands::remove_indicator,
+            commands::get_chart_indicators,
+            commands::set_chart_indicators,
+            commands::compute_indicators,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Sandchart");
