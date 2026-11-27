@@ -91,7 +91,12 @@ export function App() {
       }
       // Listen first, then look: a sync that ends in between is still seen.
       const unlisten = await backend.onInstrumentsSynced(() => {
-        void pickDefault().then(() => alive && setWaitingDefault(false));
+        pickDefault()
+          .then(() => alive && setWaitingDefault(false))
+          .catch((e: unknown) => {
+            console.error("loading the watchlist failed", e);
+            if (alive) setWaitingDefault(false);
+          });
       });
       if (!alive) return unlisten();
       stop = unlisten;
