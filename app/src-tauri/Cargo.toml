@@ -22,7 +22,7 @@ serde_json = "1"
 thiserror.workspace = true
 tauri = { version = "2", features = [] }
 # Pinned to the minor: `configure_client` hands us its reqwest builder, which may change in a minor.
-tauri-plugin-updater = "2.14"
+tauri-plugin-updater = "~2.14"
 # Already in the tree through the updater (same 0.13); names the builder for the timeouts.
 reqwest = { version = "0.13", default-features = false }
 # Already in the tree through the updater; formats the release date as RFC 3339.

@@ -62,8 +62,8 @@ The Tauri CLI must run with `app/` as the current directory; the `tauri` script 
 
 A release is a `vX.Y.Z` tag. The workflow `.github/workflows/release.yml` builds the four bundles, signs the updater files, writes `latest.json` and `SHA256SUMS`, and creates a **draft** release. See [ADR 0003](docs/adr/0003-self-update.md) for why.
 
-- **Secrets.** `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` are repository secrets used only by the tauri-action step of the build job. The public key is in `plugins.updater.pubkey` in `app/src-tauri/tauri.conf.json`. The private key and its password live in the owner's password manager; never put them in the repo, a log or a chat.
-- **`app/src-tauri/tauri.release.conf.json`** holds `bundle.createUpdaterArtifacts: true` and is passed with `--config` by the release workflow only. A local `tauri build` does not need the key.
+- **Secrets.** `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` are repository secrets set in the environment of the tauri-action step of the build job. That step runs `tauri build`, which would also run `beforeBuildCommand` (npm, Vite) with the secrets in its environment, so the release config clears `beforeBuildCommand`; the UI is built in an earlier step without them. The public key is in `plugins.updater.pubkey` in `app/src-tauri/tauri.conf.json`. The private key and its password live in the owner's password manager; never put them in the repo, a log or a chat.
+- **`app/src-tauri/tauri.release.conf.json`** holds `bundle.createUpdaterArtifacts: true` and an empty `build.beforeBuildCommand`, and is passed with `--config` by the release workflow only. A local `tauri build` does not need the key.
 - **`scripts/check-version.sh [expected]`** checks that the version is the same in the workspace `Cargo.toml`, `app/src-tauri/tauri.conf.json` and `app/ui/package.json`, and with an argument that it equals it. CI runs it without an argument, the release workflow with the tag minus `v`. Bump all three together.
 - **`scripts/updater_manifest.py`** writes `latest.json` from the release files. It exits 1 and writes nothing unless all four platforms (`darwin-aarch64`, `darwin-x86_64`, `windows-x86_64`, `linux-x86_64`) have exactly one file and a non-empty `.sig`. Tests: `python3 -m unittest discover -s scripts -p 'test_*.py'` (CI runs them).
 
@@ -74,6 +74,8 @@ Checklist:
 3. Wait for the workflow to finish. It leaves a draft release.
 4. Open the draft and check that `latest.json` lists the four platforms, each with a `url` and a `signature`.
 5. Publish it as the latest release, not as a pre-release. Installed apps see the update only after this step: `releases/latest` ignores drafts and pre-releases.
+
+If the workflow fails, delete the tag and any draft release, fix the problem, and push the same tag again. Nothing was published. Optional check before tagging that the key and its password work: `echo test > /tmp/x && node app/ui/node_modules/@tauri-apps/cli/tauri.js signer sign -f <key file> -p <password> /tmp/x` (run it from `app/`, with the key kept outside the repo).
 
 ## Add a data provider
 
