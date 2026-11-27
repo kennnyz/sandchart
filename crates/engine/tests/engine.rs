@@ -379,7 +379,10 @@ async fn backfills_after_reconnect() {
     assert_eq!(next_event(&mut handle).await, LiveEvent::Disconnected);
     assert_eq!(
         next_event(&mut handle).await,
-        LiveEvent::Backfilled(vec![candle(2), candle(1)])
+        LiveEvent::Backfilled {
+            candles: vec![candle(2), candle(1)],
+            reset: false
+        }
     );
     assert_eq!(
         next_event(&mut handle).await,
@@ -416,7 +419,10 @@ async fn consecutive_errors_backfill_once() {
     assert_eq!(next_event(&mut handle).await, LiveEvent::Disconnected);
     assert_eq!(
         next_event(&mut handle).await,
-        LiveEvent::Backfilled(vec![candle(1)])
+        LiveEvent::Backfilled {
+            candles: vec![candle(1)],
+            reset: false
+        }
     );
     assert_eq!(
         next_event(&mut handle).await,
@@ -425,8 +431,8 @@ async fn consecutive_errors_backfill_once() {
     assert_eq!(f.provider.history_calls().len(), 1);
 }
 
-#[tokio::test]
-async fn failed_backfill_is_retried_on_the_next_message() {
+#[tokio::test(start_paused = true)]
+async fn failed_backfill_is_retried_after_a_delay() {
     let f = fixture(&["BTCUSDT"]).await;
     let mut handle = f
         .engine
@@ -435,23 +441,27 @@ async fn failed_backfill_is_retried_on_the_next_message() {
     f.provider.push_page(Err(net()));
     f.provider.push_page(Ok(vec![candle(1)]));
 
-    f.live_tx.send(live(2, true)).unwrap();
-    f.live_tx.send(Err(net())).unwrap();
-    f.live_tx.send(live(0, false)).unwrap(); // backfill fails here
-    f.live_tx.send(live(0, false)).unwrap(); // and succeeds here
-
     assert_eq!(
-        next_event(&mut handle).await,
+        send(&f, &mut handle, live(2, true)).await,
         LiveEvent::Candle(live(2, true).unwrap())
     );
-    assert_eq!(next_event(&mut handle).await, LiveEvent::Disconnected);
     assert_eq!(
-        next_event(&mut handle).await,
+        send(&f, &mut handle, Err(net())).await,
+        LiveEvent::Disconnected
+    );
+    // The backfill fails here, so only the candle comes through.
+    assert_eq!(
+        send(&f, &mut handle, live(0, false)).await,
         LiveEvent::Candle(live(0, false).unwrap())
     );
+    tokio::time::advance(Duration::from_secs(1)).await;
+    f.live_tx.send(live(0, false)).unwrap();
     assert_eq!(
         next_event(&mut handle).await,
-        LiveEvent::Backfilled(vec![candle(1)])
+        LiveEvent::Backfilled {
+            candles: vec![candle(1)],
+            reset: false
+        }
     );
     assert_eq!(
         next_event(&mut handle).await,
@@ -826,7 +836,10 @@ async fn backfill_past_cap_resets_series() {
     f.live_tx.send(live(0, true)).unwrap();
     assert_eq!(next_event(&mut handle).await, LiveEvent::Disconnected);
     match next_event(&mut handle).await {
-        LiveEvent::Backfilled(c) => assert_eq!(c.len(), 10_000),
+        LiveEvent::Backfilled { candles, reset } => {
+            assert_eq!(candles.len(), 10_000);
+            assert!(reset);
+        }
         other => panic!("expected Backfilled, got {other:?}"),
     }
     next_event(&mut handle).await;
@@ -842,4 +855,138 @@ async fn backfill_past_cap_resets_series() {
         store.history_start(&id("BTCUSDT"), Timeframe::H1).unwrap(),
         None
     );
+}
+
+/// Sends `item` and waits for the event it produces.
+async fn send(f: &Fixture, handle: &mut LiveHandle, item: LiveItem) -> LiveEvent {
+    f.live_tx.send(item).unwrap();
+    next_event(handle).await
+}
+
+#[tokio::test]
+async fn backfill_resends_the_candle_that_was_forming() {
+    let f = fixture(&["BTCUSDT"]).await;
+    // The newest page from REST ends with candle 1 still forming.
+    let forming = Candle {
+        close: 1,
+        ..candle(1)
+    };
+    f.provider.push_page(Ok(vec![candle(2), forming]));
+    f.engine
+        .load_chart(&id("BTCUSDT"), Timeframe::H1, None)
+        .await
+        .unwrap();
+    let mut handle = f
+        .engine
+        .subscribe_live(&id("BTCUSDT"), Timeframe::H1)
+        .unwrap();
+    f.provider
+        .push_page(Ok(vec![candle(2), candle(1), candle(0)]));
+
+    assert_eq!(
+        send(&f, &mut handle, Err(net())).await,
+        LiveEvent::Disconnected
+    );
+    f.live_tx.send(live(0, false)).unwrap();
+    match next_event(&mut handle).await {
+        LiveEvent::Backfilled { candles, reset } => {
+            assert_eq!(
+                candles,
+                vec![candle(1), candle(0)],
+                "the final candle 1 is sent"
+            );
+            assert!(!reset);
+        }
+        other => panic!("expected Backfilled, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn live_message_clears_offline() {
+    let f = fixture(&["BTCUSDT"]).await;
+    f.provider.push_page(Err(net()));
+    assert!(
+        f.engine
+            .load_chart(&id("BTCUSDT"), Timeframe::H1, None)
+            .await
+            .is_err()
+    );
+    let state = f.engine.connection();
+    assert_eq!(*state.borrow(), ConnectionState::Offline);
+
+    let mut handle = f
+        .engine
+        .subscribe_live(&id("BTCUSDT"), Timeframe::H1)
+        .unwrap();
+    send(&f, &mut handle, live(0, false)).await;
+    assert_eq!(*state.borrow(), ConnectionState::Connected);
+}
+
+#[tokio::test(start_paused = true)]
+async fn failed_backfill_backs_off_exponentially() {
+    let f = fixture(&["BTCUSDT"]).await;
+    let mut handle = f
+        .engine
+        .subscribe_live(&id("BTCUSDT"), Timeframe::H1)
+        .unwrap();
+    send(&f, &mut handle, live(3, true)).await;
+    send(&f, &mut handle, Err(net())).await;
+    for _ in 0..10 {
+        f.provider.push_page(Err(net()));
+    }
+
+    // Attempts at 0, 1, 3, 7, 15, 31, 61 s: the delays 1, 2, 4, 8, 16, 30, 30 s.
+    let mut attempts_at = Vec::new();
+    for second in 0..=61 {
+        let before = f.provider.history_calls().len();
+        send(&f, &mut handle, live(0, false)).await;
+        if f.provider.history_calls().len() > before {
+            attempts_at.push(second);
+        }
+        tokio::time::advance(Duration::from_secs(1)).await;
+    }
+    assert_eq!(attempts_at, vec![0, 1, 3, 7, 15, 31, 61]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn rate_limited_backfill_waits_for_retry_after() {
+    let f = fixture(&["BTCUSDT"]).await;
+    let mut handle = f
+        .engine
+        .subscribe_live(&id("BTCUSDT"), Timeframe::H1)
+        .unwrap();
+    send(&f, &mut handle, live(3, true)).await;
+    send(&f, &mut handle, Err(net())).await;
+    f.provider
+        .push_page(Err(ProviderError::RateLimited { retry_after_s: 90 }));
+    f.provider.push_page(Ok(vec![candle(2), candle(1)]));
+
+    send(&f, &mut handle, live(0, false)).await;
+    assert_eq!(f.provider.history_calls().len(), 1);
+    tokio::time::advance(Duration::from_secs(89)).await;
+    send(&f, &mut handle, live(0, false)).await;
+    assert_eq!(f.provider.history_calls().len(), 1, "too early");
+
+    tokio::time::advance(Duration::from_secs(1)).await;
+    f.live_tx.send(live(0, false)).unwrap();
+    assert!(matches!(
+        next_event(&mut handle).await,
+        LiveEvent::Backfilled { .. }
+    ));
+    assert_eq!(f.provider.history_calls().len(), 2);
+}
+
+#[tokio::test]
+async fn starts_connecting_until_first_contact() {
+    let dir = tempfile::tempdir().unwrap();
+    let (provider, _tx) = FakeProvider::new(vec![inst("BTCUSDT")]);
+    let engine = Engine::open_with_clock(
+        dir.path(),
+        vec![provider as Arc<dyn Provider>],
+        Arc::new(|| NOW),
+    )
+    .unwrap();
+    assert_eq!(*engine.connection().borrow(), ConnectionState::Connecting);
+    engine.sync_instruments("fake").await.unwrap();
+    assert_eq!(*engine.connection().borrow(), ConnectionState::Connected);
 }

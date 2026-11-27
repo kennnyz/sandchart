@@ -53,11 +53,13 @@ pub enum EngineError {
 
 type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
 
-/// What decides the connection state: streams with an unfilled gap, and failed REST calls.
+/// What decides the connection state: streams with an unfilled gap, failed REST calls,
+/// and whether anything has answered yet.
 #[derive(Default)]
 struct ConnectionInputs {
     gaps: usize,
     offline: bool,
+    contacted: bool,
 }
 
 /// Shared pieces the background live tasks need as well.
@@ -101,6 +103,8 @@ impl Shared {
             ConnectionState::Offline
         } else if inputs.gaps > 0 {
             ConnectionState::Reconnecting
+        } else if !inputs.contacted {
+            ConnectionState::Connecting
         } else {
             ConnectionState::Connected
         };
@@ -111,19 +115,25 @@ impl Shared {
         });
     }
 
-    /// Reflects a failed provider call in the connection state.
+    /// Reflects a failed provider call in the connection state. Any other error than a
+    /// network one is an answer from the exchange, so it counts as contact.
     pub(crate) fn note_error(&self, err: &ProviderError) {
         if matches!(
             err,
             ProviderError::Network(_) | ProviderError::Blocked { .. }
         ) {
             self.update(|i| i.offline = true);
+        } else {
+            self.update(|i| i.contacted = true);
         }
     }
 
-    /// A successful REST call proves the network is back.
+    /// A successful REST call or live message proves the network is up.
     pub(crate) fn note_ok(&self) {
-        self.update(|i| i.offline = false);
+        self.update(|i| {
+            i.offline = false;
+            i.contacted = true;
+        });
     }
 
     pub(crate) fn gap_opened(&self) {
@@ -148,7 +158,7 @@ impl Engine {
         clock: Clock,
     ) -> Result<Engine, EngineError> {
         let store = Store::open(&data_dir.join("sandchart.db"))?;
-        let (connection, _) = watch::channel(ConnectionState::Connected);
+        let (connection, _) = watch::channel(ConnectionState::Connecting);
         Ok(Engine {
             shared: Shared {
                 store: Arc::new(Mutex::new(store)),

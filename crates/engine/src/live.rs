@@ -1,21 +1,28 @@
 //! Live candle subscription with gap backfill after reconnects.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures::StreamExt;
 use sandchart_core::{Candle, Instrument, InstrumentId, Timeframe};
-use sandchart_data::{LiveCandle, Provider};
+use sandchart_data::{LiveCandle, Provider, ProviderError};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
 
 use crate::chart::{Fetched, fetch_catch_up};
 use crate::{Engine, EngineError, Shared, blocking};
 
 const EVENT_BUFFER: usize = 256;
 
+/// Longest wait between two failed backfill attempts (unless the exchange asks for more).
+const MAX_BACKFILL_DELAY: Duration = Duration::from_secs(30);
+
 /// Health of the connection to the data sources.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectionState {
+    /// Nothing has answered yet since the engine started.
+    Connecting,
     Connected,
     Reconnecting,
     Offline,
@@ -25,8 +32,9 @@ pub enum ConnectionState {
 pub enum LiveEvent {
     /// A candle update; closed ones are already stored.
     Candle(LiveCandle),
-    /// Candles missed while the stream was down, ascending and already stored.
-    Backfilled(Vec<Candle>),
+    /// Candles missed while the stream was down, ascending and already stored. With
+    /// `reset` the cached series was replaced, so these candles replace the chart.
+    Backfilled { candles: Vec<Candle>, reset: bool },
     /// The stream reported an error; the provider reconnects by itself.
     Disconnected,
 }
@@ -103,6 +111,31 @@ impl Drop for GapGuard {
     }
 }
 
+/// When the next backfill attempt may run: 1, 2, 4 ... 30 s after consecutive failures,
+/// or the exchange's `Retry-After` when it rate-limits us.
+#[derive(Default)]
+struct Backoff {
+    failures: u32,
+    next: Option<Instant>,
+}
+
+impl Backoff {
+    fn due(&self) -> bool {
+        self.next.is_none_or(|t| Instant::now() >= t)
+    }
+
+    fn failed(&mut self, err: &EngineError) {
+        let delay = match err {
+            EngineError::Provider(ProviderError::RateLimited { retry_after_s }) => {
+                Duration::from_secs(*retry_after_s)
+            }
+            _ => Duration::from_secs(1 << self.failures.min(5)).min(MAX_BACKFILL_DELAY),
+        };
+        self.failures = self.failures.saturating_add(1);
+        self.next = Some(Instant::now() + delay);
+    }
+}
+
 async fn run(
     shared: Shared,
     provider: Arc<dyn Provider>,
@@ -115,6 +148,7 @@ async fn run(
         shared: shared.clone(),
         open: false,
     };
+    let mut backoff = Backoff::default();
     while let Some(item) = stream.next().await {
         let event = match item {
             Err(_) => {
@@ -125,20 +159,33 @@ async fn run(
                 LiveEvent::Disconnected
             }
             Ok(live) => {
-                if gap.open {
+                if gap.open && backoff.due() {
                     match backfill(&shared, provider.as_ref(), &inst, tf).await {
-                        Ok(missed) => {
+                        Ok(Fetched { candles, reset }) => {
                             gap.close();
-                            if !missed.is_empty()
-                                && tx.send(LiveEvent::Backfilled(missed)).await.is_err()
+                            backoff = Backoff::default();
+                            if !candles.is_empty()
+                                && tx
+                                    .send(LiveEvent::Backfilled { candles, reset })
+                                    .await
+                                    .is_err()
                             {
                                 return;
                             }
                         }
-                        // Keep the gap open so the next good message retries.
-                        Err(EngineError::Provider(e)) => shared.note_error(&e),
-                        Err(_) => {}
+                        // Keep the gap open; a good message after the delay retries.
+                        Err(e) => {
+                            if let EngineError::Provider(p) = &e {
+                                shared.note_error(p);
+                            }
+                            backoff.failed(&e);
+                        }
                     }
+                }
+                // A live message proves the network is up. While a gap is open the
+                // backfill result decides instead, so a failing REST stays visible.
+                if !gap.open {
+                    shared.note_ok();
                 }
                 if live.closed {
                     let (id, candle) = (inst.id.clone(), live.candle);
@@ -159,17 +206,22 @@ async fn run(
 }
 
 /// Closes the gap since the newest stored candle with the same rule as `load_chart`:
-/// contiguous pages, or a reset of the series when the cap is hit. Returns the new
-/// candles (the whole fetched series after a reset).
+/// contiguous pages, or a reset of the series when the cap is hit. Returns the candles
+/// from the newest stored one on (it may have been stored while still forming, so its
+/// final values are new), or the whole fetched series after a reset.
 async fn backfill(
     shared: &Shared,
     provider: &dyn Provider,
     inst: &Instrument,
     tf: Timeframe,
-) -> Result<Vec<Candle>, EngineError> {
+) -> Result<Fetched, EngineError> {
     let id = inst.id.clone();
     let Some(newest) = blocking(&shared.store, move |s| s.newest_open_time(&id, tf)).await? else {
-        return Ok(vec![]); // nothing cached, so there is no gap to fill
+        // Nothing cached, so there is no gap to fill.
+        return Ok(Fetched {
+            candles: vec![],
+            reset: false,
+        });
     };
     let Fetched { candles, reset } = fetch_catch_up(provider, inst, tf, newest).await?;
     shared.note_ok();
@@ -179,7 +231,7 @@ async fn backfill(
         candles
             .iter()
             .copied()
-            .filter(|c| c.open_time > newest)
+            .filter(|c| c.open_time >= newest)
             .collect()
     };
     let (id, to_store) = (inst.id.clone(), candles);
@@ -190,5 +242,8 @@ async fn backfill(
         s.upsert_candles(&id, tf, &to_store)
     })
     .await?;
-    Ok(missed)
+    Ok(Fetched {
+        candles: missed,
+        reset,
+    })
 }

@@ -127,6 +127,8 @@ pub enum LiveDto {
     },
     Backfilled {
         candles: ColumnsDto,
+        /// The cached series was replaced: the chart starts over from these candles.
+        reset: bool,
     },
     Disconnected,
 }
@@ -145,8 +147,9 @@ pub fn to_live_dto(event: LiveEvent) -> Result<LiveDto, DtoError> {
                 closed: live.closed,
             }
         }
-        LiveEvent::Backfilled(candles) => LiveDto::Backfilled {
+        LiveEvent::Backfilled { candles, reset } => LiveDto::Backfilled {
             candles: ColumnsDto::from_candles(&candles)?,
+            reset,
         },
         LiveEvent::Disconnected => LiveDto::Disconnected,
     })
@@ -171,6 +174,7 @@ pub fn to_day_change_dto(d: DayChange) -> Result<DayChangeDto, DtoError> {
 /// Payload of the `connection` event.
 pub fn connection_name(state: ConnectionState) -> &'static str {
     match state {
+        ConnectionState::Connecting => "connecting",
         ConnectionState::Connected => "connected",
         ConnectionState::Reconnecting => "reconnecting",
         ConnectionState::Offline => "offline",
