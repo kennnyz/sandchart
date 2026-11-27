@@ -248,7 +248,7 @@ async fn open_returns_before_compiling_and_lists_builtins() {
         !engine.indicators_ready(),
         "Engine::open must not wait for module compilation"
     );
-    let list = engine.indicators().await;
+    let list = engine.indicators().await.indicators;
     assert!(engine.indicators_ready());
     let ids: Vec<&str> = list.iter().map(|i| i.meta.id.as_str()).collect();
     assert_eq!(
@@ -283,7 +283,7 @@ async fn installed_indicator_is_listed_and_persists() {
     assert_eq!(info.meta.id, "test.echo");
     assert!(!info.builtin && !info.repaints);
 
-    let list = f.engine.indicators().await;
+    let list = f.engine.indicators().await.indicators;
     assert_eq!(list.len(), 6);
     assert_eq!(list.last().unwrap().meta.id, "test.echo");
     let files: Vec<_> = std::fs::read_dir(f.dir.path().join("indicators"))
@@ -301,11 +301,11 @@ async fn installed_indicator_is_listed_and_persists() {
 
     // Re-installing the same id keeps one file and one entry.
     f.install("ok_echo").await;
-    assert_eq!(f.engine.indicators().await.len(), 6);
+    assert_eq!(f.engine.indicators().await.indicators.len(), 6);
 
     drop(f.engine);
     let reopened = open(f.dir.path(), Some(f.cache.path()), &f.provider);
-    let list = reopened.indicators().await;
+    let list = reopened.indicators().await.indicators;
     let echo = list.iter().find(|i| i.meta.id == "test.echo").unwrap();
     assert!(!echo.builtin);
 }
@@ -332,7 +332,7 @@ async fn reserved_and_invalid_modules_are_rejected() {
         .await
         .unwrap_err();
     assert!(matches!(err, EngineError::Indicator(_)), "{err:?}");
-    assert_eq!(f.engine.indicators().await.len(), 5);
+    assert_eq!(f.engine.indicators().await.indicators.len(), 5);
 }
 
 #[tokio::test]
@@ -344,7 +344,7 @@ async fn repainting_module_is_flagged() {
         .await
         .unwrap();
     assert!(info.repaints);
-    let listed = f.engine.indicators().await;
+    let listed = f.engine.indicators().await.indicators;
     assert!(
         listed
             .iter()
@@ -363,7 +363,7 @@ async fn remove_drops_module_and_its_instances() {
         .await
         .unwrap();
     f.engine.remove_indicator("test.echo").await.unwrap();
-    assert_eq!(f.engine.indicators().await.len(), 5);
+    assert_eq!(f.engine.indicators().await.indicators.len(), 5);
     let instances = f.engine.chart_indicators().await.unwrap();
     assert_eq!(instances.len(), 1);
     assert_eq!(instances[0].module_id, "builtin.sma");
@@ -638,7 +638,7 @@ async fn stray_module_files_are_deleted_at_startup() {
     drop(f.engine);
 
     let reopened = open(f.dir.path(), Some(f.cache.path()), &f.provider);
-    let list = reopened.indicators().await;
+    let list = reopened.indicators().await.indicators;
     assert!(list.iter().any(|i| i.meta.id == "test.echo"));
     assert!(!stray.exists(), "stray module file was not deleted");
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
@@ -662,4 +662,57 @@ async fn csv_import_drops_the_bar_cache() {
     let results = f.engine.compute_indicators(&csv, TF, 0).await.unwrap();
     assert_eq!(f.engine.indicator_stats().store_reads, 2);
     assert!(same(&values(&results[0]), &[1.0, 2.0]));
+}
+
+/// The only installed module file of the fixture.
+fn installed_file(data: &Path) -> PathBuf {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(data.join("indicators"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    assert_eq!(files.len(), 1);
+    files.pop().unwrap()
+}
+
+#[tokio::test]
+async fn instances_of_a_module_that_fails_to_load_survive_a_save() {
+    let f = fixture().await;
+    f.install("ok_echo").await;
+    f.engine
+        .set_chart_indicators(vec![sma(2), echo()])
+        .await
+        .unwrap();
+    drop(f.engine);
+    let file = installed_file(f.dir.path());
+    let good = std::fs::read(&file).unwrap();
+    // A component header with nothing valid after it.
+    std::fs::write(&file, b"\0asm\x0d\0\x01\0broken").unwrap();
+
+    let broken = open(f.dir.path(), Some(f.cache.path()), &f.provider);
+    let list = broken.indicators().await;
+    assert_eq!(list.indicators.len(), 5);
+    assert_eq!(list.error, None);
+    let [failed] = &list.failed[..] else {
+        panic!("expected one failed module: {:?}", list.failed)
+    };
+    assert_eq!(failed.id, "test.echo");
+    assert!(!failed.builtin);
+    assert!(
+        failed.error.contains("not an indicator component"),
+        "{}",
+        failed.error
+    );
+    let got = broken.chart_indicators().await.unwrap();
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0].module_id, "builtin.sma");
+    broken.set_chart_indicators(vec![sma(3)]).await.unwrap();
+    drop(broken);
+
+    std::fs::write(&file, good).unwrap();
+    let fixed = open(f.dir.path(), Some(f.cache.path()), &f.provider);
+    assert_eq!(fixed.indicators().await.failed, vec![]);
+    let got = fixed.chart_indicators().await.unwrap();
+    let ids: Vec<&str> = got.iter().map(|i| i.module_id.as_str()).collect();
+    assert_eq!(ids, ["builtin.sma", "test.echo"]);
+    assert_eq!(got[0].params[0], ("period".to_string(), ParamValue::Int(3)));
 }

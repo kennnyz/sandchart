@@ -15,13 +15,14 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use sandchart_core::{DecimalError, Instrument, InstrumentId};
 use sandchart_data::{DayChange, Provider, ProviderError};
+use sandchart_indicators::{Limits, Runtime};
 use sandchart_store::{Store, StoreError};
 use tokio::sync::watch;
 
 pub use chart::ChartPage;
 pub use indicators::{
-    Computed, IndicatorInfo, IndicatorStats, Inspection, Instance, InstanceResult,
-    MAX_INDICATOR_BARS,
+    Computed, FailedIndicator, IndicatorInfo, IndicatorList, IndicatorStats, Inspection, Instance,
+    InstanceResult, MAX_INDICATOR_BARS,
 };
 pub use live::{ConnectionState, LiveEvent, LiveHandle};
 
@@ -174,8 +175,21 @@ impl Engine {
         providers: Vec<Arc<dyn Provider>>,
         clock: Clock,
     ) -> Result<Engine, EngineError> {
+        let runtime = Runtime::new(Limits::default(), cache_dir.map(Path::to_path_buf))
+            .map_err(|e| format!("the indicator runtime could not start: {e}"));
+        Self::open_with_runtime(data_dir, providers, clock, runtime)
+    }
+
+    /// Opens the engine with an indicator runtime that may have failed to start: then
+    /// charts still work and every indicator method returns that error.
+    fn open_with_runtime(
+        data_dir: &Path,
+        providers: Vec<Arc<dyn Provider>>,
+        clock: Clock,
+        runtime: Result<Runtime, String>,
+    ) -> Result<Engine, EngineError> {
         let store = Arc::new(Mutex::new(Store::open(&data_dir.join("sandchart.db"))?));
-        let indicators = indicators::Service::start(data_dir, cache_dir, Arc::clone(&store))?;
+        let indicators = indicators::Service::start(data_dir, runtime, Arc::clone(&store));
         let (connection, _) = watch::channel(ConnectionState::Connecting);
         Ok(Engine {
             shared: Shared {
@@ -286,4 +300,38 @@ fn system_now_ms() -> i64 {
         .ok()
         .and_then(|d| i64::try_from(d.as_millis()).ok())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn charts_work_when_the_indicator_runtime_cannot_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Engine::open_with_runtime(
+            dir.path(),
+            vec![],
+            Arc::new(|| 0),
+            Err("the indicator runtime could not start: injected".into()),
+        )
+        .unwrap();
+        assert!(engine.indicators_ready());
+        assert_eq!(engine.watchlist().unwrap(), vec![]);
+
+        let list = engine.indicators().await;
+        assert!(list.indicators.is_empty());
+        assert_eq!(
+            list.error.as_deref(),
+            Some("the indicator runtime could not start: injected")
+        );
+        let err = engine.install_indicator(vec![]).await.unwrap_err();
+        assert!(
+            matches!(&err, EngineError::Indicator(m) if m.contains("injected")),
+            "{err:?}"
+        );
+        assert!(engine.chart_indicators().await.is_err());
+        assert!(engine.set_chart_indicators(vec![]).await.is_err());
+        assert!(engine.remove_indicator("me.x").await.is_err());
+    }
 }

@@ -6,7 +6,7 @@
 //! lost); nothing locks the bar cache while holding the store. No lock is held
 //! across a module call.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -14,8 +14,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use sandchart_core::{Candle, Instrument, InstrumentId, Timeframe};
 use sandchart_indicators::{
-    Bar, Limits, Meta, Module, ParamValue, REPAINT_BARS, REPAINT_PREFIXES, Runtime, SeriesData,
-    SeriesOut, builtins, check_repaint, is_user_id, module_hash, sample_bars,
+    Bar, Meta, Module, ParamValue, REPAINT_BARS, REPAINT_PREFIXES, Runtime, SeriesData, SeriesOut,
+    builtins, check_repaint, is_user_id, module_hash, sample_bars,
 };
 use sandchart_store::{Store, StoreError, StoredInstance, StoredModule};
 use serde::{Deserialize, Serialize};
@@ -36,6 +36,44 @@ pub struct IndicatorInfo {
     pub builtin: bool,
     /// The module changed earlier values when later bars arrived (checked at install).
     pub repaints: bool,
+}
+
+/// A built-in or installed module that could not be loaded; its chart instances
+/// stay stored and come back once it loads again.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct FailedIndicator {
+    pub id: String,
+    pub builtin: bool,
+    pub error: String,
+}
+
+/// What [`Engine::indicators`] returns: the modules that can be added, the ones
+/// that failed to load, and why the service could not do its work at all (the
+/// runtime did not start, the installed list could not be read).
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+pub struct IndicatorList {
+    pub indicators: Vec<IndicatorInfo>,
+    pub failed: Vec<FailedIndicator>,
+    pub error: Option<String>,
+}
+
+/// Load failures, kept so the UI can show them.
+#[derive(Default)]
+struct Problems {
+    failed: Vec<FailedIndicator>,
+    error: Option<String>,
+}
+
+impl Problems {
+    fn fail(&mut self, id: &str, builtin: bool, error: String) {
+        eprintln!("indicator {id}: {error}");
+        self.failed.retain(|f| f.id != id);
+        self.failed.push(FailedIndicator {
+            id: id.to_owned(),
+            builtin,
+            error,
+        });
+    }
 }
 
 /// A checked module file that has not been installed yet.
@@ -134,8 +172,10 @@ struct Memo {
 
 /// Indicator state owned by the engine.
 pub(crate) struct Service {
-    runtime: Arc<Runtime>,
+    /// Why the runtime could not start, if it did not: then every method fails with it.
+    runtime: Result<Arc<Runtime>, String>,
     modules: Arc<Mutex<HashMap<String, Loaded>>>,
+    problems: Arc<Mutex<Problems>>,
     ready: Arc<watch::Sender<bool>>,
     /// `<data_dir>/indicators`, the installed module files.
     dir: PathBuf,
@@ -172,21 +212,19 @@ impl Drop for ReadyOnDrop {
 }
 
 impl Service {
-    /// Creates the runtime and starts a background thread that loads the built-ins
-    /// and every installed module; returns without waiting for it.
+    /// Starts a background thread that loads the built-ins and every installed module
+    /// with `runtime`; returns without waiting for it. A runtime that failed to start
+    /// leaves the service ready and empty, with that error.
     pub(crate) fn start(
         data_dir: &Path,
-        cache_dir: Option<&Path>,
+        runtime: Result<Runtime, String>,
         store: Arc<Mutex<Store>>,
-    ) -> Result<Service, EngineError> {
-        let runtime = Arc::new(
-            Runtime::new(Limits::default(), cache_dir.map(Path::to_path_buf))
-                .map_err(indicator_err)?,
-        );
+    ) -> Service {
         let (ready, _) = watch::channel(false);
         let service = Service {
-            runtime: Arc::clone(&runtime),
+            runtime: runtime.map(Arc::new),
             modules: Arc::default(),
+            problems: Arc::default(),
             ready: Arc::new(ready),
             dir: data_dir.join("indicators"),
             memo: Mutex::default(),
@@ -194,20 +232,34 @@ impl Service {
             module_calls: AtomicU64::new(0),
         };
         let done = ReadyOnDrop(Arc::clone(&service.ready));
-        let (modules, dir) = (Arc::clone(&service.modules), service.dir.clone());
-        std::thread::Builder::new()
+        let Ok(runtime) = service.runtime.clone() else {
+            return service; // `done` drops here: ready.
+        };
+        let (modules, problems, dir) = (
+            Arc::clone(&service.modules),
+            Arc::clone(&service.problems),
+            service.dir.clone(),
+        );
+        let spawned = std::thread::Builder::new()
             .name("indicator-load".into())
             .spawn(move || {
                 let _done = done;
-                load_all(&runtime, &store, &dir, &modules);
-            })?;
-        Ok(service)
+                load_all(&runtime, &store, &dir, &modules, &problems);
+            });
+        // On failure the closure, and with it `done`, is dropped: ready.
+        if let Err(e) = spawned {
+            guard(&service.problems).error =
+                Some(format!("cannot start loading the indicators: {e}"));
+        }
+        service
     }
 
-    async fn wait_ready(&self) {
+    /// Waits until loading is done; fails when the runtime did not start.
+    async fn wait_ready(&self) -> Result<Arc<Runtime>, EngineError> {
         let mut rx = self.ready.subscribe();
         // The sender lives as long as the service, so this only returns once ready.
         let _ = rx.wait_for(|ready| *ready).await;
+        self.runtime.clone().map_err(EngineError::Indicator)
     }
 
     fn loaded(&self, id: &str) -> Option<Loaded> {
@@ -220,6 +272,7 @@ fn load_all(
     store: &Mutex<Store>,
     dir: &Path,
     modules: &Mutex<HashMap<String, Loaded>>,
+    problems: &Mutex<Problems>,
 ) {
     let mut keep = Vec::new();
     for (id, bytes) in builtins() {
@@ -237,12 +290,12 @@ fn load_all(
                     },
                 );
             }
-            Err(e) => eprintln!("cannot load the built-in indicator {id}: {e}"),
+            Err(e) => guard(problems).fail(id, true, e.to_string()),
         }
     }
     let rows = lock(store).indicator_modules();
     // Without the rows nothing is known to be unused, so nothing is deleted or pruned.
-    if !load_installed(runtime, rows, dir, modules, &mut keep) {
+    if !load_installed(runtime, rows, dir, modules, problems, &mut keep) {
         return;
     }
     if let Err(e) = runtime.prune_cache(&keep) {
@@ -258,12 +311,15 @@ fn load_installed(
     rows: Result<Vec<StoredModule>, StoreError>,
     dir: &Path,
     modules: &Mutex<HashMap<String, Loaded>>,
+    problems: &Mutex<Problems>,
     keep: &mut Vec<[u8; 32]>,
 ) -> bool {
     let rows = match rows {
         Ok(rows) => rows,
         Err(e) => {
-            eprintln!("cannot read the installed indicators, skipping them: {e}");
+            let error = format!("cannot read the installed indicators: {e}");
+            eprintln!("{error}");
+            guard(problems).error = Some(error);
             return false;
         }
     };
@@ -273,7 +329,8 @@ fn load_installed(
         let bytes = match std::fs::read(&path) {
             Ok(bytes) => bytes,
             Err(e) => {
-                eprintln!("cannot read indicator {} ({}): {e}", row.id, path.display());
+                let error = format!("cannot read the module file {}: {e}", path.display());
+                guard(problems).fail(&row.id, false, error);
                 continue;
             }
         };
@@ -291,13 +348,15 @@ fn load_installed(
                     },
                 );
             }
-            Ok(module) => eprintln!(
-                "indicator file {} declares id {:?}, expected {:?}; skipped",
-                path.display(),
-                module.meta().id,
-                row.id
-            ),
-            Err(e) => eprintln!("cannot load indicator {}: {e}", row.id),
+            Ok(module) => {
+                let error = format!(
+                    "the module file {} declares id {:?} instead",
+                    path.display(),
+                    module.meta().id
+                );
+                guard(problems).fail(&row.id, false, error);
+            }
+            Err(e) => guard(problems).fail(&row.id, false, e.to_string()),
         }
     }
     true
@@ -501,10 +560,17 @@ impl Engine {
         *self.indicators.ready.borrow()
     }
 
-    /// Built-ins first (in their fixed order), then installed indicators by name.
-    pub async fn indicators(&self) -> Vec<IndicatorInfo> {
+    /// Built-ins first (in their fixed order), then installed indicators by name; with
+    /// the modules that failed to load and the service's own error.
+    pub async fn indicators(&self) -> IndicatorList {
         let svc = &self.indicators;
-        svc.wait_ready().await;
+        if let Err(e) = svc.wait_ready().await {
+            return IndicatorList {
+                error: Some(e.to_string()),
+                ..IndicatorList::default()
+            };
+        }
+        let problems = guard(&svc.problems);
         let modules = guard(&svc.modules);
         let mut out: Vec<IndicatorInfo> = builtins()
             .iter()
@@ -517,16 +583,17 @@ impl Engine {
             .collect();
         installed.sort_by(|a, b| (&a.meta.name, &a.meta.id).cmp(&(&b.meta.name, &b.meta.id)));
         out.append(&mut installed);
-        out
+        IndicatorList {
+            indicators: out,
+            failed: problems.failed.clone(),
+            error: problems.error.clone(),
+        }
     }
 
     /// Loads and checks a module file without installing it.
     pub async fn inspect_indicator(&self, bytes: &[u8]) -> Result<Inspection, EngineError> {
-        self.indicators.wait_ready().await;
-        let (runtime, store) = (
-            Arc::clone(&self.indicators.runtime),
-            Arc::clone(&self.shared.store),
-        );
+        let runtime = self.indicators.wait_ready().await?;
+        let store = Arc::clone(&self.shared.store);
         let bytes = bytes.to_vec();
         spawn_blocking(move || inspect(&runtime, &store, &bytes).map(|(_, i)| i)).await
     }
@@ -535,8 +602,7 @@ impl Engine {
     /// its row, and replaces any installed module with the same id.
     pub async fn install_indicator(&self, bytes: Vec<u8>) -> Result<IndicatorInfo, EngineError> {
         let svc = &self.indicators;
-        svc.wait_ready().await;
-        let runtime = Arc::clone(&svc.runtime);
+        let runtime = svc.wait_ready().await?;
         let store = Arc::clone(&self.shared.store);
         let installed_at = self.now_ms();
         let (module, inspection, repaints) = {
@@ -581,6 +647,7 @@ impl Engine {
             repaints,
         };
         let info = loaded.info();
+        guard(&svc.problems).failed.retain(|f| f.id != id);
         guard(&svc.modules).insert(id, loaded);
         if let Some(old) = old.filter(|o| o.sha256 != hex(&hash)) {
             let path = module_file(&svc.dir, &old.sha256);
@@ -597,7 +664,7 @@ impl Engine {
     /// Uninstalls a module and removes its chart instances. Built-ins cannot be removed.
     pub async fn remove_indicator(&self, id: &str) -> Result<(), EngineError> {
         let svc = &self.indicators;
-        svc.wait_ready().await;
+        svc.wait_ready().await?;
         if !is_user_id(id) {
             return Err(EngineError::Indicator(format!(
                 "{id:?} is not an installed indicator; built-in indicators cannot be removed"
@@ -616,6 +683,7 @@ impl Engine {
         .await?
         .ok_or_else(|| EngineError::Indicator(format!("no installed indicator has id {id:?}")))?;
         guard(&svc.modules).remove(id);
+        guard(&svc.problems).failed.retain(|f| f.id != id);
         let path = module_file(&svc.dir, &row.sha256);
         if let Err(e) = remove_file(&path) {
             eprintln!("cannot delete the indicator file {}: {e}", path.display());
@@ -624,9 +692,9 @@ impl Engine {
     }
 
     /// The chart's indicators in order, params resolved against their module.
-    /// Instances whose module is gone are left out.
+    /// Instances whose module is not loaded are left out here but stay stored.
     pub async fn chart_indicators(&self) -> Result<Vec<Instance>, EngineError> {
-        self.indicators.wait_ready().await;
+        self.indicators.wait_ready().await?;
         let store = Arc::clone(&self.shared.store);
         let stored = spawn_blocking(move || Ok(lock(&store).indicator_instances()?)).await?;
         Ok(resolve(stored, &self.indicators)
@@ -635,10 +703,12 @@ impl Engine {
             .collect())
     }
 
-    /// Replaces the chart's indicators, keeping their order.
+    /// Replaces the chart's indicators, keeping their order. Stored instances whose
+    /// module is not loaded (it failed to load) are kept after them: the UI never saw
+    /// them, so leaving them out of `items` does not mean they were removed.
     pub async fn set_chart_indicators(&self, items: Vec<Instance>) -> Result<(), EngineError> {
-        self.indicators.wait_ready().await;
-        let stored = items
+        self.indicators.wait_ready().await?;
+        let mut stored = items
             .into_iter()
             .map(|i| {
                 Ok(StoredInstance {
@@ -653,8 +723,22 @@ impl Engine {
             .map_err(|e| {
                 EngineError::Indicator(format!("cannot save the chart indicators: {e}"))
             })?;
+        let loaded: HashSet<String> = guard(&self.indicators.modules).keys().cloned().collect();
         let store = Arc::clone(&self.shared.store);
-        spawn_blocking(move || Ok(lock(&store).set_indicator_instances(&stored)?)).await
+        spawn_blocking(move || {
+            let mut s = lock(&store);
+            let unseen: Vec<StoredInstance> = s
+                .indicator_instances()?
+                .into_iter()
+                .filter(|old| {
+                    !loaded.contains(&old.module_id)
+                        && !stored.iter().any(|new| new.instance == old.instance)
+                })
+                .collect();
+            stored.extend(unseen);
+            Ok(s.set_indicator_instances(&stored)?)
+        })
+        .await
     }
 
     /// Computes every visible chart indicator over all cached bars of `(id, tf)` (the
@@ -667,7 +751,7 @@ impl Engine {
         from_time: i64,
     ) -> Result<Vec<InstanceResult>, EngineError> {
         let svc = &self.indicators;
-        svc.wait_ready().await;
+        svc.wait_ready().await?;
         let (store, key) = (Arc::clone(&self.shared.store), id.clone());
         let (stored, inst) = spawn_blocking(move || {
             let s = lock(&store);
@@ -794,6 +878,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sandchart_indicators::Limits;
 
     #[test]
     fn failed_row_read_keeps_installed_files() {
@@ -802,12 +887,18 @@ mod tests {
         std::fs::write(&file, b"installed module").unwrap();
         let runtime = Runtime::new(Limits::default(), None).unwrap();
         let modules = Mutex::default();
+        let problems = Mutex::default();
         let mut keep = Vec::new();
 
         let rows = Err(StoreError::LimitTooLarge(0));
-        load_installed(&runtime, rows, dir.path(), &modules, &mut keep);
+        load_installed(&runtime, rows, dir.path(), &modules, &problems, &mut keep);
 
         assert!(file.exists(), "an installed module file was deleted");
         assert!(guard(&modules).is_empty());
+        let error = guard(&problems).error.clone().unwrap_or_default();
+        assert!(
+            error.starts_with("cannot read the installed indicators"),
+            "{error}"
+        );
     }
 }

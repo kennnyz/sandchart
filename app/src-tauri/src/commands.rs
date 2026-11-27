@@ -16,9 +16,9 @@ use tauri::ipc::Channel;
 use sandchart_indicators::MAX_MODULE_BYTES;
 
 use crate::dto::{
-    CandlesDto, DayChangeDto, IndicatorInfoDto, InspectionDto, InstanceDto, InstanceResultDto,
-    InstrumentDto, InstrumentIdDto, LiveDto, ProblemDto, connection_name, to_candles_dto,
-    to_day_change_dto, to_live_dto,
+    CandlesDto, DayChangeDto, IndicatorInfoDto, IndicatorListDto, InspectionDto, InstanceDto,
+    InstanceResultDto, InstrumentDto, InstrumentIdDto, LiveDto, ProblemDto, connection_name,
+    to_candles_dto, to_day_change_dto, to_live_dto,
 };
 
 /// Most results one search returns.
@@ -240,14 +240,8 @@ fn check_module_size(bytes: &[u8]) -> CmdResult<()> {
 }
 
 #[tauri::command]
-pub async fn list_indicators(state: State<'_, AppState>) -> CmdResult<Vec<IndicatorInfoDto>> {
-    Ok(state
-        .engine
-        .indicators()
-        .await
-        .into_iter()
-        .map(Into::into)
-        .collect())
+pub async fn list_indicators(state: State<'_, AppState>) -> CmdResult<IndicatorListDto> {
+    Ok(state.engine.indicators().await.into())
 }
 
 #[tauri::command]

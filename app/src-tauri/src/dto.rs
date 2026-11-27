@@ -4,8 +4,8 @@
 use sandchart_core::{Candle, Instrument, InstrumentId, JS_SAFE_MAX};
 use sandchart_data::{DayChange, ProviderError};
 use sandchart_engine::{
-    ChartPage, Computed, ConnectionState, EngineError, IndicatorInfo, Inspection, Instance,
-    InstanceResult, LiveEvent,
+    ChartPage, Computed, ConnectionState, EngineError, FailedIndicator, IndicatorInfo,
+    IndicatorList, Inspection, Instance, InstanceResult, LiveEvent,
 };
 use sandchart_indicators::{
     Marker, Meta, ParamKind, ParamSpec, ParamValue, SeriesData, SeriesOut, SeriesSpec,
@@ -333,6 +333,28 @@ impl From<IndicatorInfo> for IndicatorInfoDto {
             meta: i.meta.into(),
             builtin: i.builtin,
             repaints: i.repaints,
+        }
+    }
+}
+
+/// A module that could not be loaded; the host type's JSON already fits the UI.
+pub type FailedIndicatorDto = FailedIndicator;
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndicatorListDto {
+    pub indicators: Vec<IndicatorInfoDto>,
+    pub failed: Vec<FailedIndicatorDto>,
+    /// Why the indicator service could not do its work, shown in the dialog.
+    pub error: Option<String>,
+}
+
+impl From<IndicatorList> for IndicatorListDto {
+    fn from(l: IndicatorList) -> Self {
+        Self {
+            indicators: l.indicators.into_iter().map(Into::into).collect(),
+            failed: l.failed,
+            error: l.error,
         }
     }
 }
@@ -671,6 +693,29 @@ mod tests {
         let inst = sandchart_engine::Instance::from(dto);
         assert_eq!(inst.module_id, "builtin.sma");
         assert_eq!(serde_json::to_value(InstanceDto::from(inst)).unwrap(), json);
+    }
+
+    #[test]
+    fn indicator_list_carries_failed_modules_and_the_service_error() {
+        use sandchart_engine::{FailedIndicator, IndicatorList};
+        let list = IndicatorList {
+            indicators: vec![],
+            failed: vec![FailedIndicator {
+                id: "me.x".into(),
+                builtin: false,
+                error: "not an indicator component".into(),
+            }],
+            error: Some("cannot read the installed indicators".into()),
+        };
+        let json = serde_json::to_value(IndicatorListDto::from(list)).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "indicators": [],
+                "failed": [{ "id": "me.x", "builtin": false, "error": "not an indicator component" }],
+                "error": "cannot read the installed indicators"
+            })
+        );
     }
 
     #[test]
