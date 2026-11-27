@@ -24,6 +24,10 @@ exceptions = [
     { crate = "selectors", allow = ["MPL-2.0"] },
     { crate = "dtoa-short", allow = ["MPL-2.0"] },
     { crate = "option-ext", allow = ["MPL-2.0"] },
+    # Permissive data licence of Mozilla's CA root list. Transitive via tauri-plugin-updater
+    # -> reqwest -> rustls-platform-verifier, which builds it only for wasm32, never for the
+    # desktop targets.
+    { crate = "webpki-root-certs", allow = ["CDLA-Permissive-2.0"] },
 ]
 unused-allowed-license = "allow"
 

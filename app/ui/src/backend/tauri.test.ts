@@ -74,4 +74,18 @@ describe("tauri backend", () => {
     expect(seen[0]).toEqual([0, 97, 115, 109]);
     expect(Array.isArray(seen[0])).toBe(true);
   });
+
+  it("passes install progress from the channel to the callback", async () => {
+    const core = await import("@tauri-apps/api/core");
+    vi.mocked(core.invoke).mockImplementationOnce(((cmd: string, args: { onProgress: { onmessage: (m: unknown) => void } }) => {
+      expect(cmd).toBe("install_update");
+      args.onProgress.onmessage({ kind: "started", total: 10 });
+      args.onProgress.onmessage({ kind: "installing" });
+      return Promise.resolve();
+    }) as never);
+    const { tauriBackend } = await import("./tauri");
+    const got: unknown[] = [];
+    await tauriBackend.installUpdate((p) => got.push(p));
+    expect(got).toEqual([{ kind: "started", total: 10 }, { kind: "installing" }]);
+  });
 });

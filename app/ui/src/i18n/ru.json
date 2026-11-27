@@ -79,5 +79,22 @@
   "indicators.loadFailed": "Индикаторы не загрузились: {error}",
   "indicators.retry": "Повторить",
   "indicators.removeAsk": "Удалить {name}? Его индикаторы на графике тоже удалятся.",
-  "indicators.notLoaded": "Не загрузился: {error}"
+  "indicators.notLoaded": "Не загрузился: {error}",
+  "update.available": "Доступна версия {version}",
+  "update.install": "Обновить и перезапустить",
+  "update.later": "Позже",
+  "update.downloading": "Скачивание… {percent}",
+  "update.installing": "Установка…",
+  "update.restarting": "Перезапуск…",
+  "update.failed": "Не удалось обновить: {error}",
+  "update.retry": "Повторить",
+  "update.upToDate": "У вас последняя версия",
+  "update.check": "Проверить обновления",
+  "update.checking": "Проверка…",
+  "update.auto": "Проверять автоматически",
+  "update.hosts": "Обращается к github.com и release-assets.githubusercontent.com. Больше ничего не отправляется.",
+  "update.blocked.translocated": "Перенесите Sandchart в «Программы», затем обновите.",
+  "update.blocked.not_appimage": "Эта копия обновляется через свой пакет. Скачайте новую версию:",
+  "update.releasePage": "Страница релиза",
+  "update.version.title": "Версия и обновления"
 }

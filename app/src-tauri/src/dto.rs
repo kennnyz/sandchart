@@ -481,6 +481,44 @@ impl From<InstanceResult> for InstanceResultDto {
     }
 }
 
+// Updates.
+
+/// Why this copy cannot update itself in place; the UI shows a link to the release instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstallBlocker {
+    /// Linux, but not run as an AppImage (a `.deb` install): the manifest only has the AppImage.
+    #[serde(rename = "not_appimage")]
+    NotAppImage,
+    /// macOS runs the app from a read-only place (App Translocation or a mounted DMG).
+    Translocated,
+}
+
+/// An update newer than the running version.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateInfoDto {
+    pub version: String,
+    /// Release notes; empty when the manifest has none.
+    pub notes: String,
+    /// Publish date, RFC 3339.
+    pub date: Option<String>,
+    pub blocker: Option<InstallBlocker>,
+}
+
+/// Messages of the `install_update` channel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum UpdateProgressDto {
+    /// Sent once, when the download starts; `total` is the size in bytes if the server told it.
+    Started { total: Option<u64> },
+    /// Bytes downloaded so far.
+    Chunk { downloaded: u64 },
+    /// The download finished; the signature check and the install run now. Either can still
+    /// fail, so an error may come after this message.
+    Installing,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -715,6 +753,62 @@ mod tests {
                 "failed": [{ "id": "me.x", "builtin": false, "error": "not an indicator component" }],
                 "error": "cannot read the installed indicators"
             })
+        );
+    }
+
+    #[test]
+    fn update_info_is_camel_case_with_a_null_date_and_a_snake_case_blocker() {
+        let info = UpdateInfoDto {
+            version: "0.3.0".into(),
+            notes: "Fixes".into(),
+            date: None,
+            blocker: Some(InstallBlocker::NotAppImage),
+        };
+        assert_eq!(
+            serde_json::to_value(info).unwrap(),
+            serde_json::json!({
+                "version": "0.3.0", "notes": "Fixes", "date": null, "blocker": "not_appimage"
+            })
+        );
+        let info = UpdateInfoDto {
+            version: "0.3.0".into(),
+            notes: String::new(),
+            date: Some("2026-11-28T10:00:00Z".into()),
+            blocker: Some(InstallBlocker::Translocated),
+        };
+        let json = serde_json::to_value(info).unwrap();
+        assert_eq!(json["blocker"], "translocated");
+        assert_eq!(json["date"], "2026-11-28T10:00:00Z");
+        let info = UpdateInfoDto {
+            version: "0.3.0".into(),
+            notes: String::new(),
+            date: None,
+            blocker: None,
+        };
+        assert_eq!(
+            serde_json::to_value(info).unwrap()["blocker"],
+            serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn update_progress_is_tagged_by_kind() {
+        let json = |p: UpdateProgressDto| serde_json::to_value(p).unwrap();
+        assert_eq!(
+            json(UpdateProgressDto::Started { total: Some(42) }),
+            serde_json::json!({ "kind": "started", "total": 42 })
+        );
+        assert_eq!(
+            json(UpdateProgressDto::Started { total: None }),
+            serde_json::json!({ "kind": "started", "total": null })
+        );
+        assert_eq!(
+            json(UpdateProgressDto::Chunk { downloaded: 7 }),
+            serde_json::json!({ "kind": "chunk", "downloaded": 7 })
+        );
+        assert_eq!(
+            json(UpdateProgressDto::Installing),
+            serde_json::json!({ "kind": "installing" })
         );
     }
 

@@ -534,6 +534,136 @@ select:focus-visible {
   color: var(--muted);
 }
 
+/* ---- Updates: the status bar chip, its panel and the version popover ---- */
+
+.upd,
+.ver {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.upd-chip,
+.ver-button {
+  height: 18px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+.upd-chip {
+  color: var(--fg);
+  background: var(--fg-8);
+}
+.upd-chip[data-failed="true"] svg {
+  color: var(--down);
+}
+.upd-chip:hover,
+.ver-button:hover {
+  background: var(--fg-8);
+  color: var(--fg);
+}
+.ver-button[aria-expanded="true"] {
+  color: var(--fg);
+}
+.pop {
+  position: absolute;
+  bottom: 24px;
+  right: 0;
+  z-index: 30;
+  width: 380px;
+  max-width: calc(100vw - 32px);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  font-family: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 12px;
+  color: var(--fg);
+  cursor: default;
+}
+.pop-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+.pop-text {
+  margin: 0;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+.pop-error {
+  color: var(--down);
+}
+.pop-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.selectable {
+  -webkit-user-select: text;
+  user-select: text;
+  cursor: text;
+}
+/* Notes are plain text: line breaks kept, at most six lines before they scroll. */
+.upd-notes {
+  max-height: 108px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 18px;
+  color: var(--muted);
+}
+.upd-bar {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--line);
+  overflow: hidden;
+}
+.upd-bar span {
+  display: block;
+  height: 100%;
+  background: var(--fg);
+  transition: width 150ms;
+}
+.upd-release {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.upd-release .mono {
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+.ver-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.ver-check .text-button {
+  flex: none;
+}
+.text-button.bordered {
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--fg);
+}
+.ver-auto {
+  align-self: flex-start;
+  margin-left: -6px;
+}
+.ver-hosts {
+  margin: 0;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--muted);
+}
+
 /* ---- Symbol search ---- */
 
 .scrim {

@@ -5,7 +5,7 @@
 [![CI](https://github.com/kennnyz/sandchart/actions/workflows/ci.yml/badge.svg)](https://github.com/kennnyz/sandchart/actions/workflows/ci.yml)
 ![Licence: MIT OR Apache-2.0](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)
 ![Platforms: macOS, Windows, Linux](https://img.shields.io/badge/platforms-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)
-![Status: 0.1, early](https://img.shields.io/badge/status-0.1%20early-orange)
+![Status: 0.2, early](https://img.shields.io/badge/status-0.2%20early-orange)
 
 ![Sandchart showing a live BTCUSDT 1h chart from Binance](docs/screenshot.png)
 
@@ -13,8 +13,8 @@
 
 ## Why Sandchart
 
-- **Your machine, your data.** Candles are cached in a local SQLite file. Charts open from cache instantly and keep working offline. There is nothing to sign in to and nothing that phones home.
-- **Nothing to steal.** The app never asks for exchange keys and only talks to Binance's public market-data hosts.
+- **Your machine, your data.** Candles are cached in a local SQLite file. Charts open from cache instantly and keep working offline. There is nothing to sign in to and no telemetry.
+- **Nothing to steal.** The app never asks for exchange keys and only talks to Binance's public market-data hosts and, for updates, to GitHub (see [Privacy and network](#privacy-and-network)).
 - **Exact numbers.** Prices and volumes are integers counted in the pair's tick and lot size, from the exchange to the screen. No floating-point money anywhere in the core.
 - **Our own renderer.** The chart is a small Canvas 2D engine written for this project, not a wrapped charting library. A frame takes well under a millisecond to draw.
 - **Built to be extended.** Indicators are WebAssembly modules that run in a sandbox: they cannot read your files or reach the network. Next: a replay you can share and anyone can reproduce, and tools for AI agents. See the [roadmap](#roadmap).
@@ -116,11 +116,11 @@ Nothing is reloaded wholesale: a chart you have opened before comes straight fro
 | Version | Focus |
 | --- | --- |
 | 0.1 | Live Binance charts, local cache, own renderer, search, watchlist, themes, unsigned builds |
-| **0.2** (this release) | Indicators as sandboxed WebAssembly modules, with an SDK and a command to build and test them |
+| **0.2** (this release) | Indicators as sandboxed WebAssembly modules, with an SDK and a command to build and test them; one-button self-update |
 | 0.3 | Replay: step through history candle by candle, paper trades with stop and take-profit, statistics in R, a shareable `.replay` file that gives anyone the same result |
 | 0.4 | An MCP server so AI agents can read charts, build indicators and run replays |
 | 0.5 | Drawing tools and alerts |
-| 1.0 | Signed builds and auto-update |
+| 1.0 | Builds signed with OS code-signing certificates |
 
 The order can change; the design decisions are recorded in [ADR 0001](docs/adr/0001-wasm-indicators-and-tauri.md).
 
@@ -132,14 +132,18 @@ Download the file for your system from the [Releases](../../releases) page:
 | --- | --- |
 | macOS, Apple silicon | `Sandchart_<version>_aarch64.dmg` |
 | macOS, Intel | `Sandchart_<version>_x64.dmg` |
-| Windows | `Sandchart_<version>_x64_en-US.msi` |
+| Windows | `Sandchart_<version>_x64-setup.exe` |
 | Linux | `.AppImage` or `.deb` |
 
-The builds are not signed yet, so the operating system will warn you the first time.
+The builds are not signed with an OS code-signing certificate yet, so the operating system will warn you the first time. Updates are signed with the project's own key (see [Updates](#updates)).
+
+Version 0.2 migrates the local database (watchlist, cache, indicator settings). The data is kept, but 0.1 refuses to open the migrated database. Back up the file first if you may want to go back.
+
+Version 0.1 cannot update itself. Install 0.2 by hand once; later versions update from inside the app.
 
 ### macOS
 
-1. Open the `.dmg` and drag Sandchart to Applications.
+1. Open the `.dmg` and drag Sandchart to Applications. Run it from there, not from the disk image or Downloads (see [Updates](#updates)).
 2. Try to open it once. macOS says it cannot verify the app.
 3. Open System Settings, Privacy & Security, scroll to the message about Sandchart and click Open Anyway.
 
@@ -147,11 +151,24 @@ If you prefer a terminal, `xattr -dr com.apple.quarantine /Applications/Sandchar
 
 ### Windows
 
-Run the `.msi`. If SmartScreen shows "Windows protected your PC", click More info, then Run anyway.
+Coming from 0.1? Uninstall it first (Settings → Apps → Sandchart), then run the setup. Your data is kept.
+
+Run `Sandchart_<version>_x64-setup.exe`. It installs for your user only and does not ask for administrator rights. If SmartScreen shows "Windows protected your PC", click More info, then Run anyway.
 
 ### Linux
 
 For the AppImage: `chmod +x Sandchart_*.AppImage`, then run it. For the `.deb`: `sudo apt install ./Sandchart_*.deb`.
+
+## Updates
+
+Sandchart can update itself. Ten seconds after it starts, and then once a day by the wall clock while it stays open, it asks GitHub for a small file (`latest.json`) that names the newest release. If there is a newer version, a banner appears in the status bar. Press **Update and restart**: the app downloads the update, checks its signature against the project's public key built into the app, installs it and restarts. An update with a bad signature is refused. **Later** hides the banner until the next start.
+
+To check by hand, or to turn the automatic check off, click the version in the status bar: **Check for updates** and **Check automatically**. With the automatic check off, Sandchart makes no update request until you press **Check for updates**.
+
+- **macOS:** run Sandchart from `/Applications`. A copy started from the disk image or straight from Downloads is run by macOS from a read-only path (App Translocation) and cannot replace itself. The banner then asks you to move the app to Applications first.
+- **Windows:** the installer runs in passive mode (a progress window, no questions) and needs no administrator rights.
+- **Linux:** the AppImage updates in the app. A `.deb` install does not: the banner shows the release page address, so install the new `.deb` yourself.
+- A failed check at start is silent and tried again later. A failed manual check or download shows the error and a Retry button.
 
 ## Write your own indicators
 
@@ -175,7 +192,7 @@ sha256sum --check --ignore-missing SHA256SUMS      # Linux
 shasum -a 256 --check --ignore-missing SHA256SUMS  # macOS
 ```
 
-On Windows, compare `Get-FileHash .\Sandchart_<version>_x64_en-US.msi` with the matching line in `SHA256SUMS`.
+On Windows, compare `Get-FileHash .\Sandchart_<version>_x64-setup.exe` with the matching line in `SHA256SUMS`.
 
 Check that the file was built by this repository's workflow, with the [GitHub CLI](https://cli.github.com/):
 
@@ -216,10 +233,14 @@ Contributors and coding agents: see [AGENTS.md](AGENTS.md).
 
 ## Privacy and network
 
-Sandchart holds no exchange API keys, has no accounts and sends no telemetry. The only outgoing connections are to the public Binance market-data hosts:
+Sandchart holds no exchange API keys, has no accounts and sends no telemetry. The only outgoing connections are to these hosts:
 
 - `data-api.binance.vision` (REST: instruments, candles, 24 h change)
 - `data-stream.binance.vision` (WebSocket: live candles)
+- `github.com` (the static update file `latest.json`, and the download link for an update, which redirects to the next host)
+- `release-assets.githubusercontent.com` (the update file itself)
+
+The update requests are plain downloads of public files. Nothing about you or your charts is sent. To stop the automatic check, click the version in the status bar and turn off **Check automatically**.
 
 Your watchlist and cached candles stay in a local SQLite file in your user data folder.
 

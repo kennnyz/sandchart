@@ -3,6 +3,7 @@
 
 mod commands;
 mod dto;
+mod update;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,6 +14,7 @@ use sandchart_engine::{Engine, EngineError};
 use tauri::{AppHandle, Emitter, Manager};
 
 use commands::AppState;
+use update::UpdaterState;
 
 /// The only data source of 0.1.
 const SOURCE: &str = "binance";
@@ -48,6 +50,8 @@ async fn sync_instruments(engine: Arc<Engine>, ready: Arc<AtomicBool>, app: AppH
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(UpdaterState::default())
         .setup(|app| {
             let dirs = directories::ProjectDirs::from("", "", "Sandchart")
                 .ok_or("cannot find the OS data directory")?;
@@ -108,6 +112,8 @@ fn main() {
             commands::get_chart_indicators,
             commands::set_chart_indicators,
             commands::compute_indicators,
+            update::check_update,
+            update::install_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Sandchart");

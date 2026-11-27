@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useState } from "react";
-import { backend } from "./backend";
+import { backend, firstUpdateCheckMs } from "./backend";
 import type { ConnectionState, Instrument, InstrumentId, TimeframeCode } from "./backend/types";
 import { dark, light } from "./chart/theme";
 import { ChartView, Loading } from "./components/ChartView";
@@ -12,6 +12,7 @@ import { Watchlist } from "./components/Watchlist";
 import { useLanguage } from "./i18n";
 import { sourceName } from "./labels";
 import { indicatorStore } from "./state/indicators";
+import { updateStore } from "./state/update";
 
 type ThemeName = "dark" | "light";
 const THEME_KEY = "sandchart.theme";
@@ -55,6 +56,22 @@ export function App() {
   const [waitingDefault, setWaitingDefault] = useState(true);
   const [indicators] = useState(() => indicatorStore(backend));
   const [indicatorsOpen, setIndicatorsOpen] = useState(false);
+  const [updates] = useState(() => updateStore(backend));
+
+  // Update checks: the first one waits for the chart, then once a day, unless turned off. Timers
+  // stop while the Mac sleeps, so a window shown again looks for a due check at once.
+  useEffect(() => {
+    const state = updates.state;
+    state.start(firstUpdateCheckMs);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") state.wake();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      state.stop();
+    };
+  }, [updates]);
 
   // Installed modules and the chart's instances; on a cold start the engine may answer late.
   useEffect(() => {
@@ -216,7 +233,7 @@ export function App() {
         />
         )}
       </div>
-      <StatusBar source={sourceName(current?.source ?? "binance")} connection={connection} />
+      <StatusBar source={sourceName(current?.source ?? "binance")} connection={connection} updates={updates} />
       {indicatorsOpen && (
         <IndicatorsDialog backend={backend} store={indicators} onClose={() => setIndicatorsOpen(false)} />
       )}
