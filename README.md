@@ -17,7 +17,7 @@
 - **Nothing to steal.** The app never asks for exchange keys and only talks to Binance's public market-data hosts and, for updates, to GitHub (see [Privacy and network](#privacy-and-network)).
 - **Exact numbers.** Prices and volumes are integers counted in the pair's tick and lot size, from the exchange to the screen. No floating-point money anywhere in the core.
 - **Our own renderer.** The chart is a small Canvas 2D engine written for this project, not a wrapped charting library. A frame takes well under a millisecond to draw.
-- **Built to be extended.** Indicators are WebAssembly modules that run in a sandbox: they cannot read your files or reach the network. Next: a replay you can share and anyone can reproduce, and tools for AI agents. See the [roadmap](#roadmap).
+- **Built to be extended.** Indicators are WebAssembly modules that run in a sandbox: they cannot read your files or reach the network. Next: drawing tools, a replay you can share and anyone can reproduce, and tools for AI agents. See the [roadmap](#roadmap).
 
 ## Features
 
@@ -117,9 +117,9 @@ Nothing is reloaded wholesale: a chart you have opened before comes straight fro
 | --- | --- |
 | 0.1 | Live Binance charts, local cache, own renderer, search, watchlist, themes, unsigned builds |
 | **0.2** (this release) | Indicators as sandboxed WebAssembly modules, with an SDK and a command to build and test them; one-button self-update |
-| 0.3 | Replay: step through history candle by candle, paper trades with stop and take-profit, statistics in R, a shareable `.replay` file that gives anyone the same result |
-| 0.4 | An MCP server so AI agents can read charts, build indicators and run replays |
-| 0.5 | Drawing tools and alerts |
+| 0.3 | Drawing tools: trend lines, levels, zones, Fibonacci, long and short positions, a ruler, a brush and notes on bars |
+| 0.4 | Replay: step through history candle by candle, paper trades with stop and take-profit, statistics in R, a shareable `.replay` file that gives anyone the same result |
+| 0.5 | An MCP server so AI agents can read charts, build indicators and run replays; price alerts |
 | 1.0 | Builds signed with OS code-signing certificates |
 
 The order can change; the design decisions are recorded in [ADR 0001](docs/adr/0001-wasm-indicators-and-tauri.md).
