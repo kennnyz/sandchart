@@ -298,14 +298,14 @@ The first `period - 1` values of `basis`, `upper` and `lower` are `NaN`, so the 
 
 ## Output kinds
 
-Here is a chart with all four kinds on it: SMA and the Bollinger lines over the candles, the Bollinger fill between its two lines, RSI as a line in its own pane, and MACD in a pane of its own with a histogram and two lines.
+Here is a chart with lines, a band and a histogram: SMA and the Bollinger lines over the candles, the Bollinger fill between its two lines, RSI as a line in its own pane, and MACD in a pane of its own with a histogram and two lines.
 
 ![A chart with Bollinger bands, SMA, RSI and MACD](indicators-chart.png)
 
 | Kind | Where | What it draws | What you return |
 | --- | --- | --- | --- |
 | `Line` | Price or own pane | A line through the values. A `NaN` breaks it. | One value per candle. |
-| `Histogram` | Own pane | Bars from zero to the value, in the theme's up colour above zero and its down colour below, until the user picks a colour for the series. A `NaN` draws no bar. The pane's scale always includes 0. | One value per candle. |
+| `Histogram` | Either pane; usually its own | Bars from zero to the value, in the theme's up colour above zero and its down colour below, until the user picks a colour for the series. A `NaN` draws no bar. The pane's scale always includes 0. | One value per candle. |
 | `Markers` | Price pane only | A small shape at a bar: `Up` below the low of the candle, `Down` above its high, `Dot` at its close. A marker may carry a short `text`, drawn to its right. | A list of `Marker { index, shape, text }`. `index` counts from the first candle you received. |
 | `Band(a, b)` | Same pane as its two lines | A translucent fill between line `a` and line `b`, drawn under the candles. | Nothing (an empty list). |
 
@@ -315,7 +315,7 @@ There is no screenshot of markers here. The project that `sandchart-indicator ne
 
 ## Repainting
 
-An indicator repaints when the value at a bar changes after later bars arrive. A common cause is looking ahead (reading `candles[i + 1]` to compute bar `i`) or scaling by the maximum of the whole window. A repainting indicator shows values that nobody could have known at that bar. That matters for any use that replays history, because the chart then shows the past with knowledge of the future. A replay is planned for 0.3, and indicators that do not repaint will be the ones that are safe to replay.
+An indicator repaints when the value at a bar changes after later bars arrive. A common cause is looking ahead (reading `candles[i + 1]` to compute bar `i`) or scaling by the maximum of the whole window. A repainting indicator shows values that nobody could have known at that bar. That matters for any use that replays history, because the chart then shows the past with knowledge of the future. A replay mode is planned, and indicators that do not repaint will be the ones that are safe to replay.
 
 The last candle of a live chart is still forming, so its values move with each tick. That is normal and is not repainting.
 
