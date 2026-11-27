@@ -1,0 +1,16 @@
+[package]
+name = "sandchart-store"
+description = "SQLite cache for Sandchart: instruments, candles, history markers and the watchlist"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+sandchart-core = { path = "../core" }
+rusqlite = { version = "0.43", features = ["bundled"] }
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
