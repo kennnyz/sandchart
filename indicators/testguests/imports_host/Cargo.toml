@@ -1,0 +1,14 @@
+[package]
+name = "testguest-imports-host"
+description = "Test guest for the indicator host: imports a non-WASI host function"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.63"

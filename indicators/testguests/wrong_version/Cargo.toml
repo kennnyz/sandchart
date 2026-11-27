@@ -1,0 +1,14 @@
+[package]
+name = "testguest-wrong-version"
+description = "Test guest for the indicator host: built against contract 0.2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.63"

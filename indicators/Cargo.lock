@@ -196,6 +196,111 @@ dependencies = [
 ]
 
 [[package]]
+name = "testguest-alloc-bomb"
+version = "0.1.0"
+dependencies = [
+ "sandchart-indicator",
+]
+
+[[package]]
+name = "testguest-bad-meta"
+version = "0.1.0"
+dependencies = [
+ "sandchart-indicator",
+]
+
+[[package]]
+name = "testguest-bad-output"
+version = "0.1.0"
+dependencies = [
+ "sandchart-indicator",
+]
+
+[[package]]
+name = "testguest-imports-host"
+version = "0.1.0"
+dependencies = [
+ "wit-bindgen",
+]
+
+[[package]]
+name = "testguest-loop-forever"
+version = "0.1.0"
+dependencies = [
+ "sandchart-indicator",
+]
+
+[[package]]
+name = "testguest-newer-patch"
+version = "0.1.0"
+dependencies = [
+ "wit-bindgen",
+]
+
+[[package]]
+name = "testguest-ok-echo"
+version = "0.1.0"
+dependencies = [
+ "sandchart-indicator",
+]
+
+[[package]]
+name = "testguest-opens-socket"
+version = "0.1.0"
+dependencies = [
+ "sandchart-indicator",
+]
+
+[[package]]
+name = "testguest-panics"
+version = "0.1.0"
+dependencies = [
+ "sandchart-indicator",
+]
+
+[[package]]
+name = "testguest-reads-clock"
+version = "0.1.0"
+dependencies = [
+ "sandchart-indicator",
+]
+
+[[package]]
+name = "testguest-reads-file"
+version = "0.1.0"
+dependencies = [
+ "sandchart-indicator",
+]
+
+[[package]]
+name = "testguest-repaints"
+version = "0.1.0"
+dependencies = [
+ "sandchart-indicator",
+]
+
+[[package]]
+name = "testguest-returns-err"
+version = "0.1.0"
+dependencies = [
+ "sandchart-indicator",
+]
+
+[[package]]
+name = "testguest-returns-inf"
+version = "0.1.0"
+dependencies = [
+ "sandchart-indicator",
+]
+
+[[package]]
+name = "testguest-wrong-version"
+version = "0.1.0"
+dependencies = [
+ "wit-bindgen",
+]
+
+[[package]]
 name = "unicode-ident"
 version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
