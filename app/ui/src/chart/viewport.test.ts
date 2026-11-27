@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { indexToX, panBy, visibleRange, xToIndex, zoomAt, type Viewport } from "./viewport";
+import { gestureZoomFactor, indexToX, panBy, visibleRange, xToIndex, zoomAt, type Viewport } from "./viewport";
 
 const v: Viewport = { barWidth: 10, rightIndex: 99 };
 
@@ -32,5 +32,20 @@ describe("viewport", () => {
     expect(visibleRange({ barWidth: 10, rightIndex: 20 }, 300, 100)).toEqual([0, 20]);
     expect(visibleRange({ barWidth: 10, rightIndex: 500 }, 300, 100)).toEqual([99, 99]);
     expect(visibleRange(v, 300, 0)).toEqual([0, -1]);
+  });
+});
+
+describe("gestureZoomFactor", () => {
+  it("is the ratio of successive cumulative scales", () => {
+    expect(gestureZoomFactor(1, 1.5)).toBeCloseTo(1.5, 12);
+    expect(gestureZoomFactor(1.5, 1.2)).toBeCloseTo(0.8, 12);
+    // Applying the steps one after another gives the cumulative scale.
+    expect(gestureZoomFactor(1, 1.1) * gestureZoomFactor(1.1, 1.6) * gestureZoomFactor(1.6, 2)).toBeCloseTo(2, 12);
+  });
+
+  it("ignores unusable scales", () => {
+    for (const [a, b] of [[0, 1], [1, 0], [-1, 1], [1, NaN], [Infinity, 1]] as const) {
+      expect(gestureZoomFactor(a, b)).toBe(1);
+    }
   });
 });

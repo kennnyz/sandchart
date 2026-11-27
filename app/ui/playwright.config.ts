@@ -18,7 +18,7 @@ export default defineConfig({
   },
   projects: [
     { name: "chart", grepInvert: /@perf/ },
-    // Frame timing depends on the runner; a miss is reported, not a gate (ruling R5).
+    // Draw time depends on the runner: two retries absorb a noisy run, then it gates (ruling R6).
     { name: "perf", grep: /@perf/, retries: 2 },
   ],
   webServer: {

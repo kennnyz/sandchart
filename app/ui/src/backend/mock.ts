@@ -50,6 +50,10 @@ export interface MockOptions {
   latencyMs?: number;
   /** Candles before this time (ms) do not exist. */
   historyStartAt?: number;
+  /** Centre of the generated prices in ticks (default 10 000, i.e. 100.00). */
+  basePrice?: number;
+  /** Decimal places of a price tick for every instrument (default 2). */
+  priceScale?: number;
 }
 
 /** Deterministic pseudo-random value in [0, 1) for candle number `n`. */
@@ -58,9 +62,9 @@ function noise(n: number, salt: number): number {
   return x - Math.floor(x);
 }
 
-function priceAt(n: number): number {
-  // Slow wave plus noise, in ticks (2 decimals): roughly 100.00 +- 20.00.
-  return Math.round(10_000 + 2_000 * Math.sin(n / 200) + 300 * (noise(n, 1) - 0.5));
+function priceAt(n: number, base: number): number {
+  // Slow wave plus noise, in ticks: base +- 20 %.
+  return Math.round(base + 0.2 * base * Math.sin(n / 200) + 0.03 * base * (noise(n, 1) - 0.5));
 }
 
 function column(): CandleColumns {
@@ -68,6 +72,8 @@ function column(): CandleColumns {
 }
 
 export function createMockBackend(opts: MockOptions): Backend {
+  const base = opts.basePrice ?? 10_000;
+  const wick = base * 0.004;
   const delay = () =>
     opts.latencyMs ? new Promise<void>((r) => setTimeout(r, opts.latencyMs)) : Promise.resolve();
   let watchlist: InstrumentId[] = SYMBOLS.slice(0, 2).map((i) => i.id);
@@ -100,17 +106,17 @@ export function createMockBackend(opts: MockOptions): Backend {
 
       const out = column();
       for (let i = start; i < end; i++) {
-        const open = priceAt(i);
-        const close = priceAt(i + 1);
+        const open = priceAt(i, base);
+        const close = priceAt(i + 1, base);
         out.time.push(timeOf(i));
         out.open.push(open);
         out.close.push(close);
-        out.high.push(Math.max(open, close) + Math.round(noise(i, 2) * 40));
-        out.low.push(Math.min(open, close) - Math.round(noise(i, 3) * 40));
+        out.high.push(Math.max(open, close) + Math.round(noise(i, 2) * wick));
+        out.low.push(Math.min(open, close) - Math.round(noise(i, 3) * wick));
         out.volume.push(Math.round(1_000 + noise(i, 4) * 9_000));
       }
       const page: Candles = {
-        instrument,
+        instrument: { ...instrument, priceScale: opts.priceScale ?? instrument.priceScale },
         ...out,
         atHistoryStart: start <= first,
         warning: null,
@@ -135,7 +141,7 @@ export function createMockBackend(opts: MockOptions): Backend {
 
     async getWatchlistQuotes() {
       await delay();
-      return watchlist.map((id, i) => ({ id, last: priceAt(opts.candles) + i, changeBp: 184 - 300 * i }));
+      return watchlist.map((id, i) => ({ id, last: priceAt(opts.candles, base) + i, changeBp: 184 - 300 * i }));
     },
 
     async getConnection() {

@@ -28,6 +28,8 @@ export interface FrameInput {
   /** Whole canvas in CSS px. */
   width: number;
   height: number;
+  /** Price axis width in CSS px (from `priceAxisWidth`). */
+  axisWidth: number;
   series: Series;
   view: Viewport;
   /** Maps prices to CSS px rows of the plot. */
@@ -76,13 +78,42 @@ export class RenderBuffers {
   }
 }
 
-export function plotSize(width: number, height: number): { plotW: number; plotH: number } {
-  return { plotW: Math.max(0, width - PRICE_AXIS_WIDTH), plotH: Math.max(0, height - TIME_AXIS_HEIGHT) };
+export function plotSize(width: number, height: number, axisWidth: number): { plotW: number; plotH: number } {
+  return { plotW: Math.max(0, width - axisWidth), plotH: Math.max(0, height - TIME_AXIS_HEIGHT) };
+}
+
+function priceTicks(scale: PriceScale): number[] {
+  return scale.ticks(Math.max(2, Math.floor(scale.heightPx / MIN_PRICE_TICK_SPACING)));
+}
+
+/**
+ * Widest price label (tick labels, last price, crosshair price) in CSS px, and the
+ * price axis width that fits it: at least PRICE_AXIS_WIDTH, else the label plus padding.
+ */
+export function priceAxisWidth(
+  ctx: CanvasRenderingContext2D,
+  buf: RenderBuffers,
+  dpr: number,
+  scale: PriceScale,
+  decimals: number,
+  lastClose: number,
+  crosshairY: number | null,
+): { width: number; widest: number } {
+  ctx.font = buf.axisFont(dpr);
+  let widest = 0;
+  const measure = (text: string) => {
+    const w = ctx.measureText(text).width / dpr;
+    if (w > widest) widest = w;
+  };
+  for (const t of priceTicks(scale)) measure(formatPrice(Math.round(t), decimals));
+  if (Number.isFinite(lastClose)) measure(formatPrice(lastClose, decimals));
+  if (crosshairY !== null) measure(formatPrice(Math.round(scale.fromY(crosshairY)), decimals));
+  return { width: Math.max(PRICE_AXIS_WIDTH, Math.ceil(widest + 2 * LABEL_PAD)), widest };
 }
 
 export function draw(f: FrameInput, buf: RenderBuffers): void {
   const { ctx, dpr, theme: th, series: s, view } = f;
-  const { plotW, plotH } = plotSize(f.width, f.height);
+  const { plotW, plotH } = plotSize(f.width, f.height, f.axisWidth);
   const W = Math.round(f.width * dpr);
   const H = Math.round(f.height * dpr);
   const pw = Math.round(plotW * dpr);
@@ -98,7 +129,7 @@ export function draw(f: FrameInput, buf: RenderBuffers): void {
 
   const [first, last] = visibleRange(view, plotW, s.count);
   const hasBars = last >= first && s.count > 0;
-  const ticks = f.scale.ticks(Math.max(2, Math.floor(plotH / MIN_PRICE_TICK_SPACING)));
+  const ticks = priceTicks(f.scale);
   if (hasBars) timeMarks(f, buf, first, last, plotW);
 
   // Grid.

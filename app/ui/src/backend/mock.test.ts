@@ -44,6 +44,15 @@ describe("mock backend", () => {
     }
   });
 
+  it("generates prices around basePrice with the given priceScale", async () => {
+    const page = await createMockBackend({ candles: 50, basePrice: 1_234, priceScale: 8 }).getCandles(id, "1h");
+    expect(page.instrument.priceScale).toBe(8);
+    for (const p of [...page.low, ...page.high]) {
+      expect(p).toBeGreaterThan(900);
+      expect(p).toBeLessThan(1_600);
+    }
+  });
+
   it("reports the connection state", async () => {
     expect(await createMockBackend({ candles: 1 }).getConnection()).toBe("connected");
   });

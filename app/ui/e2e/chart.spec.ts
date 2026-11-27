@@ -136,17 +136,59 @@ test("pan_to_history_start_stops_loading", async ({ page }) => {
   expect(await hover(page, plot.left + plot.width - 2, y)).toBeGreaterThanOrEqual(historyStart);
 });
 
-test("frame_time_under_budget @perf", async ({ page }, info) => {
+interface ChartDebug {
+  drawMs: number[];
+  axisWidth: number;
+  widestLabel: number;
+  canvasWidth: number;
+  plotWidth: number;
+}
+
+async function chartDebug(page: Page): Promise<ChartDebug> {
+  return page.evaluate(() => {
+    const d = (window as unknown as { __sandchartDebug: ChartDebug }).__sandchartDebug;
+    return { ...d, drawMs: [...d.drawMs] };
+  });
+}
+
+for (const [name, query, sample] of [
+  ["btc_2_decimals", "?mockPrice=10234567&mockPriceScale=2", "102 345.67"],
+  ["tiny_8_decimals", "?mockPrice=1234&mockPriceScale=8", "0.00001234"],
+  ["millions_2_decimals", "?mockPrice=123456789&mockPriceScale=2", "1 234 567.89"],
+] as const) {
+  test(`price_axis_fits_labels_${name}`, async ({ page }) => {
+    const plot = await openChart(page, `${query}&mockLatency=0`);
+    // Crosshair on, so its price label is part of the measurement too.
+    await hover(page, plot.left + plot.width / 2, plot.top + plot.height / 2);
+    await nextFrame(page);
+    const d = await chartDebug(page);
+    // The mock really produced labels of the expected length.
+    const sampleWidth = await page.evaluate((text) => {
+      const ctx = document.createElement("canvas").getContext("2d")!;
+      ctx.font = '11px "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+      return ctx.measureText(text).width;
+    }, sample);
+    expect(d.widestLabel).toBeGreaterThanOrEqual(sampleWidth - 0.5);
+    expect(d.axisWidth).toBeGreaterThanOrEqual(PRICE_AXIS);
+    expect(d.axisWidth).toBeGreaterThanOrEqual(d.widestLabel + 16);
+    // Labels start 8 px into the axis; the axis ends at the canvas edge.
+    expect(d.plotWidth + d.axisWidth).toBeCloseTo(d.canvasWidth, 3);
+    expect(d.plotWidth + 8 + d.widestLabel).toBeLessThanOrEqual(d.canvasWidth);
+  });
+}
+
+test("draw_time_under_budget @perf", async ({ page }, info) => {
   const plot = await openChart(page);
   const x = plot.left + plot.width / 2;
   const y = plot.top + plot.height / 2;
-  // Zoom out so a full screen of bars is drawn every frame.
+  // Zoom out so a full screen of bars (the per-column path) is drawn every frame.
   await page.mouse.move(x, y);
   for (let i = 0; i < 4; i++) await page.mouse.wheel(0, 300);
   await nextFrame(page);
 
   await page.evaluate(() => {
-    const w = window as unknown as { __frames: number[]; __recording: boolean };
+    const w = window as unknown as { __frames: number[]; __recording: boolean; __sandchartDebug: ChartDebug };
+    w.__sandchartDebug.drawMs.length = 0;
     w.__frames = [];
     w.__recording = true;
     const tick = (t: number) => {
@@ -156,7 +198,6 @@ test("frame_time_under_budget @perf", async ({ page }, info) => {
     requestAnimationFrame(tick);
   });
 
-  await page.mouse.move(x, y);
   await page.mouse.down();
   const start = Date.now();
   let dir = 1;
@@ -173,13 +214,18 @@ test("frame_time_under_budget @perf", async ({ page }, info) => {
     w.__recording = false;
     return w.__frames;
   });
+  const draws = (await chartDebug(page)).drawMs;
+  const mean = draws.reduce((a, b) => a + b, 0) / draws.length;
+  const sorted = [...draws].sort((a, b) => a - b);
+  const p95 = sorted[Math.floor(sorted.length * 0.95)] ?? NaN;
   const intervals = frames.slice(1).map((t, i) => t - frames[i]!);
-  const mean = intervals.reduce((a, b) => a + b, 0) / intervals.length;
-  const worst = Math.max(...intervals);
+  const interval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
   const note =
-    `mean frame interval ${mean.toFixed(2)} ms over ${intervals.length} frames (worst ${worst.toFixed(1)} ms); ` +
-    "the spec target (60 fps with 200 000 candles) is measured on the MacBook Air M1 reference";
+    `draw time mean ${mean.toFixed(2)} ms, p95 ${p95.toFixed(2)} ms over ${draws.length} draws; ` +
+    `rAF interval mean ${interval.toFixed(2)} ms (information only). ` +
+    "The spec target (60 fps with 200 000 candles) is measured on the MacBook Air M1 reference";
   console.log(note);
-  info.annotations.push({ type: "frame-time", description: note });
-  expect(mean).toBeLessThan(16.7);
+  info.annotations.push({ type: "draw-time", description: note });
+  expect(draws.length).toBeGreaterThan(30);
+  expect(mean).toBeLessThan(8);
 });

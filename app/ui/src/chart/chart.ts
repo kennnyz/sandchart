@@ -1,8 +1,9 @@
 import type { CandleColumns, Candles, Instrument, LiveCandle, TimeframeCode } from "../backend/types";
-import { draw, plotSize, RenderBuffers, type Crosshair, type Series } from "./render";
+import { chartDebug } from "./debug";
+import { draw, plotSize, priceAxisWidth, RenderBuffers, type Crosshair, type Series } from "./render";
 import { autoscale, PriceScale, type PriceScaleMode } from "./scale";
-import type { ChartTheme } from "./theme";
-import { panBy, visibleRange, xToIndex, zoomAt, type Viewport } from "./viewport";
+import { PRICE_AXIS_WIDTH, type ChartTheme } from "./theme";
+import { gestureZoomFactor, panBy, visibleRange, xToIndex, zoomAt, type Viewport } from "./viewport";
 
 const DEFAULT_BAR_WIDTH = 8;
 /** Empty bars between the last candle and the price axis after a reset. */
@@ -52,6 +53,13 @@ function emptySeries(capacity: number): Series {
 
 const KEYS = ["time", "open", "high", "low", "close", "volume"] as const;
 
+/** WebKit's non-standard GestureEvent (trackpad pinch in Safari / WKWebView). */
+interface GestureEventLike extends UIEvent {
+  readonly scale: number;
+  readonly clientX: number;
+  readonly clientY: number;
+}
+
 type Drag = { kind: "pan" | "price"; pointerId: number; lastX: number; lastY: number };
 
 /**
@@ -75,6 +83,8 @@ export class Chart {
   private manualRange: [number, number] = [0, 1];
   private width = 0;
   private height = 0;
+  /** Price axis width in CSS px: PRICE_AXIS_WIDTH or wider to fit the labels. */
+  private axisWidth = PRICE_AXIS_WIDTH;
   private dpr = 1;
   private frame = 0;
   private mouse: { x: number; y: number } | null = null;
@@ -83,6 +93,10 @@ export class Chart {
   private needOlderCb: (() => void) | null = null;
   private crosshairCb: ((index: number | null) => void) | null = null;
   private destroyed = false;
+  /** WebKit gesture events exist (macOS WKWebView); Chromium and WebView2 send ctrl+wheel. */
+  private readonly hasGestures = "ongesturestart" in window;
+  private gestureScale = 1;
+  private gestureActive = false;
 
   constructor(
     private readonly host: HTMLElement,
@@ -103,6 +117,11 @@ export class Chart {
     this.canvas.addEventListener("pointerleave", this.onPointerLeave);
     this.canvas.addEventListener("wheel", this.onWheel, { passive: false });
     this.canvas.addEventListener("dblclick", this.onDoubleClick);
+    if (this.hasGestures) {
+      this.canvas.addEventListener("gesturestart", this.onGestureStart);
+      this.canvas.addEventListener("gesturechange", this.onGestureChange);
+      this.canvas.addEventListener("gestureend", this.onGestureEnd);
+    }
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(host);
     this.resize();
@@ -122,6 +141,7 @@ export class Chart {
     this.tf = inferTimeframe(s);
     this.atHistoryStart = c.atHistoryStart || n === 0;
     this.olderPending = false;
+    this.axisWidth = PRICE_AXIS_WIDTH;
     this.resetView();
   }
 
@@ -231,6 +251,11 @@ export class Chart {
     this.canvas.removeEventListener("pointerleave", this.onPointerLeave);
     this.canvas.removeEventListener("wheel", this.onWheel);
     this.canvas.removeEventListener("dblclick", this.onDoubleClick);
+    if (this.hasGestures) {
+      this.canvas.removeEventListener("gesturestart", this.onGestureStart);
+      this.canvas.removeEventListener("gesturechange", this.onGestureChange);
+      this.canvas.removeEventListener("gestureend", this.onGestureEnd);
+    }
     this.canvas.remove();
     this.needOlderCb = null;
     this.crosshairCb = null;
@@ -262,7 +287,7 @@ export class Chart {
   }
 
   private plot() {
-    return plotSize(this.width, this.height);
+    return plotSize(this.width, this.height, this.axisWidth);
   }
 
   private clampView(): void {
@@ -324,8 +349,23 @@ export class Chart {
       this.resize();
       return;
     }
-    const { plotW, plotH } = this.plot();
+    const started = performance.now();
+    const { plotH } = this.plot();
+    const decimals = this.instrument?.priceScale ?? 0;
+    const s = this.series;
+    const lastClose = s.count > 0 ? s.close[s.count - 1]! : NaN;
+    let scale = this.priceScale(plotH);
     const m = this.mouse;
+    const axis = priceAxisWidth(this.ctx, this.buffers, this.dpr, scale, decimals, lastClose, m && m.y < plotH ? m.y : null);
+    // Grow-only within one series, so the plot does not jitter as labels change length.
+    if (axis.width > this.axisWidth) {
+      this.axisWidth = axis.width;
+      this.clampView();
+      this.updateCrosshair();
+      this.checkNeedOlder();
+      scale = this.priceScale(plotH);
+    }
+    const { plotW } = this.plot();
     const inPlot = m !== null && m.x >= 0 && m.x < plotW && m.y >= 0 && m.y < plotH;
     const crosshair: Crosshair | null = inPlot ? { x: m.x, y: m.y, index: this.crosshairIndex } : null;
     draw(
@@ -334,19 +374,29 @@ export class Chart {
         dpr: this.dpr,
         width: this.width,
         height: this.height,
-        series: this.series,
+        axisWidth: this.axisWidth,
+        series: s,
         view: this.view,
-        scale: this.priceScale(plotH),
-        priceDecimals: this.instrument?.priceScale ?? 0,
+        scale,
+        priceDecimals: decimals,
         tf: this.tf,
         crosshair,
         theme: this.theme,
       },
       this.buffers,
     );
+    const debug = chartDebug();
+    if (debug) {
+      if (debug.drawMs.length >= 10_000) debug.drawMs.length = 0;
+      debug.drawMs.push(performance.now() - started);
+      debug.axisWidth = this.axisWidth;
+      debug.widestLabel = axis.widest;
+      debug.canvasWidth = this.width;
+      debug.plotWidth = plotW;
+    }
   };
 
-  private local(e: PointerEvent | WheelEvent | MouseEvent): { x: number; y: number } {
+  private local(e: { clientX: number; clientY: number }): { x: number; y: number } {
     const r = this.canvas.getBoundingClientRect();
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   }
@@ -397,6 +447,8 @@ export class Chart {
 
   private readonly onWheel = (e: WheelEvent): void => {
     e.preventDefault();
+    // During a WebKit pinch the gesture events zoom; do not zoom twice.
+    if (this.gestureActive && e.ctrlKey) return;
     const p = this.local(e);
     this.mouse = p;
     const { plotW } = this.plot();
@@ -414,6 +466,30 @@ export class Chart {
       this.view = zoomAt(this.view, anchor, plotW, factor);
     }
     this.afterViewChange();
+  };
+
+  private readonly onGestureStart = (e: Event): void => {
+    e.preventDefault();
+    this.gestureActive = true;
+    this.gestureScale = (e as GestureEventLike).scale || 1;
+  };
+
+  private readonly onGestureChange = (e: Event): void => {
+    e.preventDefault();
+    const g = e as GestureEventLike;
+    const factor = gestureZoomFactor(this.gestureScale, g.scale);
+    this.gestureScale = g.scale;
+    if (factor === 1) return;
+    const p = this.local(g);
+    const { plotW } = this.plot();
+    this.view = zoomAt(this.view, Math.min(Math.max(0, p.x), plotW), plotW, factor);
+    this.afterViewChange();
+  };
+
+  private readonly onGestureEnd = (e: Event): void => {
+    e.preventDefault();
+    this.gestureActive = false;
+    this.gestureScale = 1;
   };
 
   private readonly onDoubleClick = (e: MouseEvent): void => {

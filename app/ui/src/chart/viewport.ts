@@ -35,3 +35,13 @@ export function visibleRange(v: Viewport, widthPx: number, count: number): [numb
   const clamp = (i: number) => Math.min(count - 1, Math.max(0, i));
   return [clamp(first), clamp(last)];
 }
+
+/**
+ * Zoom factor between two successive `scale` values of a WebKit gesture event (macOS
+ * trackpad pinch in WKWebView). `scale` is cumulative since `gesturestart`, so the
+ * step is their ratio; an unusable value gives 1 (no zoom).
+ */
+export function gestureZoomFactor(prevScale: number, scale: number): number {
+  if (!Number.isFinite(prevScale) || !Number.isFinite(scale) || prevScale <= 0 || scale <= 0) return 1;
+  return scale / prevScale;
+}
