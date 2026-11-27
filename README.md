@@ -1,23 +1,124 @@
 # Sandchart
 
-Sandchart is an open-source desktop chart app: fast candlestick charts for Binance spot markets, with no account, no subscription and no telemetry. It is a small, hackable alternative to the big charting websites for people who just want to look at a chart.
+**An open-source desktop chart terminal written in Rust.** Fast candlestick charts for Binance spot markets, a local cache that opens charts instantly, and no account, subscription, API keys or telemetry.
+
+[![CI](https://github.com/kennnyz/sandchart/actions/workflows/ci.yml/badge.svg)](https://github.com/kennnyz/sandchart/actions/workflows/ci.yml)
+![Licence: MIT OR Apache-2.0](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)
+![Platforms: macOS, Windows, Linux](https://img.shields.io/badge/platforms-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)
+![Status: 0.1, early](https://img.shields.io/badge/status-0.1%20early-orange)
 
 ![Sandchart showing a BTCUSDT 1h chart with the watchlist](docs/screenshot.png)
 
-The screenshot uses sample data from the built-in mock, not real market prices.
+<sub>The screenshot uses sample data from the built-in mock, not real market prices.</sub>
+
+## Why Sandchart
+
+- **Your machine, your data.** Candles are cached in a local SQLite file. Charts open from cache instantly and keep working offline. There is nothing to sign in to and nothing that phones home.
+- **Nothing to steal.** The app never asks for exchange keys and only talks to Binance's public market-data hosts.
+- **Exact numbers.** Prices and volumes are integers counted in the pair's tick and lot size, from the exchange to the screen. No floating-point money anywhere in the core.
+- **Our own renderer.** The chart is a small Canvas 2D engine written for this project, not a wrapped charting library. A frame takes well under a millisecond to draw.
+- **Built to be extended.** Where it is going: indicators that run as WebAssembly modules in a sandbox (they cannot read your files or reach the network), a replay you can share and anyone can reproduce, and tools for AI agents. See the [roadmap](#roadmap).
 
 ## Features in 0.1
 
-- Candlestick chart with volume, drawn by our own Canvas renderer: pan and zoom with mouse or trackpad, crosshair with an OHLC legend, auto scale and logarithmic scale.
-- Timeframes 1m to 1W, each one fetched natively from Binance and cached locally. Building higher timeframes from 1-minute candles arrives with replay in 0.3.
-- Live updates of the last candle over WebSocket, with a connection indicator and automatic reconnects.
-- Search over all Binance spot pairs (Cmd/Ctrl+K) and a drag-to-reorder watchlist with last price and 24 h change.
-- Candles are monochrome; colour appears only in numbers. Dark and light themes.
-- English and Russian interface.
-- Candles are stored in a local SQLite file, so charts open instantly and work from cache when offline.
+- Candlestick chart with volume: pan and zoom with mouse or trackpad (including pinch), crosshair with an OHLC legend, auto scale and logarithmic scale. The price axis grows to fit long prices such as `120 587.50` or `0.00001234`.
+- Timeframes from 1 minute to 1 month, each fetched natively from Binance and cached.
+- Live updates of the forming candle over WebSocket. After a dropped connection or a sleeping laptop, the missed candles are fetched again, so the chart has no gaps.
+- Polite to the exchange: retries back off (1, 2, 4… up to 30 s) and honour Binance's `Retry-After`.
+- Search over all Binance spot pairs (Cmd/Ctrl+K) and a watchlist with last price and 24 h change: add with the `+` button, drag to reorder, hide the panel to give the chart more room.
+- Monochrome candles (colour appears only in numbers), dark and light themes, English and Russian interface.
 - Builds for macOS (Apple silicon and Intel), Windows and Linux.
 
-Not in 0.1: indicators, drawing tools, alerts, replay, AI-agent tools. They are planned; see [ADR 0001](docs/adr/0001-wasm-indicators-and-tauri.md).
+## Architecture
+
+Sandchart is one desktop binary. A Rust core owns the data; a thin TypeScript UI draws it.
+
+```mermaid
+flowchart LR
+    subgraph app["Sandchart app"]
+        direction TB
+        ui["UI in a WebView<br/>React + TypeScript<br/>own Canvas chart renderer"]
+        subgraph core["Rust core"]
+            direction LR
+            engine["engine<br/>cache-then-fetch, live updates,<br/>gap backfill, connection state"]
+            data["data<br/>Binance REST + WebSocket"]
+            store[("store<br/>SQLite cache")]
+            corecrate["core<br/>exact decimal ticks,<br/>timeframes, candles"]
+        end
+        ui -- "commands" --> engine
+        engine -- "events + live channel" --> ui
+        engine --> data
+        engine --> store
+        data --> corecrate
+        store --> corecrate
+    end
+    binance["Binance public market data<br/>data-api.binance.vision (REST)<br/>data-stream.binance.vision (WebSocket)"]
+    data <--> binance
+
+    subgraph planned["Planned"]
+        direction TB
+        wasm["Indicator .wasm<br/>no files, network or clock"]
+        replay["Replay + paper trading"]
+        mcp["MCP server for AI agents"]
+    end
+    engine -. "candles up to the cursor" .-> wasm
+    engine -.-> replay
+    mcp -. "local socket" .-> engine
+```
+
+| Crate or folder | What it does |
+| --- | --- |
+| [`crates/core`](crates/core) | Shared types: instruments, candles, timeframes, and decimal strings parsed into integer ticks without floats. |
+| [`crates/store`](crates/store) | The SQLite cache: instruments, candles per pair and timeframe, the start of each pair's history, and the watchlist. Migrations go up and down. |
+| [`crates/data`](crates/data) | Data providers behind one `Provider` trait. Binance today: pair list, history pages, 24 h changes, and a live WebSocket stream that reconnects with backoff and an idle timeout. |
+| [`crates/engine`](crates/engine) | The brain: serves charts from cache first, fetches only what is missing, keeps live subscriptions, backfills gaps after reconnects, and tracks the connection state. |
+| [`app/src-tauri`](app/src-tauri) | The desktop shell: exposes the engine to the UI as typed commands and a live-event channel, with a strict content security policy and no file-system or shell access. |
+| [`app/ui`](app/ui) | The interface: Canvas chart, search, watchlist, status bar and states. It runs in a normal browser against a built-in mock too, which is how the end-to-end tests work. |
+
+### How candles get to the screen
+
+```mermaid
+sequenceDiagram
+    participant UI
+    participant Engine
+    participant Cache as SQLite cache
+    participant Binance
+
+    UI->>Engine: open BTCUSDT, 1h
+    Engine->>Cache: cached candles?
+    Cache-->>Engine: what is stored
+    alt cache is stale or empty
+        Engine->>Binance: newest page (up to 1000 candles)
+        Binance-->>Engine: candles
+        Engine->>Cache: save
+    end
+    Engine-->>UI: page of candles
+    UI->>Engine: subscribe to live updates
+    loop every 1-2 s
+        Binance-->>Engine: forming candle (WebSocket)
+        Engine-->>UI: update the last candle
+    end
+    Note over Engine,Binance: closed candles are saved.<br/>After a dropped connection only the missed candles are fetched.
+    UI->>Engine: scrolled to the left edge
+    Engine->>Binance: one older page
+    Engine->>Cache: save
+    Engine-->>UI: older candles
+```
+
+Nothing is reloaded wholesale: a chart you have opened before comes straight from the cache, and the exchange only sees requests for candles the cache does not have.
+
+## Roadmap
+
+| Version | Focus |
+| --- | --- |
+| **0.1** (this release) | Live Binance charts, local cache, own renderer, search, watchlist, themes, unsigned builds |
+| 0.2 | Indicators as sandboxed WebAssembly modules, with an SDK and a command to build and test them |
+| 0.3 | Replay: step through history candle by candle, paper trades with stop and take-profit, statistics in R, a shareable `.replay` file that gives anyone the same result |
+| 0.4 | An MCP server so AI agents can read charts, build indicators and run replays |
+| 0.5 | Drawing tools and alerts |
+| 1.0 | Signed builds and auto-update |
+
+The order can change; the design decisions are recorded in [ADR 0001](docs/adr/0001-wasm-indicators-and-tauri.md).
 
 ## Install
 
@@ -64,7 +165,7 @@ On Windows, compare `Get-FileHash .\Sandchart_<version>_x64_en-US.msi` with the 
 Check that the file was built by this repository's workflow, with the [GitHub CLI](https://cli.github.com/):
 
 ```sh
-gh attestation verify Sandchart_<version>_aarch64.dmg --repo <owner>/sandchart
+gh attestation verify Sandchart_<version>_aarch64.dmg --repo kennnyz/sandchart
 ```
 
 ## Build from source
