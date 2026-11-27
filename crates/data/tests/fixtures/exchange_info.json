@@ -1,0 +1,51 @@
+{
+  "timezone": "UTC",
+  "serverTime": 1795763690611,
+  "symbols": [
+    {
+      "symbol": "BTCUSDT",
+      "status": "TRADING",
+      "baseAsset": "BTC",
+      "quoteAsset": "USDT",
+      "isSpotTradingAllowed": true,
+      "filters": [
+        { "filterType": "PRICE_FILTER", "minPrice": "0.01000000", "maxPrice": "1000000.00000000", "tickSize": "0.01000000" },
+        { "filterType": "LOT_SIZE", "minQty": "0.00001000", "maxQty": "9000.00000000", "stepSize": "0.00001000" },
+        { "filterType": "MAX_NUM_ORDERS", "maxNumOrders": 200 }
+      ]
+    },
+    {
+      "symbol": "PEPEUSDT",
+      "status": "TRADING",
+      "baseAsset": "PEPE",
+      "quoteAsset": "USDT",
+      "isSpotTradingAllowed": true,
+      "filters": [
+        { "filterType": "PRICE_FILTER", "minPrice": "0.00000001", "maxPrice": "1000.00000000", "tickSize": "0.00000001" },
+        { "filterType": "LOT_SIZE", "minQty": "1.00", "maxQty": "9000000000.00", "stepSize": "1.00" }
+      ]
+    },
+    {
+      "symbol": "OLDUSDT",
+      "status": "BREAK",
+      "baseAsset": "OLD",
+      "quoteAsset": "USDT",
+      "isSpotTradingAllowed": true,
+      "filters": [
+        { "filterType": "PRICE_FILTER", "minPrice": "0.00010000", "maxPrice": "1000.00000000", "tickSize": "0.00010000" },
+        { "filterType": "LOT_SIZE", "minQty": "0.10000000", "maxQty": "90000.00000000", "stepSize": "0.10000000" }
+      ]
+    },
+    {
+      "symbol": "NOSPOTUSDT",
+      "status": "TRADING",
+      "baseAsset": "NOSPOT",
+      "quoteAsset": "USDT",
+      "isSpotTradingAllowed": false,
+      "filters": [
+        { "filterType": "PRICE_FILTER", "minPrice": "0.01000000", "maxPrice": "1000.00000000", "tickSize": "0.01000000" },
+        { "filterType": "LOT_SIZE", "minQty": "0.01000000", "maxQty": "90000.00000000", "stepSize": "0.01000000" }
+      ]
+    }
+  ]
+}

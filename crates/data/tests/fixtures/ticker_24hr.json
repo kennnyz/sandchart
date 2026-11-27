@@ -1,0 +1,4 @@
+[
+  { "symbol": "BTCUSDT", "priceChange": "1120.50000000", "priceChangePercent": "1.840", "lastPrice": "61791.77000000", "openPrice": "60671.27000000", "volume": "18234.12345000" },
+  { "symbol": "PEPEUSDT", "priceChange": "-0.00000012", "priceChangePercent": "-2.345", "lastPrice": "0.00001234", "openPrice": "0.00001246", "volume": "9876543210.00" }
+]
