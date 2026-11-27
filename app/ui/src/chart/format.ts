@@ -31,3 +31,12 @@ export function formatTimeLabel(ms: number, tf: TimeframeCode, prevMs: number | 
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
 }
+
+/** Full UTC date of a bar for the crosshair label: `27 Nov 2026 14:05`, no time from 1d up. */
+export function formatCrosshairTime(ms: number, tf: TimeframeCode): string {
+  const d = new Date(ms);
+  const date = `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()] ?? ""} ${d.getUTCFullYear()}`;
+  if (DAILY_AND_UP.has(tf)) return date;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+}

@@ -4,3 +4,5 @@ node_modules/
 .DS_Store
 /app/ui/dist/
 /app/src-tauri/gen/
+/app/ui/test-results/
+/app/ui/playwright-report/

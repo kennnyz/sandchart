@@ -1,0 +1,459 @@
+import type { CandleColumns, Candles, Instrument, LiveCandle, TimeframeCode } from "../backend/types";
+import { draw, plotSize, RenderBuffers, type Crosshair, type Series } from "./render";
+import { autoscale, PriceScale, type PriceScaleMode } from "./scale";
+import type { ChartTheme } from "./theme";
+import { panBy, visibleRange, xToIndex, zoomAt, type Viewport } from "./viewport";
+
+const DEFAULT_BAR_WIDTH = 8;
+/** Empty bars between the last candle and the price axis after a reset. */
+const RIGHT_MARGIN_BARS = 5;
+/** `onNeedOlder` fires when the left edge is this close to the first candle. */
+const NEED_OLDER_BARS = 100;
+/** Bars that must stay on screen at either edge while panning. */
+const KEEP_VISIBLE_BARS = 5;
+const MINUTE = 60_000;
+
+/** Bar duration of every timeframe, to recover the timeframe from the data. */
+const TF_STEPS: [TimeframeCode, number][] = [
+  ["1m", MINUTE], ["3m", 3 * MINUTE], ["5m", 5 * MINUTE], ["15m", 15 * MINUTE], ["30m", 30 * MINUTE],
+  ["1h", 60 * MINUTE], ["2h", 120 * MINUTE], ["4h", 240 * MINUTE], ["6h", 360 * MINUTE],
+  ["8h", 480 * MINUTE], ["12h", 720 * MINUTE], ["1d", 1440 * MINUTE], ["3d", 4320 * MINUTE],
+  ["1w", 10_080 * MINUTE], ["1M", 43_200 * MINUTE],
+];
+
+function inferTimeframe(s: Series): TimeframeCode {
+  if (s.count < 2) return "1h";
+  let step = Infinity;
+  // The smallest of the last few gaps: a missing bar must not double the step.
+  for (let i = Math.max(1, s.count - 5); i < s.count; i++) step = Math.min(step, s.time[i]! - s.time[i - 1]!);
+  let best: TimeframeCode = "1h";
+  let bestDiff = Infinity;
+  for (const [code, ms] of TF_STEPS) {
+    const diff = Math.abs(Math.log(step / ms));
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      best = code;
+    }
+  }
+  return best;
+}
+
+function emptySeries(capacity: number): Series {
+  return {
+    time: new Float64Array(capacity),
+    open: new Float64Array(capacity),
+    high: new Float64Array(capacity),
+    low: new Float64Array(capacity),
+    close: new Float64Array(capacity),
+    volume: new Float64Array(capacity),
+    count: 0,
+  };
+}
+
+const KEYS = ["time", "open", "high", "low", "close", "volume"] as const;
+
+type Drag = { kind: "pan" | "price"; pointerId: number; lastX: number; lastY: number };
+
+/**
+ * Candlestick chart on one Canvas 2D: main pane, price axis on the right, time axis
+ * at the bottom. Draws on requestAnimationFrame only when something changed.
+ */
+export class Chart {
+  private readonly canvas: HTMLCanvasElement;
+  private readonly ctx: CanvasRenderingContext2D;
+  private readonly buffers = new RenderBuffers();
+  private readonly resizeObserver: ResizeObserver;
+  private series = emptySeries(0);
+  private instrument: Instrument | null = null;
+  private tf: TimeframeCode = "1h";
+  private atHistoryStart = false;
+  private olderPending = false;
+  private view: Viewport = { barWidth: DEFAULT_BAR_WIDTH, rightIndex: 0 };
+  private mode: PriceScaleMode = "linear";
+  private autoScale = true;
+  /** Price range while autoscale is off. */
+  private manualRange: [number, number] = [0, 1];
+  private width = 0;
+  private height = 0;
+  private dpr = 1;
+  private frame = 0;
+  private mouse: { x: number; y: number } | null = null;
+  private drag: Drag | null = null;
+  private crosshairIndex: number | null = null;
+  private needOlderCb: (() => void) | null = null;
+  private crosshairCb: ((index: number | null) => void) | null = null;
+  private destroyed = false;
+
+  constructor(
+    private readonly host: HTMLElement,
+    private theme: ChartTheme,
+  ) {
+    this.canvas = document.createElement("canvas");
+    this.canvas.style.cssText = "position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none";
+    this.canvas.style.cursor = "crosshair";
+    host.appendChild(this.canvas);
+    const ctx = this.canvas.getContext("2d", { alpha: false });
+    if (!ctx) throw new Error("Canvas 2D is not available");
+    this.ctx = ctx;
+
+    this.canvas.addEventListener("pointerdown", this.onPointerDown);
+    this.canvas.addEventListener("pointermove", this.onPointerMove);
+    this.canvas.addEventListener("pointerup", this.onPointerUp);
+    this.canvas.addEventListener("pointercancel", this.onPointerUp);
+    this.canvas.addEventListener("pointerleave", this.onPointerLeave);
+    this.canvas.addEventListener("wheel", this.onWheel, { passive: false });
+    this.canvas.addEventListener("dblclick", this.onDoubleClick);
+    this.resizeObserver = new ResizeObserver(() => this.resize());
+    this.resizeObserver.observe(host);
+    this.resize();
+    // Axis text is measured with the web font once it has loaded.
+    void document.fonts?.ready.then(() => this.invalidate());
+  }
+
+  // ---- Public API ----
+
+  setData(c: Candles): void {
+    const n = c.time.length;
+    const s = emptySeries(n + 1024);
+    for (const k of KEYS) s[k].set(c[k]);
+    s.count = n;
+    this.series = s;
+    this.instrument = c.instrument;
+    this.tf = inferTimeframe(s);
+    this.atHistoryStart = c.atHistoryStart || n === 0;
+    this.olderPending = false;
+    this.resetView();
+  }
+
+  /** Adds older candles in front; the view stays on the same bars. */
+  prependData(c: Candles): void {
+    this.olderPending = false;
+    if (c.atHistoryStart) this.atHistoryStart = true;
+    const old = this.series;
+    const firstTime = old.count > 0 ? old.time[0]! : Infinity;
+    let n = 0;
+    while (n < c.time.length && c.time[n]! < firstTime) n++;
+    if (n === 0) {
+      // Nothing older came back: this is the start of history.
+      this.atHistoryStart = true;
+      this.invalidate();
+      return;
+    }
+    const s = emptySeries(old.count + n + 1024);
+    for (const k of KEYS) {
+      s[k].set((c[k] as CandleColumns[typeof k]).slice(0, n));
+      s[k].set(old[k].subarray(0, old.count), n);
+    }
+    s.count = old.count + n;
+    this.series = s;
+    if (old.count < 2) this.tf = inferTimeframe(s);
+    this.view = { barWidth: this.view.barWidth, rightIndex: this.view.rightIndex + n };
+    this.afterViewChange();
+  }
+
+  /** Applies a live bar: replaces the last candle or appends a newer one. */
+  updateLast(c: LiveCandle): void {
+    const s = this.series;
+    if (s.count === 0) return;
+    const lastTime = s.time[s.count - 1]!;
+    if (c.time < lastTime) return;
+    if (c.time > lastTime) {
+      if (s.count === s.time.length) this.grow();
+      const following = this.view.rightIndex >= this.series.count - 1;
+      this.series.count++;
+      if (following) this.view = { barWidth: this.view.barWidth, rightIndex: this.view.rightIndex + 1 };
+    }
+    const t = this.series;
+    const i = t.count - 1;
+    t.time[i] = c.time;
+    t.open[i] = c.open;
+    t.high[i] = c.high;
+    t.low[i] = c.low;
+    t.close[i] = c.close;
+    t.volume[i] = c.volume;
+    this.afterViewChange();
+  }
+
+  setPriceMode(m: PriceScaleMode): void {
+    if (m === this.mode) return;
+    this.mode = m;
+    this.autoScale = true;
+    this.invalidate();
+  }
+
+  setTheme(t: ChartTheme): void {
+    this.theme = t;
+    this.invalidate();
+  }
+
+  resetView(): void {
+    this.view = { barWidth: DEFAULT_BAR_WIDTH, rightIndex: this.series.count - 1 + RIGHT_MARGIN_BARS };
+    this.autoScale = true;
+    this.afterViewChange();
+  }
+
+  onNeedOlder(cb: () => void): void {
+    this.needOlderCb = cb;
+    this.checkNeedOlder();
+  }
+
+  onCrosshair(cb: (index: number | null) => void): void {
+    this.crosshairCb = cb;
+  }
+
+  /** Candle `index` of the current series (indices shift by the size of every prepend). */
+  candle(index: number): LiveCandle | null {
+    const s = this.series;
+    if (index < 0 || index >= s.count) return null;
+    return {
+      time: s.time[index]!,
+      open: s.open[index]!,
+      high: s.high[index]!,
+      low: s.low[index]!,
+      close: s.close[index]!,
+      volume: s.volume[index]!,
+      closed: index < s.count - 1,
+    };
+  }
+
+  get count(): number {
+    return this.series.count;
+  }
+
+  destroy(): void {
+    this.destroyed = true;
+    cancelAnimationFrame(this.frame);
+    this.resizeObserver.disconnect();
+    this.canvas.removeEventListener("pointerdown", this.onPointerDown);
+    this.canvas.removeEventListener("pointermove", this.onPointerMove);
+    this.canvas.removeEventListener("pointerup", this.onPointerUp);
+    this.canvas.removeEventListener("pointercancel", this.onPointerUp);
+    this.canvas.removeEventListener("pointerleave", this.onPointerLeave);
+    this.canvas.removeEventListener("wheel", this.onWheel);
+    this.canvas.removeEventListener("dblclick", this.onDoubleClick);
+    this.canvas.remove();
+    this.needOlderCb = null;
+    this.crosshairCb = null;
+  }
+
+  // ---- Internals ----
+
+  private grow(): void {
+    const old = this.series;
+    const s = emptySeries(old.time.length * 2 + 1024);
+    for (const k of KEYS) s[k].set(old[k].subarray(0, old.count));
+    s.count = old.count;
+    this.series = s;
+  }
+
+  private invalidate(): void {
+    if (this.frame !== 0 || this.destroyed) return;
+    this.frame = requestAnimationFrame(this.render);
+  }
+
+  private resize(): void {
+    const rect = this.host.getBoundingClientRect();
+    this.width = rect.width;
+    this.height = rect.height;
+    this.dpr = window.devicePixelRatio || 1;
+    this.canvas.width = Math.max(1, Math.round(rect.width * this.dpr));
+    this.canvas.height = Math.max(1, Math.round(rect.height * this.dpr));
+    this.afterViewChange();
+  }
+
+  private plot() {
+    return plotSize(this.width, this.height);
+  }
+
+  private clampView(): void {
+    const { plotW } = this.plot();
+    const n = this.series.count;
+    if (n === 0 || plotW <= 0) return;
+    const v = this.view;
+    const lo = Math.min(n - 1, KEEP_VISIBLE_BARS);
+    const hi = n - 1 + plotW / v.barWidth - KEEP_VISIBLE_BARS;
+    if (v.rightIndex < lo) this.view = { barWidth: v.barWidth, rightIndex: lo };
+    else if (v.rightIndex > hi) this.view = { barWidth: v.barWidth, rightIndex: hi };
+  }
+
+  /** Call after any change of data, viewport or mouse position. */
+  private afterViewChange(): void {
+    this.clampView();
+    this.updateCrosshair();
+    this.checkNeedOlder();
+    this.invalidate();
+  }
+
+  private checkNeedOlder(): void {
+    if (!this.needOlderCb || this.atHistoryStart || this.olderPending || this.series.count === 0) return;
+    const { plotW } = this.plot();
+    if (plotW <= 0) return;
+    if (xToIndex(this.view, 0, plotW) < NEED_OLDER_BARS) {
+      this.olderPending = true;
+      this.needOlderCb();
+    }
+  }
+
+  private updateCrosshair(): void {
+    const { plotW, plotH } = this.plot();
+    const m = this.mouse;
+    let index: number | null = null;
+    if (m && m.x >= 0 && m.x < plotW && m.y >= 0 && m.y < plotH) {
+      const i = Math.round(xToIndex(this.view, m.x, plotW));
+      if (i >= 0 && i < this.series.count) index = i;
+    }
+    if (index !== this.crosshairIndex) {
+      this.crosshairIndex = index;
+      this.crosshairCb?.(index);
+    }
+  }
+
+  private priceScale(plotH: number): PriceScale {
+    if (!this.autoScale) return new PriceScale(this.manualRange[0], this.manualRange[1], plotH, this.mode);
+    const { plotW } = this.plot();
+    const s = this.series;
+    const range = visibleRange(this.view, plotW, s.count);
+    const [min, max] = autoscale(s.low, s.high, range, 0.08, this.mode);
+    return new PriceScale(min, max, plotH, this.mode);
+  }
+
+  private readonly render = (): void => {
+    this.frame = 0;
+    if (this.destroyed) return;
+    if (window.devicePixelRatio !== this.dpr) {
+      this.resize();
+      return;
+    }
+    const { plotW, plotH } = this.plot();
+    const m = this.mouse;
+    const inPlot = m !== null && m.x >= 0 && m.x < plotW && m.y >= 0 && m.y < plotH;
+    const crosshair: Crosshair | null = inPlot ? { x: m.x, y: m.y, index: this.crosshairIndex } : null;
+    draw(
+      {
+        ctx: this.ctx,
+        dpr: this.dpr,
+        width: this.width,
+        height: this.height,
+        series: this.series,
+        view: this.view,
+        scale: this.priceScale(plotH),
+        priceDecimals: this.instrument?.priceScale ?? 0,
+        tf: this.tf,
+        crosshair,
+        theme: this.theme,
+      },
+      this.buffers,
+    );
+  };
+
+  private local(e: PointerEvent | WheelEvent | MouseEvent): { x: number; y: number } {
+    const r = this.canvas.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  }
+
+  private readonly onPointerDown = (e: PointerEvent): void => {
+    if (e.button !== 0) return;
+    const p = this.local(e);
+    const { plotW } = this.plot();
+    this.drag = { kind: p.x >= plotW ? "price" : "pan", pointerId: e.pointerId, lastX: e.clientX, lastY: e.clientY };
+    this.canvas.setPointerCapture(e.pointerId);
+    if (this.drag.kind === "pan") this.canvas.style.cursor = "grabbing";
+  };
+
+  private readonly onPointerMove = (e: PointerEvent): void => {
+    const p = this.local(e);
+    this.mouse = p;
+    const { plotW, plotH } = this.plot();
+    const d = this.drag;
+    if (d && d.pointerId === e.pointerId) {
+      const dx = e.clientX - d.lastX;
+      const dy = e.clientY - d.lastY;
+      d.lastX = e.clientX;
+      d.lastY = e.clientY;
+      if (d.kind === "pan") {
+        this.view = panBy(this.view, dx);
+        if (!this.autoScale) this.shiftPrice(dy, plotH);
+      } else {
+        this.stretchPrice(dy, plotH);
+      }
+    } else {
+      this.canvas.style.cursor = p.x >= plotW ? "ns-resize" : "crosshair";
+    }
+    this.afterViewChange();
+  };
+
+  private readonly onPointerUp = (e: PointerEvent): void => {
+    if (this.drag?.pointerId !== e.pointerId) return;
+    this.drag = null;
+    if (this.canvas.hasPointerCapture(e.pointerId)) this.canvas.releasePointerCapture(e.pointerId);
+    this.canvas.style.cursor = this.local(e).x >= this.plot().plotW ? "ns-resize" : "crosshair";
+  };
+
+  private readonly onPointerLeave = (): void => {
+    if (this.drag) return;
+    this.mouse = null;
+    this.afterViewChange();
+  };
+
+  private readonly onWheel = (e: WheelEvent): void => {
+    e.preventDefault();
+    const p = this.local(e);
+    this.mouse = p;
+    const { plotW } = this.plot();
+    // Pixel deltas from a trackpad or wheel; line deltas from some mice.
+    const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? this.height : 1;
+    const dy = e.deltaY * unit;
+    const dx = e.deltaX * unit;
+    if (Math.abs(dx) > Math.abs(dy) && !e.ctrlKey) {
+      // Horizontal two-finger scroll pans.
+      this.view = panBy(this.view, -dx);
+    } else {
+      // Pinch arrives as a wheel event with ctrlKey and needs a stronger factor.
+      const factor = Math.exp(-dy * (e.ctrlKey ? 0.01 : 0.002));
+      const anchor = Math.min(Math.max(0, p.x), plotW);
+      this.view = zoomAt(this.view, anchor, plotW, factor);
+    }
+    this.afterViewChange();
+  };
+
+  private readonly onDoubleClick = (e: MouseEvent): void => {
+    if (this.local(e).x < this.plot().plotW) return;
+    this.autoScale = true;
+    this.invalidate();
+  };
+
+  private freezeScale(plotH: number): void {
+    if (!this.autoScale) return;
+    const s = this.priceScale(plotH);
+    this.manualRange = [s.min, s.max];
+    this.autoScale = false;
+  }
+
+  /** Drag on the price axis: down widens the range, up narrows it, around its centre. */
+  private stretchPrice(dy: number, plotH: number): void {
+    if (dy === 0 || plotH <= 0) return;
+    this.freezeScale(plotH);
+    const factor = Math.exp(dy * 0.005);
+    const [lo, hi] = this.toScaleSpace(this.manualRange);
+    const mid = (lo + hi) / 2;
+    const half = Math.max(((hi - lo) / 2) * factor, 1e-9);
+    this.manualRange = this.fromScaleSpace([mid - half, mid + half]);
+  }
+
+  /** Vertical drag on the plot while autoscale is off moves the price range. */
+  private shiftPrice(dy: number, plotH: number): void {
+    if (dy === 0 || plotH <= 0) return;
+    const [lo, hi] = this.toScaleSpace(this.manualRange);
+    const shift = (dy / plotH) * (hi - lo);
+    this.manualRange = this.fromScaleSpace([lo + shift, hi + shift]);
+  }
+
+  private toScaleSpace([lo, hi]: [number, number]): [number, number] {
+    return this.mode === "log" ? [Math.log(Math.max(1, lo)), Math.log(Math.max(1, hi))] : [lo, hi];
+  }
+
+  private fromScaleSpace([lo, hi]: [number, number]): [number, number] {
+    return this.mode === "log" ? [Math.exp(lo), Math.exp(hi)] : [lo, hi];
+  }
+}
+

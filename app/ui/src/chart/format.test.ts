@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatPrice, formatTimeLabel } from "./format";
+import { formatCrosshairTime, formatPrice, formatTimeLabel } from "./format";
 
 describe("formatPrice", () => {
   it("formats_tiny_tick_prices", () => {
@@ -36,5 +36,13 @@ describe("formatTimeLabel", () => {
   });
   it("first label has no previous", () => {
     expect(formatTimeLabel(t("2026-11-27T10:15:00Z"), "15m", null)).toBe("10:15");
+  });
+});
+
+describe("formatCrosshairTime", () => {
+  it("shows date and UTC time below a day, only the date from 1d up", () => {
+    const t = Date.UTC(2026, 10, 27, 14, 5);
+    expect(formatCrosshairTime(t, "1h")).toBe("27 Nov 2026 14:05");
+    expect(formatCrosshairTime(t, "1d")).toBe("27 Nov 2026");
   });
 });
