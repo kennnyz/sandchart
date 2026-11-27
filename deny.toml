@@ -10,17 +10,20 @@ allow = [
     "ISC",
     "Zlib",
     "Unicode-3.0",
+    # Apache-2.0 plus an exception that only loosens it for compiled code. It is
+    # global, not per crate, because wasmtime, cranelift and the wasi crates are
+    # dozens of crates under this licence.
+    "Apache-2.0 WITH LLVM-exception",
 ]
 confidence-threshold = 0.8
 # Unmodified transitive Tauri dependencies. MPL-2.0 is file-level copyleft and does not
-# affect our MIT/Apache code; the global allow list stays strict.
+# affect our MIT/Apache code, so it stays a per-crate exception and off the global list.
 exceptions = [
     { crate = "cssparser", allow = ["MPL-2.0"] },
     { crate = "cssparser-macros", allow = ["MPL-2.0"] },
     { crate = "selectors", allow = ["MPL-2.0"] },
     { crate = "dtoa-short", allow = ["MPL-2.0"] },
     { crate = "option-ext", allow = ["MPL-2.0"] },
-    { crate = "target-lexicon", allow = ["Apache-2.0 WITH LLVM-exception"] },
 ]
 unused-allowed-license = "allow"
 

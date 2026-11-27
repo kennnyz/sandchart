@@ -59,6 +59,12 @@ jobs:
       - name: cargo deny check
         if: runner.os == 'Linux'
         uses: EmbarkStudios/cargo-deny-action@81891abc19297b21343b15ef67dc61e4aea74fda # v2.1.4
+      # The guest workspace has its own lockfile; the root deny.toml applies to it too.
+      - name: cargo deny check (indicators)
+        if: runner.os == 'Linux'
+        uses: EmbarkStudios/cargo-deny-action@81891abc19297b21343b15ef67dc61e4aea74fda # v2.1.4
+        with:
+          manifest-path: indicators/Cargo.toml
 
   ui:
     name: ui
