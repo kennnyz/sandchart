@@ -47,4 +47,10 @@ describe("mock backend", () => {
   it("reports the connection state", async () => {
     expect(await createMockBackend({ candles: 1 }).getConnection()).toBe("connected");
   });
+
+  it("subscribeLive resolves to a stop function", async () => {
+    const stop = await createMockBackend({ candles: 1 }).subscribeLive(id, "1h", () => {});
+    expect(typeof stop).toBe("function");
+    stop();
+  });
 });

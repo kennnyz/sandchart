@@ -49,11 +49,20 @@ fn main() {
             app.manage(AppState::new(engine));
             Ok(())
         })
+        .on_window_event(|window, event| {
+            // Closing the window stops every live stream.
+            if let tauri::WindowEvent::Destroyed = event
+                && let Some(state) = window.try_state::<AppState>()
+            {
+                state.subscriptions.stop_all();
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             commands::search_instruments,
             commands::get_candles,
             commands::subscribe_live,
             commands::unsubscribe_live,
+            commands::unsubscribe_all,
             commands::get_watchlist,
             commands::set_watchlist,
             commands::get_watchlist_quotes,

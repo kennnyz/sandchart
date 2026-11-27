@@ -2,37 +2,91 @@
 //! Engine calls that lock SQLite on the calling thread run on the blocking pool.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::PathBuf;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 
 use sandchart_core::{InstrumentId, Timeframe};
 use sandchart_engine::{Engine, EngineError};
+use tauri::State;
 use tauri::async_runtime::{JoinHandle, spawn, spawn_blocking};
-use tauri::{AppHandle, Emitter, State};
+use tauri::ipc::Channel;
 
 use crate::dto::{
-    CandlesDto, DayChangeDto, InstrumentDto, InstrumentIdDto, connection_name, to_candles_dto,
-    to_day_change_dto, to_live_dto,
+    CandlesDto, DayChangeDto, InstrumentDto, InstrumentIdDto, LiveDto, connection_name,
+    to_candles_dto, to_day_change_dto, to_live_dto,
 };
 
 /// Most results one search returns.
 const SEARCH_LIMIT: usize = 50;
 
-pub struct AppState {
-    pub engine: std::sync::Arc<Engine>,
+/// Most live subscriptions at once; a runaway UI cannot open unbounded Binance streams.
+const MAX_SUBSCRIPTIONS: usize = 32;
+
+type Tasks = Arc<Mutex<HashMap<u32, JoinHandle<()>>>>;
+
+/// Running forwarder tasks by subscription id. A task owns its `LiveHandle`, so aborting
+/// it drops the handle and stops the provider stream. A task that ends by itself removes
+/// its own entry.
+#[derive(Default)]
+pub struct Subscriptions {
     next_id: AtomicU32,
-    /// Forwarder tasks by subscription id. A task owns its `LiveHandle`, so aborting the
-    /// task drops the handle and stops the provider stream.
-    subscriptions: Mutex<HashMap<u32, JoinHandle<()>>>,
+    tasks: Tasks,
+}
+
+impl Subscriptions {
+    /// Runs `work` as a subscription and returns its id; errors at the cap.
+    fn start(&self, work: impl Future<Output = ()> + Send + 'static) -> Result<u32, String> {
+        let mut tasks = lock(&self.tasks);
+        if tasks.len() >= MAX_SUBSCRIPTIONS {
+            return Err(format!(
+                "too many live subscriptions (max {MAX_SUBSCRIPTIONS})"
+            ));
+        }
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
+        let registry = self.tasks.clone();
+        // The task cannot reach `remove` before `insert` below: it needs the lock we hold.
+        let task = spawn(async move {
+            work.await;
+            lock(&registry).remove(&id);
+        });
+        tasks.insert(id, task);
+        Ok(id)
+    }
+
+    fn stop(&self, id: u32) {
+        if let Some(task) = lock(&self.tasks).remove(&id) {
+            task.abort();
+        }
+    }
+
+    pub fn stop_all(&self) {
+        for (_, task) in lock(&self.tasks).drain() {
+            task.abort();
+        }
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        lock(&self.tasks).len()
+    }
+}
+
+fn lock(tasks: &Tasks) -> std::sync::MutexGuard<'_, HashMap<u32, JoinHandle<()>>> {
+    tasks.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+pub struct AppState {
+    pub engine: Arc<Engine>,
+    pub subscriptions: Subscriptions,
 }
 
 impl AppState {
-    pub fn new(engine: std::sync::Arc<Engine>) -> Self {
+    pub fn new(engine: Arc<Engine>) -> Self {
         Self {
             engine,
-            next_id: AtomicU32::new(1),
-            subscriptions: Mutex::default(),
+            subscriptions: Subscriptions::default(),
         }
     }
 }
@@ -84,51 +138,45 @@ pub async fn get_candles(
     to_candles_dto(page).map_err(err)
 }
 
+/// Live events arrive on `on_event`, a channel the UI creates before calling, so none is
+/// lost to a listener that registers late.
 #[tauri::command]
 pub async fn subscribe_live(
-    app: AppHandle,
     state: State<'_, AppState>,
     source: String,
     symbol: String,
     tf: String,
+    on_event: Channel<LiveDto>,
 ) -> Result<u32, String> {
     let id = InstrumentId { source, symbol };
     let mut handle = state
         .engine
         .subscribe_live(&id, timeframe(&tf)?)
         .map_err(err)?;
-    let sub = state.next_id.fetch_add(1, Ordering::Relaxed);
-    let event = format!("live:{sub}");
-    let task = spawn(async move {
+    // On the cap error `handle` is dropped here, which stops the stream again.
+    state.subscriptions.start(async move {
         while let Some(live) = handle.receiver().recv().await {
             match to_live_dto(live) {
                 Ok(dto) => {
-                    if let Err(e) = app.emit(&event, dto) {
-                        eprintln!("cannot emit {event}: {e}");
+                    if on_event.send(dto).is_err() {
+                        return; // the page is gone
                     }
                 }
-                Err(e) => eprintln!("dropping live event of {event}: {e}"),
+                Err(e) => eprintln!("dropping a live event: {e}"),
             }
         }
-    });
-    state
-        .subscriptions
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .insert(sub, task);
-    Ok(sub)
+    })
 }
 
 #[tauri::command]
 pub fn unsubscribe_live(state: State<'_, AppState>, id: u32) {
-    let task = state
-        .subscriptions
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .remove(&id);
-    if let Some(task) = task {
-        task.abort();
-    }
+    state.subscriptions.stop(id);
+}
+
+/// Called by the UI on startup: a reloaded page forgets its subscription ids.
+#[tauri::command]
+pub fn unsubscribe_all(state: State<'_, AppState>) {
+    state.subscriptions.stop_all();
 }
 
 #[tauri::command]
@@ -171,4 +219,37 @@ pub async fn import_csv(
 #[tauri::command]
 pub fn get_connection(state: State<'_, AppState>) -> &'static str {
     connection_name(*state.engine.connection().borrow())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    #[test]
+    fn finished_forwarder_removes_its_entry() {
+        let subs = Subscriptions::default();
+        subs.start(async {}).unwrap();
+        for _ in 0..100 {
+            if subs.len() == 0 {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!("entry of a finished subscription was not removed");
+    }
+
+    #[test]
+    fn rejects_the_33rd_subscription_and_stop_frees_a_slot() {
+        let subs = Subscriptions::default();
+        let ids: Vec<u32> = (0..MAX_SUBSCRIPTIONS)
+            .map(|_| subs.start(std::future::pending()).unwrap())
+            .collect();
+        assert!(subs.start(std::future::pending()).is_err());
+        subs.stop(ids[0]);
+        assert!(subs.start(std::future::pending()).is_ok());
+        subs.stop_all();
+        assert_eq!(subs.len(), 0);
+    }
 }
