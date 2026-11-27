@@ -195,8 +195,9 @@ async fn run(
                     {
                         continue;
                     }
-                    shared.live_bar(&inst, tf, &live.candle);
                 }
+                // Forming candles reach the indicator bars too, in memory only.
+                shared.live_bar(&inst, tf, &live.candle);
                 LiveEvent::Candle(live)
             }
         };

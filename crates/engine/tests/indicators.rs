@@ -572,6 +572,79 @@ async fn bar_cache_and_memo_follow_store_writes() {
 }
 
 #[tokio::test]
+async fn forming_candles_update_the_bar_cache_but_not_the_store() {
+    let f = fixture().await;
+    f.install("ok_echo").await;
+    f.cache_candles("BTCUSDT", three()).await;
+    f.engine.set_chart_indicators(vec![echo()]).await.unwrap();
+    f.compute(i64::MIN).await;
+    assert_eq!(f.engine.indicator_stats().module_calls, 1);
+
+    let mut handle = f.engine.subscribe_live(&id("BTCUSDT"), TF).unwrap();
+    let live_tx = f.provider.live_tx["BTCUSDT"].clone();
+    let forming = |close| {
+        Ok(LiveCandle {
+            candle: candle(0, close),
+            closed: false,
+        })
+    };
+
+    // An identical forming update changes nothing.
+    live_tx.send(forming(10_200)).unwrap();
+    next_event(&mut handle).await;
+    f.compute(i64::MIN).await;
+    assert_eq!(f.engine.indicator_stats().module_calls, 1);
+
+    // A changed close is recomputed and shows in the last value.
+    live_tx.send(forming(10_350)).unwrap();
+    next_event(&mut handle).await;
+    let results = f.compute(i64::MIN).await;
+    assert_eq!(f.engine.indicator_stats().module_calls, 2);
+    assert!(same(
+        &values(result(&results, "echo")),
+        &[100.0, 101.0, 103.5]
+    ));
+
+    // A forming candle of the next bar is appended.
+    live_tx
+        .send(Ok(LiveCandle {
+            candle: candle(-1, 10_600),
+            closed: false,
+        }))
+        .unwrap();
+    next_event(&mut handle).await;
+    let results = f.compute(i64::MIN).await;
+    assert!(same(
+        &values(result(&results, "echo")),
+        &[100.0, 101.0, 103.5, 106.0]
+    ));
+    assert_eq!(f.engine.indicator_stats().store_reads, 1);
+
+    // Nothing of it reached the store.
+    let stored = sandchart_store::Store::open(&f.dir.path().join("sandchart.db"))
+        .unwrap()
+        .candles_before(&id("BTCUSDT"), TF, None, 10)
+        .unwrap();
+    assert_eq!(stored, three());
+}
+
+#[tokio::test]
+async fn stray_module_files_are_deleted_at_startup() {
+    let f = fixture().await;
+    f.install("ok_echo").await;
+    let dir = f.dir.path().join("indicators");
+    let stray = dir.join(format!("{}.wasm", "ab".repeat(32)));
+    std::fs::write(&stray, b"stray").unwrap();
+    drop(f.engine);
+
+    let reopened = open(f.dir.path(), Some(f.cache.path()), &f.provider);
+    let list = reopened.indicators().await;
+    assert!(list.iter().any(|i| i.meta.id == "test.echo"));
+    assert!(!stray.exists(), "stray module file was not deleted");
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+}
+
+#[tokio::test]
 async fn csv_import_drops_the_bar_cache() {
     let f = fixture().await;
     f.install("ok_echo").await;

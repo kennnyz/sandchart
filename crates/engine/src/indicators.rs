@@ -247,6 +247,7 @@ fn load_all(
             Vec::new()
         }
     };
+    delete_orphans(dir, &rows);
     for row in rows {
         let path = module_file(dir, &row.sha256);
         let bytes = match std::fs::read(&path) {
@@ -281,6 +282,33 @@ fn load_all(
     }
     if let Err(e) = runtime.prune_cache(&keep) {
         eprintln!("cannot prune the compiled indicator cache: {e}");
+    }
+}
+
+/// Deletes module files (and leftover temp files) in `dir` that no row references,
+/// such as one written by an install that crashed before storing its row.
+fn delete_orphans(dir: &Path, rows: &[StoredModule]) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return,
+        Err(e) => {
+            eprintln!("cannot list {}: {e}", dir.display());
+            return;
+        }
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let orphan = name.ends_with(".tmp")
+            || name
+                .strip_suffix(".wasm")
+                .is_some_and(|sha| !rows.iter().any(|r| r.sha256 == sha));
+        if orphan {
+            match remove_file(&entry.path()) {
+                Ok(()) => eprintln!("deleted unused indicator file {}", entry.path().display()),
+                Err(e) => eprintln!("cannot delete {}: {e}", entry.path().display()),
+            }
+        }
     }
 }
 
@@ -400,9 +428,9 @@ impl Shared {
         }
     }
 
-    /// Applies a live candle just stored for `(inst, tf)` to the cached bars: the same
-    /// open time as the last bar replaces it, a newer one is appended. Must not be
-    /// called while the store is locked.
+    /// Applies a live candle of `(inst, tf)`, closed (already stored) or still forming
+    /// (memory only), to the cached bars: the same open time as the last bar replaces
+    /// it, a newer one is appended. Must not be called while the store is locked.
     pub(crate) fn live_bar(&self, inst: &Instrument, tf: Timeframe, candle: &Candle) {
         let mut state = self.bar_state();
         let Some(cache) = state.cache.as_mut() else {
