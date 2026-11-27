@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Backend, UpdateInfo, UpdateProgress } from "../backend/types";
-import { AUTO_KEY, CHECK_EVERY_MS, FIRST_CHECK_MS, UpdateState, type KeyValueStore } from "./update";
+import { AUTO_KEY, CHECK_EVERY_MS, FIRST_CHECK_MS, TICK_MS, UpdateState, type KeyValueStore } from "./update";
 
 const INFO: UpdateInfo = { version: "0.3.0", notes: "Fixes", date: null, blocker: null };
 
@@ -50,11 +50,18 @@ function memoryStore(init: Record<string, string> = {}): KeyValueStore & { data:
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
+/** A wall clock the test moves by hand. */
+function fakeClock() {
+  const clock = { t: Date.UTC(2026, 10, 28), now: () => clock.t };
+  return clock;
+}
+
 function setup(store = memoryStore()) {
   const fake = fakeBackend();
   const sched = manualScheduler();
-  const state = new UpdateState(fake.backend, () => undefined, sched.schedule, store);
-  return { ...fake, sched, state, store };
+  const clock = fakeClock();
+  const state = new UpdateState(fake.backend, () => undefined, sched.schedule, store, clock.now);
+  return { ...fake, sched, state, store, clock };
 }
 
 /** A state that already found `INFO` with a manual check. */
@@ -72,8 +79,18 @@ describe("UpdateState", () => {
     vi.restoreAllMocks();
   });
 
-  it("checks 10 s after start, then every 24 h", async () => {
-    const { state, sched, checks } = setup();
+  /** Runs the hourly ticks, moving the wall clock with them, for `hours`. */
+  async function tickHours(s: ReturnType<typeof setup>, hours: number) {
+    for (let h = 0; h < hours; h++) {
+      s.clock.t += TICK_MS;
+      s.sched.runDue();
+      await flush();
+    }
+  }
+
+  it("checks 10 s after start, then every 24 h of wall-clock time on hourly ticks", async () => {
+    const s = setup();
+    const { state, sched, checks } = s;
     expect(state.auto).toBe(true);
     state.start();
     expect(sched.due.map((d) => d.ms)).toEqual([FIRST_CHECK_MS]);
@@ -82,24 +99,83 @@ describe("UpdateState", () => {
 
     sched.runDue();
     expect(checks).toHaveLength(1);
-    expect(sched.due.map((d) => d.ms)).toEqual([CHECK_EVERY_MS]);
+    expect(sched.due.map((d) => d.ms)).toEqual([TICK_MS]);
+    expect(TICK_MS).toBe(3_600_000);
     expect(CHECK_EVERY_MS).toBe(86_400_000);
     checks[0]!.resolve(null);
     await flush();
 
-    sched.runDue();
+    await tickHours(s, 23);
+    expect(checks).toHaveLength(1);
+    await tickHours(s, 1);
     expect(checks).toHaveLength(2);
-    expect(sched.due.map((d) => d.ms)).toEqual([CHECK_EVERY_MS]);
+    expect(sched.due.map((d) => d.ms)).toEqual([TICK_MS]);
   });
 
-  it("with auto off makes no check after start, even after two days", async () => {
-    const { state, sched, checks } = setup(memoryStore({ [AUTO_KEY]: "0" }));
-    expect(state.auto).toBe(false);
-    state.start();
-    let elapsed = 0;
-    while (sched.due.length > 0 && elapsed < 2 * CHECK_EVERY_MS) elapsed += Math.max(...sched.runDue());
+  it("checks at the next tick after the clock jumped 30 h (the Mac slept)", async () => {
+    const s = setup();
+    s.state.start();
+    s.sched.runDue();
+    s.checks[0]!.resolve(null);
     await flush();
-    expect(checks).toHaveLength(0);
+    // One timer tick of awake time, 30 h of wall-clock time.
+    s.clock.t += 30 * 3_600_000;
+    s.sched.runDue();
+    expect(s.checks).toHaveLength(2);
+  });
+
+  it("checks on wake when one is due, and not before", async () => {
+    const s = setup();
+    s.state.start();
+    s.sched.runDue();
+    s.checks[0]!.resolve(null);
+    await flush();
+    s.clock.t += 5 * 3_600_000;
+    s.state.wake();
+    expect(s.checks).toHaveLength(1);
+    s.clock.t += 20 * 3_600_000;
+    s.state.wake();
+    expect(s.checks).toHaveLength(2);
+  });
+
+  it("a failed or manual check also counts as the last check", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const s = setup();
+    s.state.start();
+    s.sched.runDue();
+    s.checks[0]!.reject({ code: "other", message: "offline" });
+    await flush();
+    await tickHours(s, 23);
+    expect(s.checks).toHaveLength(1);
+    const manual = s.state.checkNow();
+    s.checks[1]!.resolve(null);
+    await manual;
+    await tickHours(s, 23);
+    expect(s.checks).toHaveLength(2);
+    await tickHours(s, 1);
+    expect(s.checks).toHaveLength(3);
+  });
+
+  it("stop cancels the ticks and wake", async () => {
+    const s = setup();
+    s.state.start();
+    s.state.stop();
+    await tickHours(s, 72);
+    s.state.wake();
+    expect(s.checks).toHaveLength(0);
+  });
+
+  it("with auto off makes no check after start, even after days of ticks and wakes", async () => {
+    const s = setup(memoryStore({ [AUTO_KEY]: "0" }));
+    expect(s.state.auto).toBe(false);
+    s.state.start();
+    for (let day = 0; day < 3; day++) {
+      await tickHours(s, 24);
+      s.clock.t += 30 * 3_600_000;
+      s.state.wake();
+    }
+    await flush();
+    expect(s.checks).toHaveLength(0);
   });
 
   it("turning auto off stops the scheduled checks and is stored", async () => {
@@ -113,6 +189,7 @@ describe("UpdateState", () => {
     state.setAuto(true);
     expect(store.data[AUTO_KEY]).toBe("1");
     expect(state.auto).toBe(true);
+    expect(sched.due.at(-1)!.ms).toBe(FIRST_CHECK_MS);
     sched.runDue();
     expect(checks).toHaveLength(1);
   });
@@ -135,7 +212,7 @@ describe("UpdateState", () => {
 
   it("an auto check that fails stays silent", async () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const { state, sched, checks } = setup();
+    const { state, sched, checks, clock } = setup();
     state.start();
     sched.runDue();
     checks[0]!.reject({ code: "other", message: "offline" });
@@ -143,7 +220,8 @@ describe("UpdateState", () => {
     expect(state.phase).toBe("idle");
     expect(state.error).toBeNull();
     expect(state.available).toBeNull();
-    // ...and the next tick tries again.
+    // ...and the first tick 24 h later tries again.
+    clock.t += CHECK_EVERY_MS;
     sched.runDue();
     expect(checks).toHaveLength(2);
   });
@@ -255,17 +333,64 @@ describe("UpdateState", () => {
   });
 
   it("an auto check that finds an update replaces a stale up-to-date answer", async () => {
-    const { state, sched, checks } = setup();
+    const { state, sched, checks, clock } = setup();
     const done = state.checkNow();
     checks[0]!.resolve(null);
     await done;
     expect(state.phase).toBe("upToDate");
     state.start();
+    clock.t += CHECK_EVERY_MS;
     sched.runDue();
     checks[1]!.resolve(INFO);
     await flush();
     expect(state.phase).toBe("idle");
     expect(state.shown).toBe(true);
+  });
+
+  it("install waits for a check in flight and keeps its update on screen", async () => {
+    const { state, sched, checks, installs, clock } = await withUpdate();
+    state.start();
+    clock.t += CHECK_EVERY_MS;
+    sched.runDue(); // an automatic check starts...
+    expect(checks).toHaveLength(2);
+    const done = state.install(); // ...and the user presses Install before it answers
+    await flush();
+    expect(installs).toHaveLength(0);
+    expect(state.phase).toBe("downloading");
+    checks[1]!.resolve({ ...INFO, version: "0.3.1" });
+    await flush();
+    expect(installs).toHaveLength(1);
+    expect(state.shown).toBe(true);
+    expect(state.available?.version).toBe("0.3.1");
+    installs[0]!.resolve();
+    await done;
+    expect(state.phase).toBe("restarting");
+  });
+
+  it("install does not download when the check in flight found nothing", async () => {
+    const { state, sched, checks, installs, clock } = await withUpdate();
+    state.start();
+    clock.t += CHECK_EVERY_MS;
+    sched.runDue();
+    const done = state.install();
+    checks[1]!.resolve(null);
+    await done;
+    expect(installs).toHaveLength(0);
+    expect(state.phase).toBe("upToDate");
+    expect(state.available).toBeNull();
+  });
+
+  it("install goes on when the check in flight fails (Rust keeps the update)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { state, sched, checks, installs, clock } = await withUpdate();
+    state.start();
+    clock.t += CHECK_EVERY_MS;
+    sched.runDue();
+    void state.install();
+    checks[1]!.reject({ code: "other", message: "offline" });
+    await flush();
+    expect(installs).toHaveLength(1);
+    expect(state.available).toEqual(INFO);
   });
 
   it("does not install a blocked update", async () => {

@@ -3,6 +3,12 @@ import { toProblem, type Backend, type UpdateInfo, type UpdateProgress } from ".
 /** The first automatic check waits for the chart to load. */
 export const FIRST_CHECK_MS = 10_000;
 export const CHECK_EVERY_MS = 86_400_000;
+/**
+ * How often a due check is looked for. One 24 h timer would not do: WebKit timers run on a
+ * monotonic clock that stops while the Mac sleeps (and App Nap delays them), so a laptop left
+ * open overnight would check every two or three days. The wall clock decides what is due.
+ */
+export const TICK_MS = 3_600_000;
 /** `"0"` turns the automatic check off; anything else, or nothing, leaves it on. */
 export const AUTO_KEY = "sandchart.updates.auto";
 
@@ -61,6 +67,8 @@ export class UpdateState {
   private checking: Promise<UpdateInfo | null> | null = null;
   /** A failed install leaves nothing in Rust, so the next one checks again first. */
   private needsCheck = false;
+  /** Wall-clock time the last check (automatic or manual) ended; null before the first. */
+  private lastCheckAt: number | null = null;
   private total: number | null = null;
 
   constructor(
@@ -69,6 +77,7 @@ export class UpdateState {
     // A wrapper, not `setTimeout` itself: called as a method, WebKit throws on the foreign `this`.
     private readonly schedule: (fn: () => void, ms: number) => unknown = (fn, ms) => setTimeout(fn, ms),
     private readonly storage: KeyValueStore = safeLocalStorage,
+    private readonly now: () => number = () => Date.now(),
   ) {
     let stored: string | null = null;
     try {
@@ -84,13 +93,27 @@ export class UpdateState {
     return this.available !== null && !this.dismissed;
   }
 
-  /** Once per app start: shows a dismissed update again and schedules the automatic checks. */
+  /**
+   * Once per app start: shows a dismissed update again and schedules the automatic checks: the
+   * first at `firstMs`, then a tick every hour that checks when 24 h have passed since the last.
+   */
   start(firstMs = FIRST_CHECK_MS): void {
     this.started = true;
     this.dismissed = false;
     this.generation++;
     if (this.auto) this.scheduleCheck(firstMs);
     this.onChange();
+  }
+
+  /** Cancels the scheduled checks (the app unmounts). */
+  stop(): void {
+    this.started = false;
+    this.generation++;
+  }
+
+  /** The window became visible again (after sleep, say): checks if one is due. */
+  wake(): void {
+    if (this.started && this.auto) void this.checkIfDue();
   }
 
   setAuto(on: boolean): void {
@@ -127,13 +150,15 @@ export class UpdateState {
     this.progress = null;
     this.setPhase("downloading");
     try {
-      if (this.needsCheck) {
-        const info = await this.check();
-        if (!info || info.blocker) {
-          this.phase = info ? "idle" : "upToDate";
-          this.onChange();
-          return;
-        }
+      // A check already in flight replaces what Rust will install: wait for its answer. A
+      // failed one leaves the update in Rust; "no update" means there is nothing to install.
+      let info = this.checking ? await this.checking.catch(() => undefined) : undefined;
+      if (this.needsCheck) info = await this.check();
+      if (info !== undefined) this.available = info;
+      if (!this.available || this.available.blocker) {
+        this.phase = this.available ? "idle" : "upToDate";
+        this.onChange();
+        return;
       }
       await this.backend.installUpdate((p) => this.onProgress(p));
     } catch (e) {
@@ -151,17 +176,25 @@ export class UpdateState {
   }
 
   private busy(): boolean {
-    return this.phase === "checking" || this.phase === "downloading" || this.phase === "installing" || this.phase === "restarting";
+    return this.phase === "checking" || this.installing();
+  }
+
+  private installing(): boolean {
+    return this.phase === "downloading" || this.phase === "installing" || this.phase === "restarting";
   }
 
   private scheduleCheck(ms: number): void {
     const generation = this.generation;
     this.schedule(() => {
       if (generation !== this.generation || !this.auto) return;
-      // The next tick is set now, so the cadence does not drift with a slow check.
-      this.scheduleCheck(CHECK_EVERY_MS);
-      void this.autoCheck();
+      this.scheduleCheck(TICK_MS);
+      void this.checkIfDue();
     }, ms);
+  }
+
+  private checkIfDue(): Promise<void> {
+    const due = this.lastCheckAt === null || this.now() - this.lastCheckAt >= CHECK_EVERY_MS;
+    return due ? this.autoCheck() : Promise.resolve();
   }
 
   private async autoCheck(): Promise<void> {
@@ -182,11 +215,13 @@ export class UpdateState {
     this.checking ??= this.backend
       .checkUpdate()
       .then((info) => {
-        this.available = info;
+        // A running install keeps its update on screen whatever a late answer says.
+        if (info || !this.installing()) this.available = info;
         this.needsCheck = false;
         return info;
       })
       .finally(() => {
+        this.lastCheckAt = this.now();
         this.checking = null;
       });
     return this.checking;
