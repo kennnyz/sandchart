@@ -5,8 +5,6 @@ use sandchart_indicator::{
     SeriesKind, SeriesOut, SeriesSpec, ta,
 };
 
-const SOURCES: [&str; 7] = ["open", "high", "low", "close", "hl2", "hlc3", "ohlc4"];
-
 struct Sma;
 
 impl Indicator for Sma {
@@ -14,7 +12,7 @@ impl Indicator for Sma {
         Meta {
             id: "builtin.sma".into(),
             name: "SMA".into(),
-            version: "0.1.0".into(),
+            version: "0.2.0".into(),
             description: "Simple moving average".into(),
             params: vec![
                 ParamSpec {
@@ -26,7 +24,7 @@ impl Indicator for Sma {
                 ParamSpec {
                     id: "source".into(),
                     label: "Source".into(),
-                    kind: ParamKind::Choice(SOURCES.iter().map(|s| s.to_string()).collect()),
+                    kind: ParamKind::Choice(ta::SOURCES.iter().map(|s| s.to_string()).collect()),
                     default: ParamValue::Choice("close".into()),
                 },
             ],

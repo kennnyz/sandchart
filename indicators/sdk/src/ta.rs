@@ -19,9 +19,24 @@ fn windowed(src: &[f64], period: usize, f: impl Fn(&[f64]) -> f64) -> Vec<f64> {
     out
 }
 
+/// Applies `f` to every full window of `period` values and returns `NaN`
+/// elsewhere. Unlike [`windowed`] it does not look for `NaN` first: `f` must
+/// itself give `NaN` for a window that holds one (a sum or a mean does).
+fn windowed_nan_through(src: &[f64], period: usize, f: impl Fn(&[f64]) -> f64) -> Vec<f64> {
+    let mut out = vec![f64::NAN; src.len()];
+    if period == 0 || period > src.len() {
+        return out;
+    }
+    for (slot, w) in out[period - 1..].iter_mut().zip(src.windows(period)) {
+        *slot = f(w);
+    }
+    out
+}
+
 /// Simple moving average.
 pub fn sma(src: &[f64], period: usize) -> Vec<f64> {
-    windowed(src, period, |w| w.iter().sum::<f64>() / w.len() as f64)
+    let n = period as f64;
+    windowed_nan_through(src, period, |w| w.iter().sum::<f64>() / n)
 }
 
 /// Recursive average `prev + alpha * (x - prev)`, seeded with the SMA of the
@@ -65,9 +80,10 @@ pub fn rma(src: &[f64], period: usize) -> Vec<f64> {
 
 /// Population standard deviation over a rolling window.
 pub fn stdev(src: &[f64], period: usize) -> Vec<f64> {
-    windowed(src, period, |w| {
-        let mean = w.iter().sum::<f64>() / w.len() as f64;
-        (w.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / w.len() as f64).sqrt()
+    let n = period as f64;
+    windowed_nan_through(src, period, |w| {
+        let mean = w.iter().sum::<f64>() / n;
+        (w.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / n).sqrt()
     })
 }
 
@@ -85,7 +101,10 @@ pub fn lowest(src: &[f64], period: usize) -> Vec<f64> {
     })
 }
 
-/// Price source by name: `open`, `high`, `low`, `close`, `hl2`, `hlc3`, `ohlc4`.
+/// The price sources [`source`] understands, for a `choice` parameter.
+pub const SOURCES: [&str; 7] = ["open", "high", "low", "close", "hl2", "hlc3", "ohlc4"];
+
+/// Price source by name, one of [`SOURCES`].
 pub fn source(candles: &[Candle], name: &str) -> Result<Vec<f64>, String> {
     let f: fn(&Candle) -> f64 = match name {
         "open" => |c| c.open,
@@ -139,6 +158,13 @@ mod tests {
     }
 
     #[test]
+    fn infinity_in_a_window_gives_infinity_or_nan() {
+        let m = sma(&[1., f64::INFINITY, 3.], 2);
+        assert!(m[0].is_nan() && m[1] == f64::INFINITY && m[2] == f64::INFINITY);
+        assert!(stdev(&[1., f64::INFINITY, 3.], 2)[1].is_nan());
+    }
+
+    #[test]
     fn highest_and_lowest() {
         assert_close(&highest(&[1., 3., 2.], 2), &[N, 3., 3.]);
         assert_close(&lowest(&[1., 3., 2.], 2), &[N, 1., 2.]);
@@ -160,6 +186,21 @@ mod tests {
     #[test]
     fn ema_reseeds_after_nan() {
         assert_close(&ema(&[1., 2., N, 4., 6., 8.], 2), &[N, 1.5, N, N, 5., 7.]);
+    }
+
+    #[test]
+    fn every_listed_source_is_known() {
+        let c = Candle {
+            time: 0,
+            open: 1.,
+            high: 2.,
+            low: 1.,
+            close: 2.,
+            volume: 0.,
+        };
+        for name in SOURCES {
+            assert!(source(std::slice::from_ref(&c), name).is_ok(), "{name}");
+        }
     }
 
     #[test]

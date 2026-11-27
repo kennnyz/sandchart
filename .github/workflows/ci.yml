@@ -56,6 +56,10 @@ jobs:
       - run: cargo clippy --manifest-path indicators/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --workspace
       - run: cargo test --manifest-path indicators/Cargo.toml
+      # Timing budgets of the built-in indicators; CI runners are slower than the reference machine.
+      - run: cargo test --release -p sandchart-indicators --test builtins -- --ignored perf_
+        env:
+          SANDCHART_PERF_SLACK: "3"
       - name: cargo deny check
         if: runner.os == 'Linux'
         uses: EmbarkStudios/cargo-deny-action@81891abc19297b21343b15ef67dc61e4aea74fda # v2.1.4

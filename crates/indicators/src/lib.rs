@@ -6,10 +6,17 @@
 //! over candles in a fresh sandbox each call. Inputs and outputs are `f64` in
 //! price units; a value of NaN is a gap.
 
+mod builtins;
 mod params;
+mod repaint;
+mod sample;
 mod sandbox;
 mod validate;
 mod wasi;
+
+pub use builtins::builtins;
+pub use repaint::{REPAINT_BARS, REPAINT_PREFIXES, RepaintAt, check_repaint};
+pub use sample::sample_bars;
 
 use std::fs;
 use std::hash::{Hash, Hasher};
@@ -27,8 +34,11 @@ use wasmtime::component::{Component, Linker};
 use sandbox::{HostState, PluginPre};
 
 /// Fuel per `compute` call. Fuel counts executed instructions, so the limit is
-/// the same on every machine.
-pub const DEFAULT_FUEL: u64 = 5_000_000_000;
+/// the same on every machine. The built-in MACD uses about 27.3 million on
+/// 100 000 bars, the heaviest of the built-ins; this is the smallest round
+/// number that keeps that under 1/20 of the limit (a 20x margin for user
+/// indicators that do more work per bar).
+pub const DEFAULT_FUEL: u64 = 600_000_000;
 
 /// The largest module file accepted.
 pub const MAX_MODULE_BYTES: usize = 20 * 1024 * 1024;

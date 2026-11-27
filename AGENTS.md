@@ -43,6 +43,8 @@ pnpm --dir app/ui tauri build
 
 `app/ui/dist` must exist before `cargo clippy` or `cargo test` build the Tauri crate, because `tauri::generate_context!` reads it. Run `pnpm --dir app/ui build` first on a fresh checkout.
 
+The indicator wasm files must exist before any root `cargo build`, `clippy` or `test` too, because `crates/indicators` embeds the built-ins with `include_bytes!`. Build them first with `cargo build --manifest-path indicators/Cargo.toml --target wasm32-wasip2 --release` (CI does, before clippy).
+
 The Tauri CLI must run with `app/` as the current directory; the `tauri` script in `app/ui/package.json` does that with `cd ..` (POSIX only). Release CI and Windows use `node ui/node_modules/@tauri-apps/cli/tauri.js` from `app/`.
 
 ## Add a data provider
