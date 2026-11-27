@@ -100,5 +100,13 @@
   "tools.label": "Drawing tools",
   "tools.title": "{name} ({shortcut})",
   "tools.trend": "Trend line",
-  "tools.hline": "Horizontal line"
+  "tools.hline": "Horizontal line",
+  "tools.rect": "Rectangle",
+  "tools.fib": "Fibonacci retracement",
+  "tools.brush": "Brush",
+  "ruler.bars": "{n} bars",
+  "ruler.d": "{n}d",
+  "ruler.h": "{n}h",
+  "ruler.m": "{n}m",
+  "tools.magnet": "Magnet"
 }

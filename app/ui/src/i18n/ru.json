@@ -100,5 +100,13 @@
   "tools.label": "Инструменты рисования",
   "tools.title": "{name} ({shortcut})",
   "tools.trend": "Трендовая линия",
-  "tools.hline": "Горизонтальный уровень"
+  "tools.hline": "Горизонтальный уровень",
+  "tools.rect": "Прямоугольник",
+  "tools.fib": "Коррекция Фибоначчи",
+  "tools.brush": "Кисть",
+  "ruler.bars": "баров: {n}",
+  "ruler.d": "{n}д",
+  "ruler.h": "{n}ч",
+  "ruler.m": "{n}м",
+  "tools.magnet": "Магнит"
 }

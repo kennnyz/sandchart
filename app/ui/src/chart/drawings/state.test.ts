@@ -71,6 +71,38 @@ describe("placement", () => {
     expect(s.place(B, true, c)!.body).toMatchObject({ a: A, b: { t: B.t, p: A.p } });
   });
 
+  it("strokes a brush while pressed and keeps the tool after the release", () => {
+    const { s, commits, tools } = setup();
+    s.setTool("brush");
+    s.stroke(A);
+    s.stroke({ ...A });
+    s.stroke({ t: 2 * H, p: 20 });
+    s.stroke(B);
+    // A repeated point is dropped.
+    expect(s.points).toEqual([A, { t: 2 * H, p: 20 }, B]);
+    const d = s.endStroke(c)!;
+    expect(d.body).toEqual({ kind: "brush", points: [A, { t: 2 * H, p: 20 }, B] });
+    expect(commits).toEqual([{ before: null, after: d }]);
+    expect(s.points).toEqual([]);
+    // Sticky: the tool stays, nothing is selected, the next stroke can start.
+    expect(s.tool).toBe("brush");
+    expect(s.selected).toBeNull();
+    expect(tools).toEqual(["brush"]);
+  });
+
+  it("drops a stroke of one point, and strokes only with a stroke tool", () => {
+    const { s, commits } = setup();
+    s.setTool("brush");
+    s.stroke(A);
+    expect(s.endStroke(c)).toBeNull();
+    expect(s.points).toEqual([]);
+    s.setTool("trend");
+    s.stroke(A);
+    expect(s.points).toEqual([]);
+    expect(s.endStroke(c)).toBeNull();
+    expect(commits).toEqual([]);
+  });
+
   it("stacks new drawings on top", () => {
     const { s } = setup();
     s.reset([stored("x", 7), stored("y", 3)]);

@@ -1,6 +1,6 @@
 import type { Anchor, Drawing, DrawingBody, DrawingKind, DrawingStyle, InstrumentId } from "../../backend/types";
 import type { Coords } from "./geometry";
-import { toolFor } from "./registry";
+import { toolFor, type ToolDef } from "./registry";
 
 /** One stored change: a new drawing (`before` null), an edit, or a delete (`after` null). */
 export interface DrawingChange {
@@ -91,7 +91,7 @@ export class DrawingState {
 
   /**
    * Places the next point of the active tool. Returns the drawing once it is complete:
-   * it is stored, selected, and the tool is put down.
+   * it is stored, selected, and the tool is put down (a sticky tool stays, nothing is selected).
    */
   place(a: Anchor, horizontal: boolean, c: Coords): Drawing | null {
     const tool = this.tool ? toolFor(this.tool) : undefined;
@@ -101,10 +101,33 @@ export class DrawingState {
     if (last && last.t === p.t && last.p === p.p) return null;
     this.points.push(p);
     if (this.points.length < tool.placement.clicks) return null;
+    return this.complete(tool, this.owner, c);
+  }
+
+  /** The pressed pointer of a stroke tool reached `a`; a repeated point is dropped. */
+  stroke(a: Anchor): void {
+    const tool = this.tool ? toolFor(this.tool) : undefined;
+    if (!tool?.placement.stroke) return;
+    const last = this.points.at(-1);
+    if (!last || last.t !== a.t || last.p !== a.p) this.points.push({ t: a.t, p: a.p });
+  }
+
+  /** The stroke ended: the drawing when it has enough points (see `place`), else nothing. */
+  endStroke(c: Coords): Drawing | null {
+    const tool = this.tool ? toolFor(this.tool) : undefined;
+    if (!tool?.placement.stroke || !this.owner || this.points.length < tool.placement.clicks) {
+      this.points = [];
+      return null;
+    }
+    return this.complete(tool, this.owner, c);
+  }
+
+  /** Makes and stores the drawing from the placed points; a tool that is not sticky is put down. */
+  private complete(tool: ToolDef, owner: Owner, c: Coords): Drawing {
     const d: Drawing = {
       id: this.newId(),
-      instrument: { ...this.owner.instrument },
-      priceScale: this.owner.priceScale,
+      instrument: { ...owner.instrument },
+      priceScale: owner.priceScale,
       body: tool.create(this.points, c),
       style: { ...DEFAULT_STYLE },
       locked: false,
@@ -114,8 +137,12 @@ export class DrawingState {
     };
     this.points = [];
     this.record({ before: null, after: d });
-    this.selected = d.id;
-    this.setTool(null);
+    if (tool.sticky) {
+      this.selected = null;
+    } else {
+      this.selected = d.id;
+      this.setTool(null);
+    }
     return d;
   }
 
