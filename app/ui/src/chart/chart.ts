@@ -1,7 +1,10 @@
-import type { CandleColumns, Candles, Instrument, LiveCandle, TimeframeCode } from "../backend/types";
+import type { CandleColumns, Candles, Drawing, DrawingKind, Instrument, LiveCandle, TimeframeCode } from "../backend/types";
 import { chartDebug } from "./debug";
+import { Coords } from "./drawings/geometry";
+import { DrawingLayer, type DrawingCommand } from "./drawings/layer";
+import type { DrawingChange } from "./drawings/state";
 import { alignOffset, hasOwnPane, layoutPanes, overlayRange, paneRange, seriesValues, type IndicatorLayer } from "./indicators";
-import { draw, drawOverlay, plotSize, priceAxisWidth, RenderBuffers, type Crosshair, type FrameInput, type Series } from "./render";
+import { draw, drawingTag, drawOverlay, plotSize, priceAxisWidth, RenderBuffers, type Crosshair, type FrameInput, type Series } from "./render";
 import type { IndicatorFrame } from "./renderIndicators";
 import { autoscale, PriceScale, type PriceScaleMode } from "./scale";
 import { AXIS_FONT, PRICE_AXIS_WIDTH, type ChartTheme } from "./theme";
@@ -23,6 +26,8 @@ const TF_STEPS: [TimeframeCode, number][] = [
   ["8h", 480 * MINUTE], ["12h", 720 * MINUTE], ["1d", 1440 * MINUTE], ["3d", 4320 * MINUTE],
   ["1w", 10_080 * MINUTE], ["1M", 43_200 * MINUTE],
 ];
+
+const STEP_MS = new Map(TF_STEPS);
 
 function inferTimeframe(s: Series): TimeframeCode {
   if (s.count < 2) return "1h";
@@ -65,7 +70,7 @@ interface GestureEventLike extends UIEvent {
   readonly clientY: number;
 }
 
-type Drag = { kind: "pan" | "price"; pointerId: number; lastX: number; lastY: number };
+type Drag = { kind: "pan" | "price" | "drawing"; pointerId: number; lastX: number; lastY: number };
 
 /**
  * Candlestick chart on two stacked Canvas 2D layers: main pane, price axis on the right,
@@ -117,6 +122,15 @@ export class Chart {
   private readonly ind: IndicatorFrame = { layers: [], offsets: [], tickMul: 1, priceH: 0, panes: [] };
   /** Plot height `ind.priceH` and the pane rows were laid out for; -1 forces a new layout. */
   private layoutH = -1;
+  private drawingCommitCb: ((c: DrawingChange) => void) | null = null;
+  private drawingToolCb: ((kind: DrawingKind | null) => void) | null = null;
+  /** Drawings: painted on both layers, and first in line for pointer input on the price plot. */
+  private readonly drawings = new DrawingLayer({
+    invalidate: () => this.invalidate(),
+    invalidateOverlay: () => this.invalidateOverlay(),
+    commit: (c) => this.drawingCommitCb?.(c),
+    tool: (k) => this.drawingToolCb?.(k),
+  });
 
   constructor(
     private readonly host: HTMLElement,
@@ -174,6 +188,7 @@ export class Chart {
     s.count = n;
     this.series = s;
     this.instrument = c.instrument;
+    this.drawings.setOwner({ instrument: c.instrument.id, priceScale: c.instrument.priceScale });
     this.tf = inferTimeframe(s);
     this.atHistoryStart = c.atHistoryStart || n === 0;
     this.olderPending = false;
@@ -185,6 +200,7 @@ export class Chart {
   clear(): void {
     this.series = emptySeries(0);
     this.instrument = null;
+    this.drawings.setOwner(null);
     this.atHistoryStart = false;
     this.olderPending = false;
     this.axisWidth = PRICE_AXIS_WIDTH;
@@ -325,6 +341,31 @@ export class Chart {
     this.crosshairCb = cb;
   }
 
+  /** The drawings of the instrument on the chart; selection and undo history start over. */
+  setDrawings(list: Drawing[]): void {
+    this.drawings.setDrawings(list);
+  }
+
+  /** Picks the tool the next clicks on the price plot place, or none. */
+  setDrawingTool(kind: DrawingKind | null): void {
+    this.drawings.setTool(kind);
+  }
+
+  /** Undo, redo, delete the selection, or cancel; false when there was nothing to do. */
+  drawingCommand(cmd: DrawingCommand): boolean {
+    return this.drawings.command(cmd);
+  }
+
+  /** Every change of a drawing by the user, undo and redo included, to be stored. */
+  onDrawingCommit(cb: ((c: DrawingChange) => void) | null): void {
+    this.drawingCommitCb = cb;
+  }
+
+  /** The active tool changed on the chart (placed, cancelled). */
+  onDrawingTool(cb: ((kind: DrawingKind | null) => void) | null): void {
+    this.drawingToolCb = cb;
+  }
+
   /** Candle `index` of the current series (indices shift by the size of every prepend). */
   candle(index: number): LiveCandle | null {
     const s = this.series;
@@ -365,6 +406,8 @@ export class Chart {
     this.lastFrame = null;
     this.needOlderCb = null;
     this.crosshairCb = null;
+    this.drawingCommitCb = null;
+    this.drawingToolCb = null;
   }
 
   // ---- Internals ----
@@ -576,6 +619,10 @@ export class Chart {
       indicators: this.ind,
     };
     draw(f, this.buffers);
+    const coords = new Coords(s.time, s.count, this.view, scale, plotW, priceH, STEP_MS.get(this.tf) ?? 60 * MINUTE);
+    this.drawings.paintBase(this.ctx, coords, this.dpr, this.theme, (p, color) =>
+      drawingTag(this.ctx, f, this.buffers, p, color),
+    );
     this.lastFrame = f;
     const debug = chartDebug();
     if (debug) {
@@ -601,7 +648,10 @@ export class Chart {
       ch.y = m.y;
       ch.index = this.crosshairIndex;
     }
-    drawOverlay(f, this.octx, inPlot ? ch : null, this.buffers);
+    const octx = this.octx;
+    drawOverlay(f, octx, inPlot ? ch : null, this.buffers, () =>
+      this.drawings.paintOverlay(octx, this.dpr, this.theme, (p, color) => drawingTag(octx, f, this.buffers, p, color)),
+    );
   }
 
   private local(e: { clientX: number; clientY: number }): { x: number; y: number } {
@@ -613,18 +663,37 @@ export class Chart {
     if (e.button !== 0) return;
     const p = this.local(e);
     const { plotW } = this.plot();
-    const onPriceAxis = p.x >= plotW && p.y < this.priceH();
-    this.drag = { kind: onPriceAxis ? "price" : "pan", pointerId: e.pointerId, lastX: e.clientX, lastY: e.clientY };
+    const priceH = this.priceH();
+    const onPriceAxis = p.x >= plotW && p.y < priceH;
+    // On the price plot drawings come first: a tool places, a press on a drawing selects it.
+    const onDrawing = this.inPricePlot(p) && this.drawings.pointerDown(p.x, p.y, e.shiftKey);
+    const kind = onDrawing ? "drawing" : onPriceAxis ? "price" : "pan";
+    this.drag = { kind, pointerId: e.pointerId, lastX: e.clientX, lastY: e.clientY };
     this.canvas.setPointerCapture(e.pointerId);
-    if (this.drag.kind === "pan") this.canvas.style.cursor = "grabbing";
+    if (kind === "pan") this.canvas.style.cursor = "grabbing";
+    else this.updateCursor(p);
   };
+
+  private inPricePlot(p: { x: number; y: number }): boolean {
+    return p.x >= 0 && p.x < this.plot().plotW && p.y >= 0 && p.y < this.priceH();
+  }
+
+  private updateCursor(p: { x: number; y: number }): void {
+    const onPriceAxis = p.x >= this.plot().plotW && p.y < this.priceH();
+    this.canvas.style.cursor = onPriceAxis ? "ns-resize" : (this.drawings.cursor() ?? "crosshair");
+  }
 
   private readonly onPointerMove = (e: PointerEvent): void => {
     const p = this.local(e);
     this.mouse = p;
-    const { plotW } = this.plot();
     const priceH = this.priceH();
     const d = this.drag;
+    if (d?.kind === "drawing" && d.pointerId === e.pointerId) {
+      this.drawings.pointerMove(p.x, p.y, e.shiftKey);
+      this.updateCrosshair();
+      this.invalidateOverlay();
+      return;
+    }
     if (d && d.pointerId === e.pointerId) {
       const dx = e.clientX - d.lastX;
       const dy = e.clientY - d.lastY;
@@ -639,7 +708,9 @@ export class Chart {
       this.afterViewChange();
       return;
     }
-    this.canvas.style.cursor = p.x >= plotW && p.y < priceH ? "ns-resize" : "crosshair";
+    if (this.inPricePlot(p)) this.drawings.pointerMove(p.x, p.y, e.shiftKey);
+    else this.drawings.leave();
+    this.updateCursor(p);
     // Only the mouse moved: the base layer stays as it is.
     this.updateCrosshair();
     this.invalidateOverlay();
@@ -647,14 +718,22 @@ export class Chart {
 
   private readonly onPointerUp = (e: PointerEvent): void => {
     if (this.drag?.pointerId !== e.pointerId) return;
+    const kind = this.drag.kind;
     this.drag = null;
     if (this.canvas.hasPointerCapture(e.pointerId)) this.canvas.releasePointerCapture(e.pointerId);
     const p = this.local(e);
-    this.canvas.style.cursor = p.x >= this.plot().plotW && p.y < this.priceH() ? "ns-resize" : "crosshair";
+    if (kind === "drawing") {
+      // A cancelled pointer (a system gesture) stores nothing.
+      if (e.type === "pointercancel") this.drawings.abort();
+      else this.drawings.pointerUp(p.x, p.y, e.shiftKey);
+      this.invalidateOverlay();
+    }
+    this.updateCursor(p);
   };
 
   private readonly onPointerLeave = (): void => {
     if (this.drag) return;
+    this.drawings.leave();
     this.mouse = null;
     this.updateCrosshair();
     this.invalidateOverlay();

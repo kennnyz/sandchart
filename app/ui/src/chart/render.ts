@@ -295,14 +295,23 @@ function recordPriceLabel(buf: RenderBuffers, y: number): void {
  * lines over the price plot and every own pane, and its labels on both axes. `f` and
  * `buf` are those of the last base frame. Axis labels the crosshair labels would crowd
  * are covered with the chart ground instead of being left out of the base frame.
+ * `under` draws first, right after the clear.
  */
-export function drawOverlay(f: FrameInput, ctx: CanvasRenderingContext2D, ch: Crosshair | null, buf: RenderBuffers): void {
+export function drawOverlay(
+  f: FrameInput,
+  ctx: CanvasRenderingContext2D,
+  ch: Crosshair | null,
+  buf: RenderBuffers,
+  under?: () => void,
+): void {
   const { dpr, theme: th, series: s, view } = f;
   const { plotW, plotH } = plotSize(f.width, f.height, f.axisWidth);
   const W = Math.round(f.width * dpr);
   const H = Math.round(f.height * dpr);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, W, H);
+  // What sits under the crosshair (drawing handles and previews); it leaves the transform as it was.
+  under?.();
   if (!ch || plotW <= 0 || plotH <= 0) return;
   const pw = Math.round(plotW * dpr);
   const ph = Math.round(plotH * dpr);
@@ -366,6 +375,31 @@ export function drawOverlay(f: FrameInput, ctx: CanvasRenderingContext2D, ch: Cr
     ctx.fillRect(left, ph + px, Math.ceil((lx + half) * dpr) + px - left, H - ph - px);
   }
   timeLabel(ctx, th, chTime, chX, ph, pw, dpr);
+}
+
+/**
+ * A drawing's price tag on the price axis, `bg` with the chart ground as text, on either
+ * layer: the tick labels it would crowd are covered first. Nothing outside the price plot.
+ */
+export function drawingTag(ctx: CanvasRenderingContext2D, f: FrameInput, buf: RenderBuffers, price: number, bg: string): void {
+  const { dpr, theme: th } = f;
+  const { plotW, plotH } = plotSize(f.width, f.height, f.axisWidth);
+  const priceH = f.indicators ? f.indicators.priceH : plotH;
+  const y = f.scale.toY(price);
+  if (!(y >= 0 && y <= priceH) || plotW <= 0) return;
+  const pw = Math.round(plotW * dpr);
+  const W = Math.round(f.width * dpr);
+  const px = Math.max(1, Math.round(dpr));
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = th.bg;
+  const coverH = 2 * COVER_HALF * dpr;
+  for (let k = 0; k < buf.priceLabelCount; k++) {
+    const ly = buf.priceLabelY[k]!;
+    if (Math.abs(ly - y) < LABEL_HEIGHT) ctx.fillRect(pw + px, Math.round(ly * dpr - coverH / 2), W - pw - px, coverH);
+  }
+  ctx.font = buf.axisFont(dpr);
+  ctx.textBaseline = "middle";
+  priceLabel(ctx, formatPrice(price, f.priceDecimals), y, pw, W, dpr, bg, th.bg);
 }
 
 /** Tints the area before the first candle, draws a 1 px line at its edge and the label. */

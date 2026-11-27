@@ -23,6 +23,11 @@ export interface ChartDebug {
   historyLabel: string | null;
   /** Own indicator panes of the last frame. */
   panes: number;
+  /** Drawings painted on the last base frame (after culling). */
+  drawingsPainted: number;
+  /** Selected and hovered drawing ids at the last overlay frame. */
+  selectedDrawing: string | null;
+  hoveredDrawing: string | null;
 }
 
 let debug: ChartDebug | null = null;
@@ -41,6 +46,9 @@ export function enableChartDebug(): void {
     plotWidth: 0,
     historyLabel: null,
     panes: 0,
+    drawingsPainted: 0,
+    selectedDrawing: null,
+    hoveredDrawing: null,
   };
   (window as unknown as { __sandchartDebug: ChartDebug }).__sandchartDebug = debug;
 }
