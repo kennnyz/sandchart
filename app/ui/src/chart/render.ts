@@ -1,6 +1,6 @@
 import type { TimeframeCode } from "../backend/types";
 import { formatCrosshairTime, formatPrice, formatTimeLabel } from "./format";
-import { drawMarkers, drawPanes, drawPriceSeries, formatPaneValue, type IndicatorFrame, type PaneFrame } from "./renderIndicators";
+import { drawMarkers, drawPanes, drawPriceBands, drawPriceSeries, formatPaneValue, type IndicatorFrame, type PaneFrame } from "./renderIndicators";
 import type { PriceScale } from "./scale";
 import { MONO_FAMILY, PRICE_AXIS_WIDTH, SANS_FAMILY, TIME_AXIS_HEIGHT, VOLUME_HEIGHT, type CandleStyle, type ChartTheme } from "./theme";
 import { indexToX, visibleRange, type Viewport } from "./viewport";
@@ -177,6 +177,8 @@ export function draw(f: FrameInput, buf: RenderBuffers): void {
   ctx.clip();
   if (f.historyStart && s.count > 0) drawHistoryStart(f, plotW, priceH, px);
   const layers = hasBars && ind !== null && ind.layers.length > 0;
+  // Order: bands under the candles; lines, histograms and markers over them.
+  if (layers) drawPriceBands(f, ind, first, last, plotW);
   if (hasBars) {
     if (view.barWidth >= 2) drawCandles(f, plotW, priceH, first, last, px);
     else drawColumns(f, buf, plotW, priceH, first, last, px);

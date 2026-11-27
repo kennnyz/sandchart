@@ -130,8 +130,8 @@ function fillBand(c: Ctx2, a: Float64Array, b: Float64Array, offset: number): vo
   ctx.fill();
 }
 
-/** Draws the layer's series on one pane in the order bands, histograms, lines. */
-function drawLayerSeries(c: Ctx2, th: ChartTheme, layer: IndicatorLayer, offset: number, pane: "price" | "own"): void {
+/** Band fills of the layer on one pane. */
+function drawLayerBands(c: Ctx2, th: ChartTheme, layer: IndicatorLayer, offset: number, pane: "price" | "own"): void {
   const computed = layer.computed!;
   const { ctx } = c;
   for (const spec of layer.meta.series) {
@@ -144,6 +144,12 @@ function drawLayerSeries(c: Ctx2, th: ChartTheme, layer: IndicatorLayer, offset:
     fillBand(c, a, b, offset);
     ctx.globalAlpha = 1;
   }
+}
+
+/** Histograms, then lines, of the layer on one pane. */
+function drawLayerSeries(c: Ctx2, th: ChartTheme, layer: IndicatorLayer, offset: number, pane: "price" | "own"): void {
+  const computed = layer.computed!;
+  const { ctx } = c;
   for (const spec of layer.meta.series) {
     if (spec.pane !== pane || spec.kind !== "histogram") continue;
     const v = seriesValues(computed, spec.id);
@@ -168,9 +174,22 @@ function drawable(ind: IndicatorFrame, i: number): number | null {
   return ind.offsets[i] ?? null;
 }
 
-/** Bands, histograms and lines on `pane: price`, under the markers; the caller clips. */
+function priceCtx(f: FrameInput, ind: IndicatorFrame, first: number, last: number, plotW: number): Ctx2 {
+  return { ctx: f.ctx, view: f.view, plotW, dpr: f.dpr, first, last, scale: f.scale, mul: ind.tickMul, top: 0 };
+}
+
+/** Band fills on `pane: price`, drawn under the candles; the caller clips. */
+export function drawPriceBands(f: FrameInput, ind: IndicatorFrame, first: number, last: number, plotW: number): void {
+  const c = priceCtx(f, ind, first, last, plotW);
+  for (let i = 0; i < ind.layers.length; i++) {
+    const offset = drawable(ind, i);
+    if (offset !== null) drawLayerBands(c, f.theme, ind.layers[i]!, offset, "price");
+  }
+}
+
+/** Histograms and lines on `pane: price`, over the candles and under the markers; the caller clips. */
 export function drawPriceSeries(f: FrameInput, ind: IndicatorFrame, first: number, last: number, plotW: number): void {
-  const c: Ctx2 = { ctx: f.ctx, view: f.view, plotW, dpr: f.dpr, first, last, scale: f.scale, mul: ind.tickMul, top: 0 };
+  const c = priceCtx(f, ind, first, last, plotW);
   for (let i = 0; i < ind.layers.length; i++) {
     const offset = drawable(ind, i);
     if (offset !== null) drawLayerSeries(c, f.theme, ind.layers[i]!, offset, "price");
@@ -280,6 +299,7 @@ export function drawPanes(
     ctx.fillStyle = th.grid;
     for (const t of p.ticks) ctx.fillRect(0, Math.round((p.top + p.scale.toY(t)) * dpr), pw, px);
     const c: Ctx2 = { ctx, view: f.view, plotW, dpr, first, last, scale: p.scale, mul: 1, top: p.top };
+    drawLayerBands(c, th, ind.layers[p.layer]!, offset, "own");
     drawLayerSeries(c, th, ind.layers[p.layer]!, offset, "own");
     ctx.restore();
   }
