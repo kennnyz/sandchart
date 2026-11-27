@@ -240,11 +240,31 @@ fn load_all(
             Err(e) => eprintln!("cannot load the built-in indicator {id}: {e}"),
         }
     }
-    let rows = match lock(store).indicator_modules() {
+    let rows = lock(store).indicator_modules();
+    // Without the rows nothing is known to be unused, so nothing is deleted or pruned.
+    if !load_installed(runtime, rows, dir, modules, &mut keep) {
+        return;
+    }
+    if let Err(e) = runtime.prune_cache(&keep) {
+        eprintln!("cannot prune the compiled indicator cache: {e}");
+    }
+}
+
+/// Loads the installed modules of `rows` and deletes module files no row references.
+/// Returns false, touching no file, when the rows could not be read: a failed read
+/// must not make every installed module look unused.
+fn load_installed(
+    runtime: &Runtime,
+    rows: Result<Vec<StoredModule>, StoreError>,
+    dir: &Path,
+    modules: &Mutex<HashMap<String, Loaded>>,
+    keep: &mut Vec<[u8; 32]>,
+) -> bool {
+    let rows = match rows {
         Ok(rows) => rows,
         Err(e) => {
-            eprintln!("cannot read the installed indicators: {e}");
-            Vec::new()
+            eprintln!("cannot read the installed indicators, skipping them: {e}");
+            return false;
         }
     };
     delete_orphans(dir, &rows);
@@ -280,9 +300,7 @@ fn load_all(
             Err(e) => eprintln!("cannot load indicator {}: {e}", row.id),
         }
     }
-    if let Err(e) = runtime.prune_cache(&keep) {
-        eprintln!("cannot prune the compiled indicator cache: {e}");
-    }
+    true
 }
 
 /// Deletes module files (and leftover temp files) in `dir` that no row references,
@@ -771,4 +789,25 @@ where
     tokio::task::spawn_blocking(f)
         .await
         .map_err(|e| EngineError::Task(e.to_string()))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_row_read_keeps_installed_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(format!("{}.wasm", "ab".repeat(32)));
+        std::fs::write(&file, b"installed module").unwrap();
+        let runtime = Runtime::new(Limits::default(), None).unwrap();
+        let modules = Mutex::default();
+        let mut keep = Vec::new();
+
+        let rows = Err(StoreError::LimitTooLarge(0));
+        load_installed(&runtime, rows, dir.path(), &modules, &mut keep);
+
+        assert!(file.exists(), "an installed module file was deleted");
+        assert!(guard(&modules).is_empty());
+    }
 }
