@@ -99,6 +99,8 @@ export interface MockOptions {
   updateError?: "check" | "install";
   /** Keeps the watchlist across page loads (the browser mock uses localStorage). */
   watchlistStore?: { load(): InstrumentId[] | null; save(ids: InstrumentId[]): void };
+  /** Keeps the drawings across page loads (the browser mock uses localStorage). */
+  drawingStore?: { load(): Drawing[] | null; save(all: Drawing[]): void };
 }
 
 // ---- Indicators -------------------------------------------------------------------
@@ -504,7 +506,8 @@ export function createMockBackend(opts: MockOptions): MockBackend {
     colors: {},
     hidden: false,
   }));
-  const drawings = new Map<string, Drawing>();
+  const drawings = new Map<string, Drawing>((opts.drawingStore?.load() ?? []).map((d) => [d.id, d]));
+  const keepDrawings = () => opts.drawingStore?.save([...drawings.values()]);
   const problem = (message: string) => ({ code: "other", message });
   const infos = (): IndicatorInfo[] => [
     ...MOCK_BUILTINS.map((b) => ({ meta: b.meta, builtin: true, repaints: false })),
@@ -753,13 +756,14 @@ export function createMockBackend(opts: MockOptions): MockBackend {
         updatedAt: Date.now(),
       };
       drawings.set(d.id, saved);
+      keepDrawings();
       return structuredClone(saved);
     },
 
     async deleteDrawing(id) {
       await delay();
       if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw problem("a drawing id must be 1 to 64 characters from A-Z, a-z, 0-9, _ and -");
-      drawings.delete(id);
+      if (drawings.delete(id)) keepDrawings();
     },
 
     async getPositionOutcomes(id, tf, positions) {

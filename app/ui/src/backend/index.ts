@@ -1,9 +1,31 @@
 import { enableChartDebug } from "../chart/debug";
 import { createMockBackend } from "./mock";
 import { resetSubscriptions, tauriBackend } from "./tauri";
-import type { Backend, ConnectionState, InstrumentId, Problem, ProblemCode, UpdateInfo } from "./types";
+import type { Backend, ConnectionState, Drawing, InstrumentId, Problem, ProblemCode, UpdateInfo } from "./types";
 
 const MOCK_WATCHLIST_KEY = "sandchart.mock.watchlist";
+const MOCK_DRAWINGS_KEY = "sandchart.mock.drawings";
+
+/** A value kept in localStorage as JSON; without storage it lasts for this page load. */
+function localStore<T>(key: string): { load(): T | null; save(v: T): void } {
+  return {
+    load() {
+      try {
+        const raw = localStorage.getItem(key);
+        return raw ? (JSON.parse(raw) as T) : null;
+      } catch {
+        return null;
+      }
+    },
+    save(v) {
+      try {
+        localStorage.setItem(key, JSON.stringify(v));
+      } catch {
+        // No storage: the value lasts for this page load.
+      }
+    },
+  };
+}
 
 export * from "./types";
 
@@ -25,8 +47,8 @@ if (inTauri) void resetSubscriptions();
  * `mockIndicatorProblems=1` (a module that failed to load and a service error), `mockUpdate` (the version
  * `checkUpdate` finds; `0.3.0` when only the next two are set), `mockUpdateError=check|install` (every check
  * fails, or every download fails halfway), `mockUpdateBlocker=translocated|not_appimage` (the update cannot be
- * installed here) and `mockUpdateDelay` (ms until the first automatic check). The watchlist is kept in
- * localStorage so a reload sees the same list. Calls are counted in `window.__sandchartMock`, and the chart
+ * installed here) and `mockUpdateDelay` (ms until the first automatic check). The watchlist and the drawings are kept in
+ * localStorage (`sandchart.mock.drawings`), so a reload sees the same ones. Calls are counted in `window.__sandchartMock`, and the chart
  * reports draw times and axis layout into `window.__sandchartDebug` (see
  * chart/debug.ts). None of this exists inside Tauri.
  */
@@ -76,23 +98,8 @@ function browserMock(): Backend {
     update,
     updateError: updateError === "check" || updateError === "install" ? updateError : undefined,
     watchlist: list === null ? undefined : list.split(",").filter(Boolean),
-    watchlistStore: {
-      load() {
-        try {
-          const raw = localStorage.getItem(MOCK_WATCHLIST_KEY);
-          return raw ? (JSON.parse(raw) as InstrumentId[]) : null;
-        } catch {
-          return null;
-        }
-      },
-      save(ids) {
-        try {
-          localStorage.setItem(MOCK_WATCHLIST_KEY, JSON.stringify(ids));
-        } catch {
-          // No storage: the list lasts for this page load.
-        }
-      },
-    },
+    watchlistStore: localStore<InstrumentId[]>(MOCK_WATCHLIST_KEY),
+    drawingStore: localStore<Drawing[]>(MOCK_DRAWINGS_KEY),
   });
   enableChartDebug();
   const stats = { getCandles: 0, checkUpdate: 0 };

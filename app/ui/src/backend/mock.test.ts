@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import fixture from "../../../../crates/core/tests/fixtures/positions.json";
 import { createMockBackend, mockResolve, mockSma, mockValidateDrawing } from "./mock";
-import type { DrawingBody, DrawingInput, IndicatorInstance, IndicatorResult, PositionBody, PositionOutcome } from "./types";
+import type { Drawing, DrawingBody, DrawingInput, IndicatorInstance, IndicatorResult, PositionBody, PositionOutcome } from "./types";
 
 const id = { source: "mock", symbol: "BTCUSDT" };
 
@@ -219,6 +219,17 @@ describe("mock backend", () => {
       await b.deleteDrawing("b");
       await b.deleteDrawing("b");
       expect((await b.getDrawings(id)).map((d) => d.id)).toEqual(["c", "a"]);
+    });
+
+    it("keeps drawings in the given store across backends", async () => {
+      let kept: Drawing[] | null = null;
+      const store = { load: () => kept, save: (all: Drawing[]) => (kept = structuredClone(all)) };
+      const first = createMockBackend({ candles: 10, latencyMs: 0, drawingStore: store });
+      await first.saveDrawing(input("a", { kind: "hline", p: 5 }));
+      await first.saveDrawing(input("b", { kind: "hline", p: 6 }));
+      await first.deleteDrawing("a");
+      const second = createMockBackend({ candles: 10, latencyMs: 0, drawingStore: store });
+      expect((await second.getDrawings(id)).map((d) => [d.id, d.body])).toEqual([["b", { kind: "hline", p: 6 }]]);
     });
 
     it("rejects what Rust rejects, with its message", async () => {
