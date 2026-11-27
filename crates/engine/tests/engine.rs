@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -24,20 +24,37 @@ struct FakeProvider {
     pages: Mutex<VecDeque<Result<Vec<Candle>, ProviderError>>>,
     history_calls: Mutex<Vec<(Option<i64>, u16)>>,
     quote_calls: Mutex<Vec<usize>>,
-    live_rx: Mutex<Option<mpsc::UnboundedReceiver<LiveItem>>>,
+    live_rx: Mutex<HashMap<String, mpsc::UnboundedReceiver<LiveItem>>>,
+    live_tx: HashMap<String, mpsc::UnboundedSender<LiveItem>>,
 }
 
 impl FakeProvider {
+    /// Returns the provider and the live sender of the first instrument (or a dummy).
     fn new(instruments: Vec<Instrument>) -> (Arc<FakeProvider>, mpsc::UnboundedSender<LiveItem>) {
-        let (tx, rx) = mpsc::unbounded_channel();
+        let mut live_rx = HashMap::new();
+        let mut live_tx = HashMap::new();
+        for i in &instruments {
+            let (tx, rx) = mpsc::unbounded_channel();
+            live_rx.insert(i.id.symbol.clone(), rx);
+            live_tx.insert(i.id.symbol.clone(), tx);
+        }
+        let first = instruments.first().map_or_else(
+            || mpsc::unbounded_channel().0,
+            |i| live_tx[&i.id.symbol].clone(),
+        );
         let p = FakeProvider {
             instruments,
             pages: Mutex::default(),
             history_calls: Mutex::default(),
             quote_calls: Mutex::default(),
-            live_rx: Mutex::new(Some(rx)),
+            live_rx: Mutex::new(live_rx),
+            live_tx,
         };
-        (Arc::new(p), tx)
+        (Arc::new(p), first)
+    }
+
+    fn sender(&self, symbol: &str) -> mpsc::UnboundedSender<LiveItem> {
+        self.live_tx[symbol].clone()
     }
 
     fn push_page(&self, page: Result<Vec<Candle>, ProviderError>) {
@@ -74,13 +91,13 @@ impl Provider for FakeProvider {
             .unwrap_or(Ok(Vec::new()))
     }
 
-    fn live(&self, _inst: &Instrument, _tf: Timeframe) -> BoxStream<'static, LiveItem> {
+    fn live(&self, inst: &Instrument, _tf: Timeframe) -> BoxStream<'static, LiveItem> {
         let rx = self
             .live_rx
             .lock()
             .unwrap()
-            .take()
-            .expect("live called once");
+            .remove(&inst.id.symbol)
+            .expect("live called once per instrument");
         futures::stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|i| (i, rx)) })
             .boxed()
     }
@@ -738,4 +755,91 @@ async fn failed_catch_up_stores_nothing_and_warns() {
         .candles_before(&id("BTCUSDT"), Timeframe::H1, None, 100_000)
         .unwrap();
     assert_eq!(stored.len(), 2, "a partial walk must not leave a hole");
+}
+
+#[tokio::test]
+async fn connection_state_with_two_subscriptions() {
+    let f = fixture(&["AAAUSDT", "BBBUSDT"]).await;
+    let mut a = f
+        .engine
+        .subscribe_live(&id("AAAUSDT"), Timeframe::H1)
+        .unwrap();
+    let mut b = f
+        .engine
+        .subscribe_live(&id("BBBUSDT"), Timeframe::H1)
+        .unwrap();
+    let state = f.engine.connection();
+    let (tx_a, tx_b) = (f.provider.sender("AAAUSDT"), f.provider.sender("BBBUSDT"));
+
+    tx_a.send(Err(net())).unwrap();
+    assert_eq!(next_event(&mut a).await, LiveEvent::Disconnected);
+    assert_eq!(*state.borrow(), ConnectionState::Reconnecting);
+
+    // A healthy stream B must not clear A's gap.
+    tx_b.send(live(0, false)).unwrap();
+    next_event(&mut b).await;
+    assert_eq!(*state.borrow(), ConnectionState::Reconnecting);
+
+    tx_a.send(live(0, false)).unwrap();
+    next_event(&mut a).await;
+    assert_eq!(*state.borrow(), ConnectionState::Connected);
+}
+
+#[tokio::test]
+async fn dropping_errored_subscription_clears_reconnecting() {
+    let f = fixture(&["BTCUSDT"]).await;
+    let mut handle = f
+        .engine
+        .subscribe_live(&id("BTCUSDT"), Timeframe::H1)
+        .unwrap();
+    let mut state = f.engine.connection();
+
+    f.live_tx.send(Err(net())).unwrap();
+    assert_eq!(next_event(&mut handle).await, LiveEvent::Disconnected);
+    assert_eq!(*state.borrow_and_update(), ConnectionState::Reconnecting);
+
+    drop(handle);
+    tokio::time::timeout(Duration::from_secs(5), state.changed())
+        .await
+        .expect("state was not released")
+        .unwrap();
+    assert_eq!(*state.borrow(), ConnectionState::Connected);
+}
+
+#[tokio::test]
+async fn backfill_past_cap_resets_series() {
+    let f = fixture(&["BTCUSDT"]).await;
+    let mut handle = f
+        .engine
+        .subscribe_live(&id("BTCUSDT"), Timeframe::H1)
+        .unwrap();
+    f.live_tx.send(live(20_000, true)).unwrap();
+    next_event(&mut handle).await;
+    f.store()
+        .set_history_start(&id("BTCUSDT"), Timeframe::H1, candle(20_000).open_time)
+        .unwrap();
+    for page in pages_back(0, 10) {
+        f.provider.push_page(Ok(page));
+    }
+
+    f.live_tx.send(Err(net())).unwrap();
+    f.live_tx.send(live(0, true)).unwrap();
+    assert_eq!(next_event(&mut handle).await, LiveEvent::Disconnected);
+    match next_event(&mut handle).await {
+        LiveEvent::Backfilled(c) => assert_eq!(c.len(), 10_000),
+        other => panic!("expected Backfilled, got {other:?}"),
+    }
+    next_event(&mut handle).await;
+
+    assert_eq!(f.provider.history_calls().len(), 10);
+    let store = f.store();
+    let stored = store
+        .candles_before(&id("BTCUSDT"), Timeframe::H1, None, 100_000)
+        .unwrap();
+    assert_contiguous(&stored);
+    assert_eq!(stored.first().unwrap().open_time, candle(9_999).open_time);
+    assert_eq!(
+        store.history_start(&id("BTCUSDT"), Timeframe::H1).unwrap(),
+        None
+    );
 }

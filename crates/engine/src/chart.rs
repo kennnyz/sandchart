@@ -31,13 +31,13 @@ fn reached_start(candles: &[Candle], history_start: Option<i64>) -> bool {
 }
 
 /// Candles fetched for one request; `reset` means the old cached series must be dropped first.
-struct Fetched {
-    candles: Vec<Candle>,
-    reset: bool,
+pub(crate) struct Fetched {
+    pub candles: Vec<Candle>,
+    pub reset: bool,
 }
 
 /// Pages walked back from now to reach the cache before the old series is given up.
-const MAX_CATCH_UP_PAGES: usize = 10;
+pub(crate) const MAX_CATCH_UP_PAGES: usize = 10;
 
 impl Engine {
     /// Loads up to 1000 candles ending before `before` (the newest ones when `None`).
@@ -81,8 +81,7 @@ impl Engine {
         if need_fetch {
             let fetched = match (before, cache.newest) {
                 (None, Some(newest)) => {
-                    self.fetch_catch_up(provider.as_ref(), &instrument, tf, newest)
-                        .await
+                    fetch_catch_up(provider.as_ref(), &instrument, tf, newest).await
                 }
                 _ => provider
                     .history(&instrument, tf, before, PAGE)
@@ -156,40 +155,39 @@ impl Engine {
     fn is_stale(&self, newest: i64, tf: Timeframe) -> bool {
         newest.saturating_add(tf.fixed_ms().unwrap_or(MONTH_MS)) <= self.now_ms()
     }
+}
 
-    /// Walks pages back from now until one reaches `newest` (the newest cached candle), so
-    /// the stored series stays contiguous. If `MAX_CATCH_UP_PAGES` pages do not reach it,
-    /// the old series cannot be joined and is replaced by the fetched pages. Nothing is
-    /// returned for storing when any request fails.
-    async fn fetch_catch_up(
-        &self,
-        provider: &dyn Provider,
-        inst: &Instrument,
-        tf: Timeframe,
-        newest: i64,
-    ) -> Result<Fetched, ProviderError> {
-        let mut candles: Vec<Candle> = Vec::new();
-        let mut end_before = None;
-        for _ in 0..MAX_CATCH_UP_PAGES {
-            let mut page = provider.history(inst, tf, end_before, PAGE).await?;
-            let first = page.first().map(|c| c.open_time);
-            let full = page.len() >= usize::from(PAGE);
-            page.append(&mut candles);
-            candles = page;
-            match first {
-                // The page overlaps the cache, or the exchange has nothing older to give.
-                Some(f) if f > newest && full => end_before = Some(f),
-                _ => {
-                    return Ok(Fetched {
-                        candles,
-                        reset: false,
-                    });
-                }
+/// Walks pages back from now until one reaches `newest` (the newest cached candle), so
+/// the stored series stays contiguous. If `MAX_CATCH_UP_PAGES` pages do not reach it,
+/// the old series cannot be joined and is replaced by the fetched pages. Nothing is
+/// returned for storing when any request fails.
+pub(crate) async fn fetch_catch_up(
+    provider: &dyn Provider,
+    inst: &Instrument,
+    tf: Timeframe,
+    newest: i64,
+) -> Result<Fetched, ProviderError> {
+    let mut candles: Vec<Candle> = Vec::new();
+    let mut end_before = None;
+    for _ in 0..MAX_CATCH_UP_PAGES {
+        let mut page = provider.history(inst, tf, end_before, PAGE).await?;
+        let first = page.first().map(|c| c.open_time);
+        let full = page.len() >= usize::from(PAGE);
+        page.append(&mut candles);
+        candles = page;
+        match first {
+            // The page overlaps the cache, or the exchange has nothing older to give.
+            Some(f) if f > newest && full => end_before = Some(f),
+            _ => {
+                return Ok(Fetched {
+                    candles,
+                    reset: false,
+                });
             }
         }
-        Ok(Fetched {
-            candles,
-            reset: true,
-        })
     }
+    Ok(Fetched {
+        candles,
+        reset: true,
+    })
 }

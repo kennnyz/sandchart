@@ -53,11 +53,19 @@ pub enum EngineError {
 
 type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
 
-/// Shared pieces the background live task needs as well.
+/// What decides the connection state: streams with an unfilled gap, and failed REST calls.
+#[derive(Default)]
+struct ConnectionInputs {
+    gaps: usize,
+    offline: bool,
+}
+
+/// Shared pieces the background live tasks need as well.
 #[derive(Clone)]
 pub(crate) struct Shared {
     pub store: Arc<Mutex<Store>>,
-    pub connection: Arc<watch::Sender<ConnectionState>>,
+    connection: Arc<watch::Sender<ConnectionState>>,
+    inputs: Arc<Mutex<ConnectionInputs>>,
 }
 
 pub struct Engine {
@@ -85,25 +93,45 @@ where
 }
 
 impl Shared {
+    /// Applies `f` to the inputs and publishes the derived state if it changed.
+    fn update(&self, f: impl FnOnce(&mut ConnectionInputs)) {
+        let mut inputs = self.inputs.lock().unwrap_or_else(PoisonError::into_inner);
+        f(&mut inputs);
+        let state = if inputs.offline {
+            ConnectionState::Offline
+        } else if inputs.gaps > 0 {
+            ConnectionState::Reconnecting
+        } else {
+            ConnectionState::Connected
+        };
+        self.connection.send_if_modified(|s| {
+            let changed = *s != state;
+            *s = state;
+            changed
+        });
+    }
+
     /// Reflects a failed provider call in the connection state.
     pub(crate) fn note_error(&self, err: &ProviderError) {
         if matches!(
             err,
             ProviderError::Network(_) | ProviderError::Blocked { .. }
         ) {
-            self.connection.send_replace(ConnectionState::Offline);
+            self.update(|i| i.offline = true);
         }
     }
 
     /// A successful REST call proves the network is back.
     pub(crate) fn note_ok(&self) {
-        self.connection.send_if_modified(|s| {
-            let was_offline = *s == ConnectionState::Offline;
-            if was_offline {
-                *s = ConnectionState::Connected;
-            }
-            was_offline
-        });
+        self.update(|i| i.offline = false);
+    }
+
+    pub(crate) fn gap_opened(&self) {
+        self.update(|i| i.gaps += 1);
+    }
+
+    pub(crate) fn gap_closed(&self) {
+        self.update(|i| i.gaps = i.gaps.saturating_sub(1));
     }
 }
 
@@ -125,6 +153,7 @@ impl Engine {
             shared: Shared {
                 store: Arc::new(Mutex::new(store)),
                 connection: Arc::new(connection),
+                inputs: Arc::default(),
             },
             providers: providers
                 .into_iter()

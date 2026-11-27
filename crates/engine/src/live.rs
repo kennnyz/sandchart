@@ -8,10 +8,8 @@ use sandchart_data::{LiveCandle, Provider};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use crate::{Engine, EngineError, PAGE, Shared, blocking};
-
-/// Upper bound on REST pages fetched to close one gap (20 000 candles).
-const MAX_BACKFILL_PAGES: usize = 20;
+use crate::chart::{Fetched, fetch_catch_up};
+use crate::{Engine, EngineError, Shared, blocking};
 
 const EVENT_BUFFER: usize = 256;
 
@@ -76,6 +74,35 @@ impl Engine {
     }
 }
 
+/// Counts this stream's gap in the shared connection state; releases it on drop, so an
+/// aborted task cannot leave the state stuck on `Reconnecting`.
+struct GapGuard {
+    shared: Shared,
+    open: bool,
+}
+
+impl GapGuard {
+    fn open(&mut self) {
+        if !self.open {
+            self.open = true;
+            self.shared.gap_opened();
+        }
+    }
+
+    fn close(&mut self) {
+        if self.open {
+            self.open = false;
+            self.shared.gap_closed();
+        }
+    }
+}
+
+impl Drop for GapGuard {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
 async fn run(
     shared: Shared,
     provider: Arc<dyn Provider>,
@@ -84,32 +111,31 @@ async fn run(
     tx: mpsc::Sender<LiveEvent>,
 ) {
     let mut stream = provider.live(&inst, tf);
-    let mut gap = false;
+    let mut gap = GapGuard {
+        shared: shared.clone(),
+        open: false,
+    };
     while let Some(item) = stream.next().await {
         let event = match item {
             Err(_) => {
-                shared
-                    .connection
-                    .send_replace(ConnectionState::Reconnecting);
-                if gap {
+                if gap.open {
                     continue; // already reported; the backfill happens once, on the next Ok
                 }
-                gap = true;
+                gap.open();
                 LiveEvent::Disconnected
             }
             Ok(live) => {
-                shared.connection.send_replace(ConnectionState::Connected);
-                if gap {
+                if gap.open {
                     match backfill(&shared, provider.as_ref(), &inst, tf).await {
                         Ok(missed) => {
-                            gap = false;
+                            gap.close();
                             if !missed.is_empty()
                                 && tx.send(LiveEvent::Backfilled(missed)).await.is_err()
                             {
                                 return;
                             }
                         }
-                        // Keep `gap` set so the next good message retries.
+                        // Keep the gap open so the next good message retries.
                         Err(EngineError::Provider(e)) => shared.note_error(&e),
                         Err(_) => {}
                     }
@@ -132,7 +158,9 @@ async fn run(
     }
 }
 
-/// Fetches and stores every candle newer than the newest stored one.
+/// Closes the gap since the newest stored candle with the same rule as `load_chart`:
+/// contiguous pages, or a reset of the series when the cap is hit. Returns the new
+/// candles (the whole fetched series after a reset).
 async fn backfill(
     shared: &Shared,
     provider: &dyn Provider,
@@ -143,22 +171,24 @@ async fn backfill(
     let Some(newest) = blocking(&shared.store, move |s| s.newest_open_time(&id, tf)).await? else {
         return Ok(vec![]); // nothing cached, so there is no gap to fill
     };
-    let mut missed: Vec<Candle> = Vec::new();
-    let mut end_before = None;
-    for _ in 0..MAX_BACKFILL_PAGES {
-        let page = provider.history(inst, tf, end_before, PAGE).await?;
-        let first = page.first().map(|c| c.open_time);
-        let full = page.len() >= usize::from(PAGE);
-        let mut newer: Vec<Candle> = page.into_iter().filter(|c| c.open_time > newest).collect();
-        newer.append(&mut missed);
-        missed = newer;
-        match first {
-            Some(f) if full && f > newest => end_before = Some(f),
-            _ => break,
-        }
-    }
+    let Fetched { candles, reset } = fetch_catch_up(provider, inst, tf, newest).await?;
     shared.note_ok();
-    let (id, to_store) = (inst.id.clone(), missed.clone());
-    blocking(&shared.store, move |s| s.upsert_candles(&id, tf, &to_store)).await?;
+    let missed: Vec<Candle> = if reset {
+        candles.clone()
+    } else {
+        candles
+            .iter()
+            .copied()
+            .filter(|c| c.open_time > newest)
+            .collect()
+    };
+    let (id, to_store) = (inst.id.clone(), candles);
+    blocking(&shared.store, move |s| {
+        if reset {
+            s.delete_series(&id, tf)?;
+        }
+        s.upsert_candles(&id, tf, &to_store)
+    })
+    .await?;
     Ok(missed)
 }
