@@ -245,6 +245,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "testguest-builtin-evil"
+version = "0.1.0"
+dependencies = [
+ "sandchart-indicator",
+]
+
+[[package]]
 name = "testguest-imports-host"
 version = "0.1.0"
 dependencies = [
@@ -260,6 +267,13 @@ dependencies = [
 
 [[package]]
 name = "testguest-loop-forever"
+version = "0.1.0"
+dependencies = [
+ "sandchart-indicator",
+]
+
+[[package]]
+name = "testguest-markers"
 version = "0.1.0"
 dependencies = [
  "sandchart-indicator",

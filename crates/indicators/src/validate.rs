@@ -116,6 +116,15 @@ pub(crate) fn meta(m: &Meta) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether `id` may be used by an installed (not built-in) module: it matches
+/// the id pattern and does not take the reserved `builtin.` prefix.
+pub fn is_user_id(id: &str) -> bool {
+    valid_id(id) && !id.starts_with(BUILTIN_PREFIX)
+}
+
+/// The id prefix reserved for the indicators compiled into the app.
+const BUILTIN_PREFIX: &str = "builtin.";
+
 /// `^[a-z0-9][a-z0-9_-]*\.[a-z0-9][a-z0-9_-]*$`
 fn valid_id(id: &str) -> bool {
     let part = |s: &str| {
@@ -249,6 +258,16 @@ mod tests {
             ..base()
         })
         .unwrap();
+    }
+
+    #[test]
+    fn user_ids() {
+        assert!(is_user_id("me.bands"));
+        assert!(is_user_id("a-1.b_2"));
+        assert!(!is_user_id("builtin.sma"));
+        assert!(!is_user_id("Bad.Id"));
+        assert!(!is_user_id("a.b.c"));
+        assert!(!is_user_id("nodot"));
     }
 
     #[test]

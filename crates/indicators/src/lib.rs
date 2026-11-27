@@ -17,6 +17,7 @@ mod wasi;
 pub use builtins::builtins;
 pub use repaint::{REPAINT_BARS, REPAINT_PREFIXES, RepaintAt, check_repaint};
 pub use sample::sample_bars;
+pub use validate::is_user_id;
 
 use std::fs;
 use std::hash::{Hash, Hasher};
@@ -26,7 +27,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use wasmtime::Engine;
 use wasmtime::component::{Component, Linker};
@@ -121,7 +122,7 @@ pub enum ParamKind {
 }
 
 /// A parameter value.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ParamValue {
     Int(i64),
