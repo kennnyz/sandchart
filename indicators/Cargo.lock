@@ -133,7 +133,7 @@ dependencies = [
 name = "sandchart-indicator"
 version = "0.1.0"
 dependencies = [
- "wit-bindgen",
+ "wit-bindgen 0.63.0",
 ]
 
 [[package]]
@@ -220,7 +220,14 @@ dependencies = [
 name = "testguest-imports-host"
 version = "0.1.0"
 dependencies = [
- "wit-bindgen",
+ "wit-bindgen 0.63.0",
+]
+
+[[package]]
+name = "testguest-logs-a-lot"
+version = "0.1.0"
+dependencies = [
+ "sandchart-indicator",
 ]
 
 [[package]]
@@ -234,7 +241,7 @@ dependencies = [
 name = "testguest-newer-patch"
 version = "0.1.0"
 dependencies = [
- "wit-bindgen",
+ "wit-bindgen 0.63.0",
 ]
 
 [[package]]
@@ -266,10 +273,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "testguest-reads-env"
+version = "0.1.0"
+dependencies = [
+ "sandchart-indicator",
+]
+
+[[package]]
 name = "testguest-reads-file"
 version = "0.1.0"
 dependencies = [
  "sandchart-indicator",
+]
+
+[[package]]
+name = "testguest-reads-random"
+version = "0.1.0"
+dependencies = [
+ "sandchart-indicator",
+ "wasip2",
 ]
 
 [[package]]
@@ -294,10 +316,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "testguest-sleeps"
+version = "0.1.0"
+dependencies = [
+ "sandchart-indicator",
+]
+
+[[package]]
+name = "testguest-spams-resources"
+version = "0.1.0"
+dependencies = [
+ "sandchart-indicator",
+ "wasip2",
+]
+
+[[package]]
 name = "testguest-wrong-version"
 version = "0.1.0"
 dependencies = [
- "wit-bindgen",
+ "wit-bindgen 0.63.0",
 ]
 
 [[package]]
@@ -305,6 +342,15 @@ name = "unicode-ident"
 version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
+
+[[package]]
+name = "wasip2"
+version = "1.0.4+wasi-0.2.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b67efb37e106e55ce722a510d6b5f9c17f083e5fc79afc2badeb12cc313d9487"
+dependencies = [
+ "wit-bindgen 0.57.1",
+]
 
 [[package]]
 name = "wasm-encoder"
@@ -338,6 +384,15 @@ dependencies = [
  "hashbrown",
  "indexmap",
  "semver",
+]
+
+[[package]]
+name = "wit-bindgen"
+version = "0.57.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
+dependencies = [
+ "bitflags",
 ]
 
 [[package]]

@@ -9,6 +9,7 @@
 mod params;
 mod sandbox;
 mod validate;
+mod wasi;
 
 use std::fs;
 use std::hash::{Hash, Hasher};

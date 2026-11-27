@@ -5,13 +5,11 @@ use std::time::Duration;
 
 use rand::SeedableRng;
 use rand::rngs::Xoshiro256PlusPlus;
-use wasmtime::component::{Component, Linker, ResourceTable};
-use wasmtime::{
-    Config, Engine, ResourceLimiter, Store, StoreLimits, StoreLimitsBuilder, Trap, WasmBacktrace,
-    WasmFeatures,
-};
-use wasmtime_wasi::p2::pipe::MemoryOutputPipe;
-use wasmtime_wasi::{HostMonotonicClock, HostWallClock, WasiCtx, WasiCtxView, WasiView};
+use wasmtime::component::{Component, Linker, ResourceTable, ResourceTableError};
+use wasmtime::{Config, Engine, ResourceLimiter, Store, Trap, WasmBacktrace, WasmFeatures};
+use wasmtime_wasi::{HostWallClock, WasiCtx, WasiCtxView, WasiView};
+
+use crate::wasi::{LogPipe, add_frozen_clock};
 
 use crate::{
     Bar, Limits, LoadError, Marker, MarkerShape, Meta, Pane, ParamKind, ParamSpec, ParamValue,
@@ -35,11 +33,19 @@ pub(crate) const CONTRACT: &str = "sandchart:indicator/indicator@0.1.0";
 /// Seed of both WASI random generators, so runs repeat exactly.
 const RANDOM_SEED: u64 = 0x5A4D_C4A7;
 
-/// Guest stdout and stderr kept per call before the log is cut.
-const PIPE_BYTES: usize = 1024 * 1024;
-
-/// The log returned in `Output` is cut to this size.
+/// The log returned in `Output` is cut to this size; the rest is dropped.
 const LOG_BYTES: usize = 16 * 1024;
+
+/// WASI handles (streams, pollables) one call may hold in the host table.
+const MAX_HANDLES: usize = 10_000;
+
+/// Per-store counts. A Rust indicator component needs a handful of each.
+const MAX_INSTANCES: usize = 32;
+const MAX_MEMORIES: usize = 4;
+const MAX_TABLES: usize = 16;
+
+/// Elements of any one table (function references, about 8 bytes each).
+const MAX_TABLE_ELEMENTS: usize = 100_000;
 
 /// The engine: fuel and epochs on, NaN canonicalized, no relaxed SIMD and no
 /// threads, so a module gives the same bits on every machine.
@@ -60,6 +66,7 @@ pub(crate) fn engine() -> Result<Engine, LoadError> {
 pub(crate) fn linker(engine: &Engine) -> Result<Linker<HostState>, LoadError> {
     let mut linker = Linker::new(engine);
     wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
+        .and_then(|()| add_frozen_clock(&mut linker))
         .map_err(|e| LoadError::Engine(e.to_string()))?;
     Ok(linker)
 }
@@ -176,6 +183,12 @@ fn run_error(e: wasmtime::Error, store: &Store<HostState>, log: &str) -> RunErro
     if store.data().limiter.refused {
         return RunError::OutOfMemory;
     }
+    if let Some(ResourceTableError::Full) = e.downcast_ref::<ResourceTableError>() {
+        return RunError::Trap(format!(
+            "the indicator holds more than {MAX_HANDLES} WASI handles (streams, pollables); \
+             drop the ones it no longer needs"
+        ));
+    }
     // The cause first (for a Rust panic the output below holds the message
     // and the source line), then the wasm stack.
     let mut msg = e.root_cause().to_string();
@@ -189,20 +202,26 @@ fn run_error(e: wasmtime::Error, store: &Store<HostState>, log: &str) -> RunErro
     RunError::Trap(msg)
 }
 
-fn log_text(pipe: &MemoryOutputPipe) -> String {
-    let bytes = pipe.contents();
+fn log_text(pipe: &LogPipe) -> String {
+    let (bytes, cut) = pipe.contents();
     let mut text = String::from_utf8_lossy(&bytes[..bytes.len().min(LOG_BYTES)]).into_owned();
-    if bytes.len() > LOG_BYTES {
+    if cut {
         text.push_str("\n[log cut at 16 KiB]");
     }
     text
 }
 
-/// Store data: the WASI context and the memory limiter.
+/// Store data: the WASI context and the limiter.
 pub(crate) struct HostState {
     wasi: WasiCtx,
     table: ResourceTable,
     limiter: Limiter,
+}
+
+impl HostState {
+    pub(crate) fn table(&mut self) -> &mut ResourceTable {
+        &mut self.table
+    }
 }
 
 impl WasiView for HostState {
@@ -214,11 +233,23 @@ impl WasiView for HostState {
     }
 }
 
-/// [`StoreLimits`] that remembers whether it refused memory, so the trap that
-/// follows a failed allocation is reported as `OutOfMemory`.
+/// Caps memory for the whole store (the sum of all linear memories, not
+/// each one), table sizes and instance counts, and remembers a refusal so
+/// the trap that follows a failed allocation is reported as `OutOfMemory`.
 struct Limiter {
-    inner: StoreLimits,
+    memory_limit: usize,
+    memory_used: usize,
     refused: bool,
+}
+
+impl Limiter {
+    fn new(memory_limit: usize) -> Self {
+        Self {
+            memory_limit,
+            memory_used: 0,
+            refused: false,
+        }
+    }
 }
 
 impl ResourceLimiter for Limiter {
@@ -228,22 +259,42 @@ impl ResourceLimiter for Limiter {
         desired: usize,
         maximum: Option<usize>,
     ) -> wasmtime::Result<bool> {
-        let allowed = self.inner.memory_growing(current, desired, maximum)?;
-        self.refused |= !allowed;
+        let total = self.memory_used.saturating_sub(current) + desired;
+        let allowed = total <= self.memory_limit && maximum.is_none_or(|max| desired <= max);
+        if allowed {
+            self.memory_used = total;
+        } else {
+            self.refused = true;
+        }
         Ok(allowed)
     }
 
     fn table_growing(
         &mut self,
-        current: usize,
+        _current: usize,
         desired: usize,
         maximum: Option<usize>,
     ) -> wasmtime::Result<bool> {
-        self.inner.table_growing(current, desired, maximum)
+        let allowed = desired <= MAX_TABLE_ELEMENTS && maximum.is_none_or(|max| desired <= max);
+        self.refused |= !allowed;
+        Ok(allowed)
+    }
+
+    fn instances(&self) -> usize {
+        MAX_INSTANCES
+    }
+
+    fn tables(&self) -> usize {
+        MAX_TABLES
+    }
+
+    fn memories(&self) -> usize {
+        MAX_MEMORIES
     }
 }
 
-/// A clock that always reads 0.
+/// A wall clock that always reads 0 (the monotonic clock is replaced in the
+/// linker, see `add_frozen_clock`).
 struct ZeroClock;
 
 impl HostWallClock for ZeroClock {
@@ -255,19 +306,11 @@ impl HostWallClock for ZeroClock {
     }
 }
 
-impl HostMonotonicClock for ZeroClock {
-    fn resolution(&self) -> u64 {
-        1
-    }
-    fn now(&self) -> u64 {
-        0
-    }
-}
-
 /// A store for one call: no args, env, files or network; clocks at 0; seeded
-/// random; stdout and stderr into one memory pipe; memory, fuel and epoch limits.
-fn new_store(engine: &Engine, limits: &Limits) -> (Store<HostState>, MemoryOutputPipe) {
-    let log = MemoryOutputPipe::new(PIPE_BYTES);
+/// random; stdout and stderr into one capped log; memory, table, handle, fuel
+/// and epoch limits.
+fn new_store(engine: &Engine, limits: &Limits) -> (Store<HostState>, LogPipe) {
+    let log = LogPipe::new(LOG_BYTES);
     let wasi = WasiCtx::builder()
         .stdout(log.clone())
         .stderr(log.clone())
@@ -275,20 +318,16 @@ fn new_store(engine: &Engine, limits: &Limits) -> (Store<HostState>, MemoryOutpu
         .allow_udp(false)
         .allow_ip_name_lookup(false)
         .wall_clock(ZeroClock)
-        .monotonic_clock(ZeroClock)
         .secure_random(Xoshiro256PlusPlus::seed_from_u64(RANDOM_SEED))
         .insecure_random(Xoshiro256PlusPlus::seed_from_u64(RANDOM_SEED))
         .insecure_random_seed(u128::from(RANDOM_SEED))
         .build();
+    let mut table = ResourceTable::new();
+    table.set_max_capacity(MAX_HANDLES);
     let state = HostState {
         wasi,
-        table: ResourceTable::new(),
-        limiter: Limiter {
-            inner: StoreLimitsBuilder::new()
-                .memory_size(limits.memory_bytes)
-                .build(),
-            refused: false,
-        },
+        table,
+        limiter: Limiter::new(limits.memory_bytes),
     };
     let mut store = Store::new(engine, state);
     store.limiter(|s| &mut s.limiter);
@@ -379,5 +418,45 @@ fn series_from_wit(s: w::SeriesOut) -> SeriesOut {
                     .collect(),
             ),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MIB: usize = 1024 * 1024;
+
+    #[test]
+    fn memory_limit_counts_all_memories_together() {
+        let mut l = Limiter::new(10 * MIB);
+        assert!(l.memory_growing(0, 6 * MIB, None).unwrap());
+        // A second memory of the same size would pass a per-memory limit.
+        assert!(!l.memory_growing(0, 6 * MIB, None).unwrap());
+        assert!(l.refused);
+        assert!(l.memory_growing(0, 4 * MIB, None).unwrap());
+        // Growing the first memory further is refused too.
+        assert!(!l.memory_growing(6 * MIB, 7 * MIB, None).unwrap());
+    }
+
+    #[test]
+    fn growth_within_the_limit_is_counted_once() {
+        let mut l = Limiter::new(10 * MIB);
+        assert!(l.memory_growing(0, 2 * MIB, None).unwrap());
+        assert!(l.memory_growing(2 * MIB, 8 * MIB, None).unwrap());
+        assert!(l.memory_growing(8 * MIB, 10 * MIB, None).unwrap());
+        assert!(!l.refused);
+        assert!(!l.memory_growing(10 * MIB, 11 * MIB, None).unwrap());
+    }
+
+    #[test]
+    fn tables_and_counts_are_capped() {
+        let mut l = Limiter::new(10 * MIB);
+        assert!(l.table_growing(0, MAX_TABLE_ELEMENTS, None).unwrap());
+        assert!(!l.table_growing(0, MAX_TABLE_ELEMENTS + 1, None).unwrap());
+        assert!(l.refused);
+        assert_eq!(l.instances(), MAX_INSTANCES);
+        assert_eq!(l.tables(), MAX_TABLES);
+        assert_eq!(l.memories(), MAX_MEMORIES);
     }
 }

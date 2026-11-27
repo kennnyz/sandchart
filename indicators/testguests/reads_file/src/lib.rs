@@ -31,7 +31,7 @@ impl Indicator for Guest {
         let _ = candles;
         match std::fs::read("/etc/hosts") {
             Ok(bytes) => Err(String::from_utf8_lossy(&bytes).into_owned()),
-            Err(e) => Err(e.to_string()),
+            Err(e) => Err(format!("{:?}", e.kind())),
         }
     }
 }

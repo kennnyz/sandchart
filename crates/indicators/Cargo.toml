@@ -8,11 +8,14 @@ publish.workspace = true
 repository.workspace = true
 
 [dependencies]
+bytes = "1"
 rand = { version = "0.10", default-features = false }
 semver = "1"
 serde.workspace = true
 sha2 = "0.10"
 thiserror.workspace = true
+# Only for the AsyncWrite trait that wasmtime-wasi's StdoutStream requires.
+tokio = { version = "1", default-features = false }
 wasmtime = { version = "51", default-features = false, features = ["addr2line", "component-model", "cranelift", "demangle", "parallel-compilation", "runtime", "std"] }
 wasmtime-wasi = { version = "51", default-features = false, features = ["p2"] }
 

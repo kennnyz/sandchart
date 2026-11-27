@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use sandchart_indicators::{
-    Bar, Limits, LoadError, Module, ParamValue, RunError, Runtime, SeriesData, SeriesKind,
+    Bar, Limits, LoadError, Module, Output, ParamValue, RunError, Runtime, SeriesData, SeriesKind,
     module_hash,
 };
 
@@ -91,7 +91,7 @@ fn same_input_same_output() {
     let input = bars(&[3.0, 1.0, 4.0, 1.0, 5.0]);
     let a = m.compute(&[], &input).unwrap();
     let b = m.compute(&[], &input).unwrap();
-    let bits = |o: &sandchart_indicators::Output| -> Vec<u64> {
+    let bits = |o: &Output| -> Vec<u64> {
         values(&o.series[0].data)
             .iter()
             .map(|v| v.to_bits())
@@ -179,16 +179,84 @@ fn returns_err_is_indicator_error() {
 
 #[test]
 fn reads_file_sees_no_files() {
-    let msg = indicator_error("reads_file");
-    assert!(!msg.contains("localhost"), "the guest read the file: {msg}");
-    assert!(!msg.is_empty());
+    // The guest returns `io::Error::kind()`; with no preopened directory the
+    // path does not exist for it.
+    assert_eq!(indicator_error("reads_file"), "NotFound");
 }
 
 #[test]
 fn opens_socket_is_refused() {
-    let msg = indicator_error("opens_socket");
-    assert_ne!(msg, "connected");
-    assert!(!msg.is_empty());
+    assert_eq!(indicator_error("opens_socket"), "PermissionDenied");
+}
+
+/// Runs `compute` on another thread and fails the test if it does not return
+/// within `secs`, so a hang shows up as a failure instead of a stuck test run.
+fn compute_within(m: Module, input: Vec<Bar>, secs: u64) -> Result<Output, RunError> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(m.compute(&[], &input));
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(secs))
+        .expect("compute did not return: a host call blocked the thread")
+}
+
+#[test]
+fn sleep_returns_at_once() {
+    let started = std::time::Instant::now();
+    let out = compute_within(load("sleeps"), bars(&[1.0, 2.0]), 5).unwrap();
+    assert_eq!(values(&out.series[0].data), &[1.0, 2.0]);
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+}
+
+#[test]
+fn long_log_is_cut_not_a_trap() {
+    let out = load("logs_a_lot").compute(&[], &bars(&[1.0])).unwrap();
+    assert_eq!(values(&out.series[0].data), &[1.0]);
+    assert!(out.log.starts_with("line 000000 "), "{:?}", &out.log[..40]);
+    assert!(
+        out.log.len() <= 16 * 1024 + 64,
+        "log is {} bytes",
+        out.log.len()
+    );
+    assert!(out.log.len() >= 16 * 1024, "log is {} bytes", out.log.len());
+}
+
+#[test]
+fn random_is_seeded() {
+    let input = bars(&[1.0, 2.0, 3.0]);
+    let a = load("reads_random").compute(&[], &input).unwrap();
+    let b = load("reads_random").compute(&[], &input).unwrap();
+    let c = runtime()
+        .load(&guest("reads_random"))
+        .unwrap()
+        .compute(&[], &input)
+        .unwrap();
+    assert_eq!(a.series, b.series);
+    assert_eq!(a.series, c.series);
+    let v = values(&a.series[0].data);
+    assert_eq!(v[2], f64::from(0x5A4D_C4A7_u32), "insecure seed");
+    assert_ne!(v[0], 0.0);
+}
+
+#[test]
+fn env_and_args_are_empty() {
+    let out = load("reads_env").compute(&[], &bars(&[1.0, 2.0])).unwrap();
+    assert_eq!(values(&out.series[0].data), &[0.0, 0.0]);
+}
+
+#[test]
+fn resource_spam_is_stopped() {
+    let rt = runtime();
+    match compute_within(
+        rt.load(&guest("spams_resources")).unwrap(),
+        bars(&[1.0]),
+        30,
+    ) {
+        Err(RunError::Trap(msg)) => assert!(msg.contains("10000 WASI handles"), "{msg}"),
+        other => panic!("expected a trap, got {other:?}"),
+    }
+    let echo = rt.load(&guest("ok_echo")).unwrap();
+    assert!(echo.compute(&[], &bars(&[1.0])).is_ok());
 }
 
 #[test]

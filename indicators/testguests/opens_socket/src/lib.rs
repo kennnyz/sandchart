@@ -32,7 +32,7 @@ impl Indicator for Guest {
         let _ = candles;
         match std::net::TcpStream::connect("1.1.1.1:80") {
             Ok(_) => Err("connected".into()),
-            Err(e) => Err(e.to_string()),
+            Err(e) => Err(format!("{:?}", e.kind())),
         }
     }
 }
