@@ -28,6 +28,8 @@ export interface ChartDebug {
   /** Selected and hovered drawing ids at the last overlay frame. */
   selectedDrawing: string | null;
   hoveredDrawing: string | null;
+  /** The ruler's numbers at the last overlay frame ("+1.00 (+0.50%)|12 bars, 12h"), null when it is not shown. */
+  ruler: string | null;
 }
 
 let debug: ChartDebug | null = null;
@@ -49,6 +51,7 @@ export function enableChartDebug(): void {
     drawingsPainted: 0,
     selectedDrawing: null,
     hoveredDrawing: null,
+    ruler: null,
   };
   (window as unknown as { __sandchartDebug: ChartDebug }).__sandchartDebug = debug;
 }

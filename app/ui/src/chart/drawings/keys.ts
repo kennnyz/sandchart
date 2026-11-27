@@ -11,7 +11,11 @@ export interface KeyLike {
   target: unknown;
 }
 
-export type DrawingKeyAction = { tool: DrawingKind } | { command: DrawingCommand };
+export type DrawingKeyAction = { tool: DrawingKind } | { command: DrawingCommand } | { magnet: true };
+
+/** Alt + these keys: the ruler (not a stored drawing, so not in the registry) and the magnet. */
+export const RULER_CODE = "KeyR";
+export const MAGNET_CODE = "KeyM";
 
 /** Focus is in a text field, where keys type instead. */
 function typing(target: unknown): boolean {
@@ -21,7 +25,8 @@ function typing(target: unknown): boolean {
 }
 
 /**
- * What a key press does to drawings: Alt + a tool's key picks the tool, ⌘Z / Ctrl+Z
+ * What a key press does to drawings: Alt + a tool's key picks the tool, Alt+R arms the
+ * ruler, Alt+M toggles the magnet, ⌘Z / Ctrl+Z
  * undoes, with Shift redoes, Delete / Backspace removes the selection, Esc cancels.
  * Keys are matched by `code` (the physical key): on macOS Alt changes the typed character.
  */
@@ -31,6 +36,8 @@ export function drawingKeyAction(e: KeyLike, tools: readonly { kind: DrawingKind
   if (cmd && !e.altKey && e.code === "KeyZ") return { command: e.shiftKey ? "redo" : "undo" };
   if (cmd) return null;
   if (e.altKey) {
+    if (e.code === RULER_CODE) return { command: "ruler" };
+    if (e.code === MAGNET_CODE) return { magnet: true };
     const tool = tools.find((t) => t.code === e.code);
     return tool ? { tool: tool.kind } : null;
   }

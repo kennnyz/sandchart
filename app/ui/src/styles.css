@@ -156,6 +156,12 @@ select:focus-visible {
   background: var(--fg-8);
   color: var(--fg);
 }
+.tools-sep {
+  width: 20px;
+  height: 1px;
+  margin: 4px 0;
+  background: var(--line);
+}
 
 /* ---- Top bar ---- */
 

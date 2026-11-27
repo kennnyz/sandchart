@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Drawing, DrawingInput, DrawingKind, InstrumentId } from "../backend/types";
 import type { DrawingCommand } from "../chart/drawings/layer";
 import type { DrawingChange } from "../chart/drawings/state";
-import { DrawingController, type DrawingSurface } from "./drawings";
+import { DrawingController, type DrawingSurface, type MagnetPref } from "./drawings";
 
 const BTC = { source: "mock", symbol: "BTCUSDT" };
 const ETH = { source: "mock", symbol: "ETHUSDT" };
@@ -26,10 +26,12 @@ function fakeSurface() {
   const sets: Drawing[][] = [];
   const tools: (DrawingKind | null)[] = [];
   const commands: DrawingCommand[] = [];
+  const magnets: boolean[] = [];
   let commit: ((c: DrawingChange) => void) | null = null;
   let tool: ((k: DrawingKind | null) => void) | null = null;
   const surface: DrawingSurface = {
     setDrawings: (list) => sets.push(list),
+    setDrawingMagnet: (on) => magnets.push(on),
     setDrawingTool: (k) => {
       tools.push(k);
       tool?.(k);
@@ -41,7 +43,7 @@ function fakeSurface() {
     onDrawingCommit: (cb) => (commit = cb),
     onDrawingTool: (cb) => (tool = cb),
   };
-  return { surface, sets, tools, commands, commit: (c: DrawingChange) => commit!(c), hasListeners: () => commit !== null };
+  return { surface, sets, tools, commands, magnets, commit: (c: DrawingChange) => commit!(c), hasListeners: () => commit !== null };
 }
 
 interface Pending {
@@ -166,5 +168,27 @@ describe("DrawingController", () => {
     detach();
     expect(c.tool).toBeNull();
     expect(s.hasListeners()).toBe(false);
+  });
+
+  it("toggles the magnet, keeps the choice and sets it on every chart it attaches", () => {
+    const saved: boolean[] = [];
+    const pref: MagnetPref = { load: () => true, save: (on) => saved.push(on) };
+    const changed = vi.fn();
+    const c = new DrawingController(fakeBackend([]).backend, changed, pref);
+    expect(c.magnet).toBe(true);
+    const s = fakeSurface();
+    c.attach(s.surface);
+    expect(s.magnets).toEqual([true]);
+    c.toggleMagnet();
+    expect(c.magnet).toBe(false);
+    expect(s.magnets).toEqual([true, false]);
+    expect(saved).toEqual([false]);
+    expect(changed).toHaveBeenCalled();
+    // Off by default, and without a chart it is only remembered.
+    const d = new DrawingController(fakeBackend([]).backend, () => {}, { load: () => null, save: (on) => saved.push(on) });
+    expect(d.magnet).toBe(false);
+    d.toggleMagnet();
+    expect(d.magnet).toBe(true);
+    expect(saved).toEqual([false, true]);
   });
 });

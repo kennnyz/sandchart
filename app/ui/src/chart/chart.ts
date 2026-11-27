@@ -346,12 +346,17 @@ export class Chart {
     this.drawings.setDrawings(list);
   }
 
+  /** Whether placed and dragged points snap to bar prices (⌘ or Ctrl inverts it per move). */
+  setDrawingMagnet(on: boolean): void {
+    this.drawings.setMagnet(on);
+  }
+
   /** Picks the tool the next clicks on the price plot place, or none. */
   setDrawingTool(kind: DrawingKind | null): void {
     this.drawings.setTool(kind);
   }
 
-  /** Undo, redo, delete the selection, or cancel; false when there was nothing to do. */
+  /** Undo, redo, delete the selection, cancel, or arm the ruler; false when there was nothing to do. */
   drawingCommand(cmd: DrawingCommand): boolean {
     return this.drawings.command(cmd);
   }
@@ -619,7 +624,8 @@ export class Chart {
       indicators: this.ind,
     };
     draw(f, this.buffers);
-    const coords = new Coords(s.time, s.count, this.view, scale, plotW, priceH, STEP_MS.get(this.tf) ?? 60 * MINUTE);
+    const step = STEP_MS.get(this.tf) ?? 60 * MINUTE;
+    const coords = new Coords(s.time, s.count, this.view, scale, plotW, priceH, step, decimals, s);
     this.drawings.paintBase(this.ctx, coords, this.dpr, this.theme, (p, color) =>
       drawingTag(this.ctx, f, this.buffers, p, color),
     );
@@ -666,7 +672,7 @@ export class Chart {
     const priceH = this.priceH();
     const onPriceAxis = p.x >= plotW && p.y < priceH;
     // On the price plot drawings come first: a tool places, a press on a drawing selects it.
-    const onDrawing = this.inPricePlot(p) && this.drawings.pointerDown(p.x, p.y, e.shiftKey);
+    const onDrawing = this.inPricePlot(p) && this.drawings.pointerDown(p.x, p.y, e.shiftKey, e.metaKey || e.ctrlKey);
     const kind = onDrawing ? "drawing" : onPriceAxis ? "price" : "pan";
     this.drag = { kind, pointerId: e.pointerId, lastX: e.clientX, lastY: e.clientY };
     this.canvas.setPointerCapture(e.pointerId);
@@ -689,7 +695,7 @@ export class Chart {
     const priceH = this.priceH();
     const d = this.drag;
     if (d?.kind === "drawing" && d.pointerId === e.pointerId) {
-      this.drawings.pointerMove(p.x, p.y, e.shiftKey);
+      this.drawings.pointerMove(p.x, p.y, e.shiftKey, e.metaKey || e.ctrlKey);
       this.updateCrosshair();
       this.invalidateOverlay();
       return;
@@ -708,7 +714,7 @@ export class Chart {
       this.afterViewChange();
       return;
     }
-    if (this.inPricePlot(p)) this.drawings.pointerMove(p.x, p.y, e.shiftKey);
+    if (this.inPricePlot(p)) this.drawings.pointerMove(p.x, p.y, e.shiftKey, e.metaKey || e.ctrlKey);
     else this.drawings.leave();
     this.updateCursor(p);
     // Only the mouse moved: the base layer stays as it is.
@@ -725,7 +731,7 @@ export class Chart {
     if (kind === "drawing") {
       // A cancelled pointer (a system gesture) stores nothing.
       if (e.type === "pointercancel") this.drawings.abort();
-      else this.drawings.pointerUp(p.x, p.y, e.shiftKey);
+      else this.drawings.pointerUp(p.x, p.y, e.shiftKey, e.metaKey || e.ctrlKey);
       this.invalidateOverlay();
     }
     this.updateCursor(p);

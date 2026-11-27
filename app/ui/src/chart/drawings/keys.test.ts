@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { drawingKeyAction, type KeyLike } from "./keys";
+import { drawingKeyAction, MAGNET_CODE, RULER_CODE, type KeyLike } from "./keys";
 import { TOOLS } from "./registry";
 
 const key = (code: string, mods: Partial<KeyLike> = {}): KeyLike => ({
@@ -20,6 +20,19 @@ describe("drawingKeyAction", () => {
     expect(drawingKeyAction(key("KeyT"), TOOLS)).toBeNull();
     expect(drawingKeyAction(key("KeyT", { altKey: true, metaKey: true }), TOOLS)).toBeNull();
     expect(drawingKeyAction(key("KeyQ", { altKey: true }), TOOLS)).toBeNull();
+  });
+
+  it("picks the new tools, arms the ruler and toggles the magnet", () => {
+    expect(drawingKeyAction(key("KeyB", { altKey: true }), TOOLS)).toEqual({ tool: "rect" });
+    expect(drawingKeyAction(key("KeyF", { altKey: true }), TOOLS)).toEqual({ tool: "fib" });
+    expect(drawingKeyAction(key("KeyP", { altKey: true }), TOOLS)).toEqual({ tool: "brush" });
+    expect(drawingKeyAction(key("KeyR", { altKey: true }), TOOLS)).toEqual({ command: "ruler" });
+    expect(drawingKeyAction(key("KeyM", { altKey: true }), TOOLS)).toEqual({ magnet: true });
+    expect(drawingKeyAction(key("KeyM"), TOOLS)).toBeNull();
+    expect(drawingKeyAction(key("KeyR", { altKey: true, target: { tagName: "INPUT" } }), TOOLS)).toBeNull();
+    // No tool takes the ruler's or the magnet's key.
+    expect(TOOLS.map((t) => t.code)).not.toContain(RULER_CODE);
+    expect(TOOLS.map((t) => t.code)).not.toContain(MAGNET_CODE);
   });
 
   it("undoes and redoes with ⌘Z / ⇧⌘Z or Ctrl", () => {

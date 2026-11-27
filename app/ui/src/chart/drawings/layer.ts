@@ -2,7 +2,9 @@ import type { Anchor, Drawing, DrawingBody, DrawingKind, DrawingStyle } from "..
 import { chartDebug } from "../debug";
 import type { ChartTheme } from "../theme";
 import type { Coords } from "./geometry";
+import { snapToBar } from "./magnet";
 import { toolFor, type Look, type Mover, type Point, type ToolDef } from "./registry";
+import { paintRuler } from "./ruler";
 import { DEFAULT_STYLE, DrawingState, type DrawingChange, type Owner, type Part } from "./state";
 
 /** Distance in CSS px within which the pointer hits a drawing or a handle. */
@@ -16,7 +18,8 @@ const HALO_ALPHA = 0.25;
 const DASH = [6, 4];
 const NO_DASH: number[] = [];
 
-export type DrawingCommand = "undo" | "redo" | "delete" | "cancel";
+/** `ruler` arms the ruler for the next drag, whatever the tool (pressed again, disarms it). */
+export type DrawingCommand = "undo" | "redo" | "delete" | "cancel" | "ruler";
 
 /** What the layer needs from the chart. */
 export interface LayerHost {
@@ -57,7 +60,14 @@ export class DrawingLayer {
   private edit: Edit | null = null;
   /** Where the press that placed a point started (a press, drag and release places two). */
   private press: Point | null = null;
-  private mouse: { x: number; y: number; shift: boolean } | null = null;
+  /** Last pointer position added to a stroke. */
+  private strokeAt: Point | null = null;
+  /** `invert`: ⌘ or Ctrl held, the magnet does the opposite for this move. */
+  private mouse: { x: number; y: number; shift: boolean; invert: boolean } | null = null;
+  private magnet = false;
+  /** The ruler on the overlay: `live` while its drag lasts, then shown until the next press or Esc. */
+  private ruler: { a: Anchor; b: Anchor; live: boolean } | null = null;
+  private rulerArmed = false;
 
   constructor(private readonly host: LayerHost) {
     this.state = new DrawingState({ commit: (c) => host.commit(c), tool: (k) => host.tool(k) });
@@ -68,6 +78,7 @@ export class DrawingLayer {
   setDrawings(list: Drawing[]): void {
     this.edit = null;
     this.press = null;
+    this.ruler = null;
     this.state.reset(list);
     this.cache.clear();
     this.host.invalidate();
@@ -83,13 +94,26 @@ export class DrawingLayer {
     this.host.invalidateOverlay();
   }
 
+  /** Snaps placed and dragged points to bar prices (see `snapToBar`). */
+  setMagnet(on: boolean): void {
+    this.magnet = on;
+  }
+
   /** Runs a keyboard command; false when there was nothing to do. */
   command(cmd: DrawingCommand): boolean {
     if (cmd === "cancel") {
+      const ruler = this.ruler !== null || this.rulerArmed;
+      this.ruler = null;
+      this.rulerArmed = false;
       this.abort();
-      const any = this.state.cancel();
+      const any = this.state.cancel() || ruler;
       this.host.invalidateOverlay();
       return any;
+    }
+    if (cmd === "ruler") {
+      if (this.ruler?.live) return false;
+      this.rulerArmed = !this.rulerArmed;
+      return true;
     }
     // Not in the middle of a drag: the history would change under it.
     if (this.edit || this.press) return false;
@@ -98,11 +122,14 @@ export class DrawingLayer {
     return done;
   }
 
-  /** Drops a drag or placement press in progress without storing anything. */
+  /** Drops a drag, stroke, measurement or placement press in progress without storing anything. */
   abort(): void {
     if (this.edit?.moved) this.host.invalidate();
     this.edit = null;
+    if (this.press && this.placingStroke()) this.state.points = [];
     this.press = null;
+    this.strokeAt = null;
+    if (this.ruler?.live) this.ruler = null;
   }
 
   // ---- Painting ----
@@ -139,6 +166,7 @@ export class DrawingLayer {
     if (debug) {
       debug.selectedDrawing = this.state.selected;
       debug.hoveredDrawing = this.state.hover?.id ?? null;
+      debug.ruler = null;
     }
     if (!c || c.count === 0 || c.plotW <= 0 || c.priceH <= 0) return;
     const s = this.state;
@@ -166,15 +194,23 @@ export class DrawingLayer {
       if (d && tool) paintHandles(ctx, tool.handles(this.geom(tool, d)), color(theme, d.style), theme);
     }
 
-    // The shape being placed: the points so far and the mouse as the next one.
+    // The shape being placed: the points so far and the mouse as the next one. A stroke
+    // shows only once it is pressed, and without a handle on every point.
     const placing = s.tool ? toolFor(s.tool) : undefined;
-    if (placing && this.mouse) {
-      const points = s.placingPoints(this.anchorAt(this.mouse.x, this.mouse.y), this.mouse.shift);
-      const g = placing.layout(placing.create(points, c), c);
-      paintOne(ctx, placing, g, DEFAULT_STYLE, dpr, theme, false);
+    const stroke = placing?.placement.stroke === true;
+    if (placing && this.mouse && !this.ruler?.live && (!stroke || s.points.length > 0)) {
+      const m = this.mouse;
+      const next = stroke ? this.rawAnchor(m.x, m.y) : this.anchorAt(m.x, m.y, m.invert);
+      const points = s.placingPoints(next, m.shift && !stroke);
+      const body = placing.create(points, c);
+      paintOne(ctx, placing, placing.layout(body, c), DEFAULT_STYLE, dpr, theme, false);
       const col = color(theme, DEFAULT_STYLE);
-      if (s.points.length > 0) paintHandles(ctx, points.map((a) => ({ x: c.x(a.t), y: c.y(a.p) })), col, theme);
-      for (const p of placing.axisPrices?.(placing.create(points, c)) ?? []) tags.push([p, col]);
+      if (s.points.length > 0 && !stroke) paintHandles(ctx, points.map((a) => ({ x: c.x(a.t), y: c.y(a.p) })), col, theme);
+      for (const p of placing.axisPrices?.(body) ?? []) tags.push([p, col]);
+    }
+    if (this.ruler) {
+      const text = paintRuler(ctx, c, this.ruler.a, this.ruler.b, theme);
+      if (debug) debug.ruler = text;
     }
     ctx.restore();
     for (const [p, col] of tags) tag(p, col);
@@ -182,16 +218,39 @@ export class DrawingLayer {
 
   // ---- Pointer input (CSS px inside the price plot) ----
 
-  /** A press; true when the layer takes it (the chart does not pan then). */
-  pointerDown(x: number, y: number, shift: boolean): boolean {
+  /**
+   * A press; true when the layer takes it (the chart does not pan then). `invert` is ⌘ or
+   * Ctrl: the magnet does the opposite while it is held.
+   */
+  pointerDown(x: number, y: number, shift: boolean, invert = false): boolean {
     const c = this.coords;
     if (!c || c.count === 0) return false;
-    this.mouse = { x, y, shift };
+    this.mouse = { x, y, shift, invert };
     const s = this.state;
+    // Any press puts a shown ruler away.
+    if (this.ruler) {
+      this.ruler = null;
+      this.host.invalidateOverlay();
+    }
+    // The ruler: armed with Alt+R whatever the tool, or Shift+drag on empty space without one.
+    if (this.rulerArmed || (shift && !s.tool && !this.hitAt(x, y))) {
+      this.rulerArmed = false;
+      const a = this.anchorAt(x, y, invert);
+      this.ruler = { a, b: a, live: true };
+      this.host.invalidateOverlay();
+      return true;
+    }
     if (s.tool) {
       this.press = { x, y };
-      if (s.place(this.anchorAt(x, y), shift, c)) this.host.invalidate();
-      else this.host.invalidateOverlay();
+      if (this.placingStroke()) {
+        s.points = [];
+        s.stroke(this.rawAnchor(x, y));
+        this.strokeAt = { x, y };
+      } else if (s.place(this.anchorAt(x, y, invert), shift, c)) {
+        this.host.invalidate();
+        return true;
+      }
+      this.host.invalidateOverlay();
       return true;
     }
     const hit = this.hitAt(x, y);
@@ -211,9 +270,25 @@ export class DrawingLayer {
   }
 
   /** The pointer moved over the price plot, pressed or not. */
-  pointerMove(x: number, y: number, shift: boolean): void {
-    this.mouse = { x, y, shift };
+  pointerMove(x: number, y: number, shift: boolean, invert = false): void {
+    this.mouse = { x, y, shift, invert };
     const c = this.coords;
+    const r = this.ruler;
+    if (r?.live) {
+      r.b = this.anchorAt(x, y, invert);
+      this.host.invalidateOverlay();
+      return;
+    }
+    const at = this.strokeAt;
+    if (at && this.press) {
+      // One point per pixel moved at most; the stroke is simplified on release.
+      if (Math.hypot(x - at.x, y - at.y) >= 1) {
+        this.state.stroke(this.rawAnchor(x, y));
+        this.strokeAt = { x, y };
+      }
+      this.host.invalidateOverlay();
+      return;
+    }
     const e = this.edit;
     if (e && c) {
       if (!e.moved) {
@@ -226,7 +301,7 @@ export class DrawingLayer {
       e.body =
         e.part === "body"
           ? tool.moveBy(e.body0, mover(c, x - e.x0, y - e.y0))
-          : tool.moveHandle(e.body0, e.part, this.anchorAt(x, y), shift);
+          : tool.moveHandle(e.body0, e.part, this.anchorAt(x, y, invert), shift);
       this.host.invalidateOverlay();
       return;
     }
@@ -242,7 +317,24 @@ export class DrawingLayer {
     }
   }
 
-  pointerUp(x: number, y: number, shift: boolean): void {
+  pointerUp(x: number, y: number, shift: boolean, invert = false): void {
+    const r = this.ruler;
+    if (r?.live) {
+      r.b = this.anchorAt(x, y, invert);
+      r.live = false;
+      // A Shift+click without a drag measures nothing.
+      if (r.a.t === r.b.t && r.a.p === r.b.p) this.ruler = null;
+      this.host.invalidateOverlay();
+      return;
+    }
+    if (this.strokeAt) {
+      this.strokeAt = null;
+      this.press = null;
+      const c = this.coords;
+      if (c && this.state.endStroke(c)) this.host.invalidate();
+      else this.host.invalidateOverlay();
+      return;
+    }
     const e = this.edit;
     this.edit = null;
     if (e) {
@@ -256,7 +348,7 @@ export class DrawingLayer {
     this.press = null;
     const c = this.coords;
     if (p && c && this.state.points.length > 0 && Math.hypot(x - p.x, y - p.y) >= DRAG_THRESHOLD) {
-      if (this.state.place(this.anchorAt(x, y), shift, c)) this.host.invalidate();
+      if (this.state.place(this.anchorAt(x, y, invert), shift, c)) this.host.invalidate();
     }
   }
 
@@ -272,7 +364,7 @@ export class DrawingLayer {
   cursor(): string | null {
     const e = this.edit;
     if (e) return e.part === "body" ? "move" : "grabbing";
-    if (this.state.tool) return "crosshair";
+    if (this.state.tool || this.rulerArmed || this.ruler?.live) return "crosshair";
     const h = this.state.hover;
     if (!h) return null;
     if (this.state.byId(h.id)?.locked) return "pointer";
@@ -281,9 +373,21 @@ export class DrawingLayer {
 
   // ---- Internals ----
 
-  private anchorAt(x: number, y: number): Anchor {
+  /** The point under (x, y), on a bar price when the magnet is on (`invert` flips it). */
+  private anchorAt(x: number, y: number, invert: boolean): Anchor {
+    const c = this.coords!;
+    return (this.magnet !== invert && snapToBar(c, x, y)) || this.rawAnchor(x, y);
+  }
+
+  private rawAnchor(x: number, y: number): Anchor {
     const c = this.coords!;
     return { t: c.t(x), p: c.p(y) };
+  }
+
+  /** The active tool places by stroke. */
+  private placingStroke(): boolean {
+    const tool = this.state.tool ? toolFor(this.state.tool) : undefined;
+    return tool?.placement.stroke === true;
   }
 
   /** The tool of a drawing that is shown and inside the visible times. */
