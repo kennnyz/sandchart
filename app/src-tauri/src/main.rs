@@ -112,6 +112,10 @@ fn main() {
             commands::get_chart_indicators,
             commands::set_chart_indicators,
             commands::compute_indicators,
+            commands::get_drawings,
+            commands::save_drawing,
+            commands::delete_drawing,
+            commands::get_position_outcomes,
             update::check_update,
             update::install_update,
         ])

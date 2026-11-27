@@ -1,7 +1,10 @@
 //! Wire types of the Tauri commands and events. JSON is camelCase; candles are columnar
 //! so a 200 000-candle history is six flat arrays, not 200 000 objects.
 
-use sandchart_core::{Candle, Instrument, InstrumentId, JS_SAFE_MAX};
+use sandchart_core::{
+    Candle, Drawing, DrawingBody, Instrument, InstrumentId, JS_SAFE_MAX, Outcome, PositionBody,
+    Style,
+};
 use sandchart_data::{DayChange, ProviderError};
 use sandchart_engine::{
     ChartPage, Computed, ConnectionState, EngineError, FailedIndicator, IndicatorInfo,
@@ -481,6 +484,82 @@ impl From<InstanceResult> for InstanceResultDto {
     }
 }
 
+// Drawings. The body, style, position and outcome JSON comes from core (camelCase fields,
+// snake_case kinds); see `sandchart_core::drawing`.
+
+/// A stored drawing, as the UI gets it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DrawingDto {
+    pub id: String,
+    pub instrument: InstrumentIdDto,
+    pub price_scale: u8,
+    pub body: DrawingBody,
+    pub style: Style,
+    pub locked: bool,
+    pub hidden: bool,
+    pub z: i64,
+    pub updated_at: i64,
+}
+
+impl From<Drawing> for DrawingDto {
+    fn from(d: Drawing) -> Self {
+        Self {
+            id: d.id,
+            instrument: d.instrument.into(),
+            price_scale: d.price_scale,
+            body: d.body,
+            style: d.style,
+            locked: d.locked,
+            hidden: d.hidden,
+            z: d.z,
+            updated_at: d.updated_at,
+        }
+    }
+}
+
+/// A drawing to save. The engine sets the price scale and the update time.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DrawingInputDto {
+    pub id: String,
+    pub instrument: InstrumentIdDto,
+    pub body: DrawingBody,
+    pub style: Style,
+    pub locked: bool,
+    pub hidden: bool,
+    pub z: i64,
+}
+
+impl From<DrawingInputDto> for Drawing {
+    fn from(d: DrawingInputDto) -> Self {
+        Self {
+            id: d.id,
+            instrument: d.instrument.into(),
+            price_scale: 0,
+            body: d.body,
+            style: d.style,
+            locked: d.locked,
+            hidden: d.hidden,
+            z: d.z,
+            updated_at: 0,
+        }
+    }
+}
+
+/// A position drawing to resolve, by its drawing id.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct PositionInputDto {
+    pub id: String,
+    pub position: PositionBody,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PositionOutcomeDto {
+    pub id: String,
+    pub outcome: Outcome,
+}
+
 // Updates.
 
 /// Why this copy cannot update itself in place; the UI shows a link to the release instead.
@@ -809,6 +888,65 @@ mod tests {
         assert_eq!(
             json(UpdateProgressDto::Installing),
             serde_json::json!({ "kind": "installing" })
+        );
+    }
+
+    #[test]
+    fn drawing_dtos_are_camel_case_and_round_trip() {
+        let input = serde_json::json!({
+            "id": "d1",
+            "instrument": { "source": "binance", "symbol": "BTCUSDT" },
+            "body": {
+                "kind": "position", "side": "long", "entry": { "t": 10, "p": 100 },
+                "stop": 90, "take": 120, "endT": 20
+            },
+            "style": { "color": 2, "width": 1, "dash": true },
+            "locked": false, "hidden": true, "z": 3
+        });
+        let dto: DrawingInputDto = serde_json::from_value(input.clone()).unwrap();
+        let mut d = Drawing::from(dto);
+        assert_eq!(d.instrument.symbol, "BTCUSDT");
+        assert!(matches!(d.body, DrawingBody::Position(p) if p.end_t == 20));
+        d.price_scale = 2;
+        d.updated_at = 1_700_000_000_000;
+        let out = serde_json::to_value(DrawingDto::from(d)).unwrap();
+        let mut expected = input;
+        expected["priceScale"] = 2.into();
+        expected["updatedAt"] = 1_700_000_000_000i64.into();
+        assert_eq!(out, expected);
+
+        let bad = serde_json::json!({
+            "id": "d1", "instrument": { "source": "b", "symbol": "s" },
+            "body": { "kind": "spiral" }, "style": { "color": 0, "width": 1, "dash": false },
+            "locked": false, "hidden": false, "z": 0
+        });
+        assert!(serde_json::from_value::<DrawingInputDto>(bad).is_err());
+    }
+
+    #[test]
+    fn position_dtos_carry_the_drawing_id() {
+        let input: PositionInputDto = serde_json::from_value(serde_json::json!({
+            "id": "p", "position": {
+                "side": "short", "entry": { "t": 1, "p": 100 }, "stop": 110, "take": 85, "endT": 9
+            }
+        }))
+        .unwrap();
+        assert_eq!(input.position.take, 85);
+        let out = PositionOutcomeDto {
+            id: input.id,
+            outcome: Outcome {
+                status: sandchart_core::Status::Stop,
+                exit_time: Some(5),
+                ambiguous: true,
+                r: -1.0,
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(out).unwrap(),
+            serde_json::json!({
+                "id": "p",
+                "outcome": { "status": "stop", "exitTime": 5, "ambiguous": true, "r": -1.0 }
+            })
         );
     }
 
