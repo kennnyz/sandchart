@@ -1,0 +1,38 @@
+# AGENTS.md
+
+This crate is a Sandchart indicator: a WebAssembly component that the app runs in a sandbox
+(no files, no network, no env, clocks fixed at 0, seeded random). The code is `src/lib.rs`.
+
+## The loop
+
+1. Edit `src/lib.rs`.
+2. `sandchart-indicator build`. It builds for `wasm32-wasip2` and loads the result in the same
+   host the app uses. Success prints `ok <id> <version> → <path>`; a failure prints what to change.
+3. `sandchart-indicator test <path printed by build> [--csv FILE] [--param id=value] [--json]`.
+   It prints the last 5 values of every series, the fuel used (of the limit), the log, whether two
+   runs agree, and a `warning: repaints ...` line when old bars change as new ones arrive.
+4. Read the errors and warnings, fix them, go back to 1. Stop when `build` says `ok` and `test`
+   exits 0 with no warning, and the numbers match what you expect (compare a few values by hand).
+
+## Rules of the contract
+
+- Implement `sandchart_indicator::Indicator` (`meta()` and `compute()`) and call `export!`.
+- `compute` is a pure function of `(params, candles)`. It gets all candles of the chart, oldest
+  first, as `f64` in price units. Keep no state between calls.
+- Return every declared series once; `values` must have exactly one value per candle. Use `NaN`
+  where there is no value (the chart draws a gap); never `0.0` as a stand-in.
+- Do not repaint: the value at bar `i` may depend on bars `0..=i` only. Do not look ahead and do
+  not normalise by the maximum of the whole window.
+- Ids: the module id is `local.<name>` (lower-case letters, digits, `-`, `_`, one dot). Series ids
+  are unique. `color` is a palette slot, 0 to 7. A `markers` series goes on `Pane::Price`. A
+  `Band(a, b)` series names two line series of this module on the same pane and carries no data.
+- `version` is semver. Every param `default` must match its kind and lie in its range.
+- Budget: `DEFAULT_FUEL` per call (about 600 million instructions, shown as a percentage by
+  `test`). A good indicator uses a few percent on 100 000 bars. Memory limit 256 MiB.
+- Use `ta::{sma, ema, rma, stdev, highest, lowest, source}` and `ta::SOURCES` from the SDK before
+  writing your own loops.
+
+## Links
+
+- Guide: https://github.com/kennnyz/sandchart/blob/main/docs/indicators.md
+- The contract (WIT): https://github.com/kennnyz/sandchart/blob/main/indicators/sdk/wit/indicator.wit

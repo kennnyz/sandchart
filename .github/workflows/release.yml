@@ -58,10 +58,12 @@ jobs:
       - run: pnpm --dir app/ui build
       - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.target }},wasm32-wasip2
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: ${{ matrix.target }}
+      # The app embeds the built-in indicators, and the author CLI embeds them too.
+      - run: cargo build --manifest-path indicators/Cargo.toml --target wasm32-wasip2 --release
       # tauri-action without `tagName` only builds; the draft release is created in the
       # publish job once every platform has succeeded. The CLI is run with node from
       # `app/` (where beforeBuildCommand paths resolve), so the `tauri` npm script
@@ -72,6 +74,8 @@ jobs:
           projectPath: app
           tauriScript: node ui/node_modules/@tauri-apps/cli/tauri.js
           args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+      - name: Build the indicator author CLI
+        run: cargo build --release --locked -p sandchart-indicator-cli --target ${{ matrix.target }}
       - name: Collect bundles
         shell: bash
         run: |
@@ -81,6 +85,14 @@ jobs:
               *.dmg|*.msi|*.AppImage|*.deb) cp "$f" dist-release/ ;;
             esac
           done
+          # The author CLI, one archive per platform.
+          root="$PWD"
+          bin=target/${{ matrix.target }}/release
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            (cd "$bin" && 7z a -tzip "$root/dist-release/sandchart-indicator-${{ matrix.target }}.zip" sandchart-indicator.exe)
+          else
+            tar -czf "dist-release/sandchart-indicator-${{ matrix.target }}.tar.gz" -C "$bin" sandchart-indicator
+          fi
           ls -l dist-release
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

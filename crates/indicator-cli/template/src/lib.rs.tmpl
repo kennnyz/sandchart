@@ -1,0 +1,118 @@
+//! Moving-average crossover: a fast and a slow SMA over the candles, and a
+//! marker where the fast one crosses the slow one. It looks only at bars up to
+//! the current one, so it does not repaint.
+
+use sandchart_indicator::{
+    Candle, Indicator, Marker, MarkerShape, Meta, Pane, ParamKind, ParamSpec, ParamValue, Params,
+    SeriesData, SeriesKind, SeriesOut, SeriesSpec, ta,
+};
+
+struct Crossover;
+
+fn line(id: &str, label: &str, color: u8) -> SeriesSpec {
+    SeriesSpec {
+        id: id.into(),
+        label: label.into(),
+        kind: SeriesKind::Line,
+        pane: Pane::Price,
+        color,
+    }
+}
+
+fn period(id: &str, label: &str, default: i64) -> ParamSpec {
+    ParamSpec {
+        id: id.into(),
+        label: label.into(),
+        kind: ParamKind::Int((2, 1000)),
+        default: ParamValue::Int(default),
+    }
+}
+
+impl Indicator for Crossover {
+    fn meta() -> Meta {
+        Meta {
+            // `local.<name>`: ids of your own modules are lower-case, have one
+            // dot, and never start with `builtin.`.
+            id: "local.{{name}}".into(),
+            name: "{{name}}".into(),
+            version: "0.1.0".into(),
+            description: "Fast and slow moving averages with markers where they cross".into(),
+            params: vec![
+                period("fast", "Fast period", 9),
+                period("slow", "Slow period", 21),
+                ParamSpec {
+                    id: "source".into(),
+                    label: "Source".into(),
+                    kind: ParamKind::Choice(ta::SOURCES.iter().map(|s| s.to_string()).collect()),
+                    default: ParamValue::Choice("close".into()),
+                },
+            ],
+            series: vec![
+                line("fast", "Fast", 2),
+                line("slow", "Slow", 3),
+                SeriesSpec {
+                    id: "cross".into(),
+                    label: "Cross".into(),
+                    kind: SeriesKind::Markers,
+                    pane: Pane::Price, // markers are only allowed on the price pane
+                    color: 4,
+                },
+            ],
+        }
+    }
+
+    fn compute(
+        params: Vec<(String, ParamValue)>,
+        candles: Vec<Candle>,
+    ) -> Result<Vec<SeriesOut>, String> {
+        let p = Params::new(params);
+        let fast_n = usize::try_from(p.int("fast")?).map_err(|_| "fast must be positive")?;
+        let slow_n = usize::try_from(p.int("slow")?).map_err(|_| "slow must be positive")?;
+        if fast_n >= slow_n {
+            return Err(format!("fast ({fast_n}) must be shorter than slow ({slow_n})"));
+        }
+        let src = ta::source(&candles, p.choice("source")?)?;
+        // A value is NaN until its window is full; the host draws a gap there.
+        let fast = ta::sma(&src, fast_n);
+        let slow = ta::sma(&src, slow_n);
+
+        let mut markers = Vec::new();
+        for i in 1..candles.len() {
+            let (f0, s0, f1, s1) = (fast[i - 1], slow[i - 1], fast[i], slow[i]);
+            if [f0, s0, f1, s1].iter().any(|v| v.is_nan()) {
+                continue;
+            }
+            let shape = if f0 <= s0 && f1 > s1 {
+                MarkerShape::Up
+            } else if f0 >= s0 && f1 < s1 {
+                MarkerShape::Down
+            } else {
+                continue;
+            };
+            markers.push(Marker {
+                index: i as u32,
+                shape,
+                text: None,
+            });
+        }
+
+        // One entry per declared series, in any order; `values` has one value
+        // per candle.
+        Ok(vec![
+            SeriesOut {
+                id: "fast".into(),
+                data: SeriesData::Values(fast),
+            },
+            SeriesOut {
+                id: "slow".into(),
+                data: SeriesData::Values(slow),
+            },
+            SeriesOut {
+                id: "cross".into(),
+                data: SeriesData::Markers(markers),
+            },
+        ])
+    }
+}
+
+sandchart_indicator::export!(Crossover with_types_in sandchart_indicator::bindings);

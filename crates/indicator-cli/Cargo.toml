@@ -1,0 +1,20 @@
+[package]
+name = "sandchart-indicator-cli"
+description = "Author tool for Sandchart indicators: create, build and test a WebAssembly indicator in the same host the app uses"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "sandchart-indicator"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+sandchart-indicators = { path = "../indicators" }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

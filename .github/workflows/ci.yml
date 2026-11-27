@@ -56,6 +56,8 @@ jobs:
       - run: cargo clippy --manifest-path indicators/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --workspace
       - run: cargo test --manifest-path indicators/Cargo.toml
+      # The author loop: new, build and test a project from the template (needs the network and wasm32-wasip2).
+      - run: cargo test -p sandchart-indicator-cli -- --ignored
       # Timing budgets of the built-in indicators; CI runners are slower than the reference machine.
       - run: cargo test --release -p sandchart-indicators --test builtins -- --ignored perf_
         env:

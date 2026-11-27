@@ -1,0 +1,26 @@
+# {{name}}
+
+A Sandchart indicator: a WebAssembly module that the app runs in a sandbox. This one
+draws a fast and a slow moving average and marks where they cross.
+
+## Build and check
+
+```sh
+sandchart-indicator build
+sandchart-indicator test target/wasm32-wasip2/release/{{name}}.wasm
+```
+
+(For a name with `-`, the file name uses `_`: `my-ind` builds `my_ind.wasm`; the output of
+`build` prints the exact path.)
+
+`test` runs the module in the same host the app uses, on 2000 generated bars or on your own
+candles (`--csv file.csv`, header `time,open,high,low,close,volume`). Change a parameter with
+`--param fast=5`. Use `--json` for machine-readable output. Exit code 0 means it loads and runs;
+a line starting with `warning:` is worth reading (for example that the indicator repaints).
+
+## Install in the app
+
+Open Sandchart, then Indicators, then Add from file, and pick the `.wasm` file.
+
+Requires Rust with the `wasm32-wasip2` target (`rustup target add wasm32-wasip2`; the
+`rust-toolchain.toml` in this folder asks for it).
