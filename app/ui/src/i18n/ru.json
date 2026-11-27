@@ -67,7 +67,7 @@
   "indicators.hide": "Скрыть",
   "indicators.show": "Показать",
   "indicators.settings": "Настройки",
-  "indicators.repaints": "Перерисовывает: прошлые значения могут меняться",
+  "indicators.repaints": "Перерисовывается: прошлые значения могут измениться",
   "indicators.failed": "{name} остановлен: {error}",
   "indicators.invalidFile": "{error}",
   "indicators.sandboxNote": "Индикаторы работают в песочнице: без доступа к файлам и сети.",

@@ -37,6 +37,10 @@ describe("i18n", () => {
     setLanguage("en");
   });
 
+  it("says in Russian that a repainting indicator is redrawn", () => {
+    expect(ru["indicators.repaints"]).toBe("Перерисовывается: прошлые значения могут измениться");
+  });
+
   it("returns the key for an unknown string", () => {
     expect(t("no.such.key")).toBe("no.such.key");
   });
