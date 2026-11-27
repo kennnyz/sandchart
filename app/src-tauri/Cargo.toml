@@ -17,10 +17,9 @@ sandchart-engine = { path = "../../crates/engine" }
 sandchart-indicators = { path = "../../crates/indicators" }
 directories = "6"
 serde.workspace = true
+# Already in the tree through Tauri; generate_context! emits serde_json values for `plugins` config.
+serde_json = "1"
 thiserror.workspace = true
 tauri = { version = "2", features = [] }
 # Already in the tree through Tauri; used for the sync retry delay.
 tokio = { version = "1", features = ["time"] }
-
-[dev-dependencies]
-serde_json = "1"

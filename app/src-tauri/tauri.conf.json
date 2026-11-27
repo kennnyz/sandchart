@@ -34,6 +34,22 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "license": "MIT OR Apache-2.0"
+    "license": "MIT OR Apache-2.0",
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDkyQkIwRDhEMDBEQzFCNUUKUldSZUc5d0FqUTI3a21rS2NFdXNaNThhdWhkZ1Bra0EyZjRKY2gxdHRVc2ZWd3J4QlpsM1RxYzYK",
+      "endpoints": [
+        "https://github.com/kennnyz/sandchart/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }
