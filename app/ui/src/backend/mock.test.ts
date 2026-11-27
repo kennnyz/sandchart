@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createMockBackend, mockSma } from "./mock";
-import type { IndicatorInstance, IndicatorResult } from "./types";
+import fixture from "../../../../crates/core/tests/fixtures/positions.json";
+import { createMockBackend, mockResolve, mockSma, mockValidateDrawing } from "./mock";
+import type { DrawingBody, DrawingInput, IndicatorInstance, IndicatorResult, PositionBody, PositionOutcome } from "./types";
 
 const id = { source: "mock", symbol: "BTCUSDT" };
 
@@ -175,6 +176,129 @@ describe("mock backend", () => {
       await b.removeIndicator("test.echo");
       expect(await b.getChartIndicators()).toEqual([]);
       await expect(b.removeIndicator("builtin.sma")).rejects.toThrow();
+    });
+  });
+
+  describe("drawings", () => {
+    const input = (drawingId: string, body: DrawingBody, z = 0): DrawingInput => ({
+      id: drawingId,
+      instrument: id,
+      body,
+      style: { color: 2, width: 1, dash: false },
+      locked: false,
+      hidden: false,
+      z,
+    });
+    const long = (over: Partial<PositionBody> = {}): DrawingBody => ({
+      kind: "position",
+      side: "long",
+      entry: { t: 1_000, p: 100 },
+      stop: 90,
+      take: 120,
+      endT: 2_000,
+      ...over,
+    });
+
+    it("saves, lists in z then id order, replaces and deletes", async () => {
+      const b = createMockBackend({ candles: 10, priceScale: 4 });
+      const saved = await b.saveDrawing(input("b", { kind: "hline", p: 5 }));
+      expect(saved.priceScale).toBe(4);
+      expect(saved.updatedAt).toBeGreaterThan(0);
+      await b.saveDrawing(input("a", { kind: "note", t: 1, text: "hi" }));
+      await b.saveDrawing(input("c", long(), -1));
+      await b.saveDrawing({ ...input("x", { kind: "hline", p: 1 }), instrument: { source: "mock", symbol: "ETHUSDT" } });
+      expect((await b.getDrawings(id)).map((d) => d.id)).toEqual(["c", "a", "b"]);
+
+      await b.saveDrawing(input("b", { kind: "hline", p: 7 }, 5));
+      const list = await b.getDrawings(id);
+      expect(list.at(-1)!.body).toEqual({ kind: "hline", p: 7 });
+      // The list is a copy: changing it does not change what is stored.
+      list[0]!.z = 99;
+      expect((await b.getDrawings(id))[0]!.z).toBe(-1);
+
+      await b.deleteDrawing("b");
+      await b.deleteDrawing("b");
+      expect((await b.getDrawings(id)).map((d) => d.id)).toEqual(["c", "a"]);
+    });
+
+    it("rejects what Rust rejects, with its message", async () => {
+      const b = createMockBackend({ candles: 10 });
+      await expect(b.saveDrawing(input("a b", { kind: "hline", p: 1 }))).rejects.toMatchObject({
+        code: "other",
+        message: expect.stringContaining("drawing id"),
+      });
+      await expect(b.saveDrawing(input("p", long({ stop: 100 })))).rejects.toMatchObject({
+        message: "a long position needs stop < entry < take",
+      });
+      await expect(b.saveDrawing({ ...input("u", { kind: "hline", p: 1 }), instrument: { source: "mock", symbol: "NOPE" } })).rejects.toMatchObject({
+        message: expect.stringContaining("unknown instrument"),
+      });
+      expect(await b.getDrawings(id)).toEqual([]);
+    });
+
+    it("validates every rule", () => {
+      const at = (t: number, p: number) => ({ t, p });
+      const ok: DrawingBody[] = [
+        { kind: "trend", a: at(1, 1), b: at(2, 2), extendLeft: true, extendRight: false },
+        { kind: "rect", a: at(1, 1), b: at(1, 2), extendRight: true },
+        { kind: "fib", a: at(1, 1), b: at(2, 2), levels: [0, 0.618, -5, 5] },
+        long(),
+        { kind: "position", side: "short", entry: at(1, 100), stop: 110, take: 85, endT: 2 },
+        { kind: "brush", points: [at(0, 0), at(1, 1)] },
+        { kind: "note", t: 0, text: "я".repeat(1000) },
+      ];
+      for (const body of ok) expect(mockValidateDrawing(input("ok", body)), body.kind).toBeNull();
+      const bad: [string, DrawingInput, string][] = [
+        ["long id", input("a".repeat(65), { kind: "hline", p: 1 }), "drawing id"],
+        ["colour", { ...input("a", { kind: "hline", p: 1 }), style: { color: 8, width: 1, dash: false } }, "colour slot 8"],
+        ["width", { ...input("a", { kind: "hline", p: 1 }), style: { color: 0, width: 5, dash: false } }, "line width 5"],
+        ["unsafe price", input("a", { kind: "hline", p: 2 ** 53 }), "outside"],
+        ["same points", input("a", { kind: "trend", a: at(1, 1), b: at(1, 1), extendLeft: false, extendRight: false }), "must differ"],
+        ["fib empty", input("a", { kind: "fib", a: at(1, 1), b: at(2, 2), levels: [] }), "1 to 16 levels"],
+        ["fib range", input("a", { kind: "fib", a: at(1, 1), b: at(2, 2), levels: [5.5] }), "level 5.5"],
+        ["fib NaN", input("a", { kind: "fib", a: at(1, 1), b: at(2, 2), levels: [NaN] }), "level NaN"],
+        ["short order", input("a", { kind: "position", side: "short", entry: at(1, 100), stop: 90, take: 85, endT: 2 }), "take < entry < stop"],
+        ["end", input("a", long({ endT: 1_000 })), "end after its entry"],
+        ["brush", input("a", { kind: "brush", points: [at(0, 0)] }), "2 to 500 points"],
+        ["empty note", input("a", { kind: "note", t: 0, text: "" }), "1 to 2000 bytes"],
+        ["long note", input("a", { kind: "note", t: 0, text: "я".repeat(1001) }), "not 2002"],
+      ];
+      for (const [name, d, msg] of bad) expect(mockValidateDrawing(d), name).toContain(msg);
+    });
+
+    it("keeps at most 2000 drawings per instrument", async () => {
+      const b = createMockBackend({ candles: 10 });
+      for (let i = 0; i < 2000; i++) await b.saveDrawing(input(`d${i}`, { kind: "hline", p: i }));
+      await expect(b.saveDrawing(input("more", { kind: "hline", p: 1 }))).rejects.toMatchObject({
+        message: expect.stringContaining("at most 2000"),
+      });
+      await b.saveDrawing(input("d0", { kind: "hline", p: 9 }));
+    });
+
+    it("resolve matches the Rust fixture", () => {
+      type Case = PositionBody & { name: string; candles: number[][]; expect: PositionOutcome };
+      const cases = fixture.cases as Case[];
+      expect(cases.length).toBeGreaterThanOrEqual(12);
+      for (const c of cases) {
+        const bars = { time: c.candles.map((r) => r[0]!), high: c.candles.map((r) => r[2]!), low: c.candles.map((r) => r[3]!) };
+        expect(mockResolve(c, bars), c.name).toEqual(c.expect);
+      }
+    });
+
+    it("resolves positions over its own candles", async () => {
+      const b = createMockBackend({ candles: 500 });
+      const page = await b.getCandles(id, "1h");
+      const i = 100;
+      const entry = { t: page.time[i]! + 1, p: page.close[i]! };
+      // A take just above the next bar's high and a far stop: the next bars decide.
+      const position: PositionBody = { side: "long", entry, stop: 1, take: page.high[i + 1]!, endT: page.time.at(-1)! };
+      const [r] = await b.getPositionOutcomes(id, "1h", [{ id: "p", position }]);
+      expect(r).toEqual({ id: "p", outcome: { status: "take", exitTime: page.time[i + 1], ambiguous: false, r: expect.any(Number) } });
+      const short: PositionBody = { ...position, endT: page.time[i]! + 2 };
+      expect((await b.getPositionOutcomes(id, "1h", [{ id: "q", position: short }]))[0]!.outcome.status).toBe("open");
+      await expect(b.getPositionOutcomes(id, "1h", [{ id: "z", position: { ...position, stop: entry.p } }])).rejects.toMatchObject({
+        message: expect.stringContaining("position z"),
+      });
     });
   });
 

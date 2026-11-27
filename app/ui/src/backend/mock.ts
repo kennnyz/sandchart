@@ -3,6 +3,8 @@ import {
   type CandleColumns,
   type Candles,
   type ConnectionState,
+  type Drawing,
+  type DrawingInput,
   type Instrument,
   type IndicatorInfo,
   type IndicatorInstance,
@@ -11,6 +13,8 @@ import {
   type InstrumentId,
   type LiveEvent,
   type ParamValue,
+  type PositionBody,
+  type PositionOutcome,
   type SeriesData,
   type SeriesSpec,
   type Problem,
@@ -346,6 +350,106 @@ function resolveParams(m: IndicatorMeta, saved: [string, ParamValue][]): P {
   return out;
 }
 
+// ---- Drawings ----------------------------------------------------------------------
+// The rules of `sandchart_core::drawing::validate`, so the mock rejects what Rust rejects.
+
+const MAX_DRAWINGS = 2000; // the store's MAX_DRAWINGS_PER_INSTRUMENT
+
+function checkInt(what: string, v: number): string | null {
+  return Number.isSafeInteger(v) ? null : `${what} ${v} is outside ±(2^53 - 1)`;
+}
+
+function checkPair(a: { t: number; p: number }, b: { t: number; p: number }): string | null {
+  return (
+    checkInt("point a time", a.t) ??
+    checkInt("point a price", a.p) ??
+    checkInt("point b time", b.t) ??
+    checkInt("point b price", b.p) ??
+    (a.t === b.t && a.p === b.p ? "the two points of a drawing must differ" : null)
+  );
+}
+
+export function mockValidatePosition(p: PositionBody): string | null {
+  const bad =
+    checkInt("position entry time", p.entry.t) ??
+    checkInt("position entry price", p.entry.p) ??
+    checkInt("position stop", p.stop) ??
+    checkInt("position take", p.take) ??
+    checkInt("position end time", p.endT);
+  if (bad) return bad;
+  if (p.side === "long" && !(p.stop < p.entry.p && p.entry.p < p.take)) return "a long position needs stop < entry < take";
+  if (p.side === "short" && !(p.take < p.entry.p && p.entry.p < p.stop)) return "a short position needs take < entry < stop";
+  if (p.endT <= p.entry.t) return "a position must end after its entry";
+  return null;
+}
+
+/** The error message Rust would give, or null when the drawing is valid. */
+export function mockValidateDrawing(d: DrawingInput): string | null {
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(d.id)) {
+    return "a drawing id must be 1 to 64 characters from A-Z, a-z, 0-9, _ and -";
+  }
+  const { color, width } = d.style;
+  if (!Number.isInteger(color) || color < 0 || color > 7) return `colour slot ${color} is not in 0..=7`;
+  if (!Number.isInteger(width) || width < 1 || width > 4) return `line width ${width} is not in 1..=4`;
+  const z = checkInt("z", d.z);
+  if (z) return z;
+  const b = d.body;
+  switch (b.kind) {
+    case "trend":
+    case "rect":
+      return checkPair(b.a, b.b);
+    case "hline":
+      return checkInt("price", b.p);
+    case "fib": {
+      const bad = checkPair(b.a, b.b);
+      if (bad) return bad;
+      if (b.levels.length < 1 || b.levels.length > 16) {
+        return `a Fibonacci drawing needs 1 to 16 levels, not ${b.levels.length}`;
+      }
+      const l = b.levels.find((x) => !(Number.isFinite(x) && Math.abs(x) <= 5));
+      return l === undefined ? null : `Fibonacci level ${l} is not a number in -5..=5`;
+    }
+    case "position":
+      return mockValidatePosition(b);
+    case "brush":
+      if (b.points.length < 2 || b.points.length > 500) {
+        return `a brush stroke needs 2 to 500 points, not ${b.points.length}`;
+      }
+      for (const a of b.points) {
+        const bad = checkInt("brush point time", a.t) ?? checkInt("brush point price", a.p);
+        if (bad) return bad;
+      }
+      return null;
+    case "note": {
+      const bytes = new TextEncoder().encode(b.text).length;
+      return (
+        checkInt("note time", b.t) ??
+        (bytes < 1 || bytes > 2000 ? `a note needs 1 to 2000 bytes of text, not ${bytes}` : null)
+      );
+    }
+  }
+}
+
+// TEST-ONLY CODE. The real outcome is `sandchart_core::position::resolve` in Rust; this copy
+// lets the browser mock answer, and mock.test.ts checks it against the same fixture as Rust
+// (crates/core/tests/fixtures/positions.json).
+/** Bars after the one containing `entry.t`, up to the one opening at `endT`; first hit decides. */
+export function mockResolve(p: PositionBody, bars: { time: number[]; high: number[]; low: number[] }): PositionOutcome {
+  for (let i = 0; i < bars.time.length; i++) {
+    const t = bars.time[i]!;
+    if (t <= p.entry.t) continue;
+    if (t > p.endT) break;
+    const high = bars.high[i]!;
+    const low = bars.low[i]!;
+    const long = p.side === "long";
+    const hitStop = long ? low <= p.stop : high >= p.stop;
+    const hitTake = long ? high >= p.take : low <= p.take;
+    if (hitStop) return { status: "stop", exitTime: t, ambiguous: hitTake, r: -1 };
+    if (hitTake) return { status: "take", exitTime: t, ambiguous: false, r: (p.take - p.entry.p) / (p.entry.p - p.stop) };
+  }
+  return { status: "open", exitTime: null, ambiguous: false, r: 0 };
+}
+
 /** Deterministic pseudo-random value in [0, 1) for candle number `n`. */
 function noise(n: number, salt: number): number {
   const x = Math.sin(n * 12.9898 + salt * 78.233) * 43758.5453;
@@ -400,6 +504,8 @@ export function createMockBackend(opts: MockOptions): MockBackend {
     colors: {},
     hidden: false,
   }));
+  const drawings = new Map<string, Drawing>();
+  const problem = (message: string) => ({ code: "other", message });
   const infos = (): IndicatorInfo[] => [
     ...MOCK_BUILTINS.map((b) => ({ meta: b.meta, builtin: true, repaints: false })),
     ...(echoInstalled ? [MOCK_ECHO] : []),
@@ -622,6 +728,55 @@ export function createMockBackend(opts: MockOptions): MockBackend {
       }
       onProgress({ kind: "installing" });
       await sleep(300);
+    },
+
+    async getDrawings(id) {
+      await delay();
+      return [...drawings.values()]
+        .filter((d) => d.instrument.source === id.source && d.instrument.symbol === id.symbol)
+        .sort((a, b) => a.z - b.z || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+        .map((d) => structuredClone(d));
+    },
+
+    async saveDrawing(d) {
+      await delay();
+      const instrument = SYMBOLS.find((i) => i.id.source === d.instrument.source && i.id.symbol === d.instrument.symbol);
+      if (!instrument) throw problem(`unknown instrument ${d.instrument.source}/${d.instrument.symbol}`);
+      const bad = mockValidateDrawing(d);
+      if (bad) throw problem(bad);
+      const same = (o: Drawing) => o.instrument.source === d.instrument.source && o.instrument.symbol === d.instrument.symbol;
+      const others = [...drawings.values()].filter((o) => same(o) && o.id !== d.id).length;
+      if (others >= MAX_DRAWINGS) throw problem(`an instrument can hold at most ${MAX_DRAWINGS} drawings; delete some first`);
+      const saved: Drawing = {
+        ...structuredClone(d),
+        priceScale: opts.priceScale ?? instrument.priceScale,
+        updatedAt: Date.now(),
+      };
+      drawings.set(d.id, saved);
+      return structuredClone(saved);
+    },
+
+    async deleteDrawing(id) {
+      await delay();
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw problem("a drawing id must be 1 to 64 characters from A-Z, a-z, 0-9, _ and -");
+      drawings.delete(id);
+    },
+
+    async getPositionOutcomes(id, tf, positions) {
+      await delayFor(id.symbol);
+      for (const p of positions) {
+        const bad = mockValidatePosition(p.position);
+        if (bad) throw problem(`position ${p.id}: ${bad}`);
+      }
+      const { step, timeOf, first } = timeline(tf);
+      return positions.map(({ id: drawingId, position }) => {
+        // Bars with entry.t < time <= endT, within the generated series.
+        const start = Math.max(first, Math.floor((position.entry.t - timeOf(0)) / step) + 1);
+        const end = Math.min(opts.candles, Math.floor((position.endT - timeOf(0)) / step) + 1, start + BAR_CAP);
+        const bars = column();
+        appendCandles(bars, timeOf, start, end);
+        return { id: drawingId, outcome: mockResolve(position, bars) };
+      });
     },
 
     async computeIndicators(id, tf, fromTime) {

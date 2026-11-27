@@ -170,6 +170,66 @@ export interface IndicatorResult {
   result: { ok: ComputedIndicator } | { err: string };
 }
 
+// Drawings (dto.rs, sandchart_core::drawing). Prices are ticks at `priceScale`; times are ms.
+/** A point anchored by time and price, never by bar index. */
+export interface Anchor {
+  t: number;
+  p: number;
+}
+export interface DrawingStyle {
+  /** Palette slot, 0..=7. */
+  color: number;
+  /** Line width in px, 1..=4. */
+  width: number;
+  dash: boolean;
+}
+export type Side = "long" | "short";
+/** Long: stop < entry.p < take. Short: take < entry.p < stop. `endT` is after `entry.t`. */
+export interface PositionBody {
+  side: Side;
+  entry: Anchor;
+  stop: number;
+  take: number;
+  endT: number;
+}
+export type DrawingBody =
+  | { kind: "trend"; a: Anchor; b: Anchor; extendLeft: boolean; extendRight: boolean }
+  | { kind: "hline"; p: number }
+  | { kind: "rect"; a: Anchor; b: Anchor; extendRight: boolean }
+  /** `levels`: 1..=16 ratios of the a-b range, each in -5..=5. */
+  | { kind: "fib"; a: Anchor; b: Anchor; levels: number[] }
+  | ({ kind: "position" } & PositionBody)
+  /** 2..=500 points. */
+  | { kind: "brush"; points: Anchor[] }
+  /** 1..=2000 bytes of UTF-8 text. */
+  | { kind: "note"; t: number; text: string };
+export type DrawingKind = DrawingBody["kind"];
+/** A drawing to save. `id` is made by the UI: 1 to 64 characters from A-Z, a-z, 0-9, _ and -. */
+export interface DrawingInput {
+  id: string;
+  instrument: InstrumentId;
+  body: DrawingBody;
+  style: DrawingStyle;
+  locked: boolean;
+  hidden: boolean;
+  /** Paint order, lowest first. */
+  z: number;
+}
+/** A stored drawing; the engine sets `priceScale` (the instrument's) and `updatedAt` on save. */
+export interface Drawing extends DrawingInput {
+  priceScale: number;
+  updatedAt: number;
+}
+/** A bar that touched both stop and take counts as a stop and is `ambiguous`. */
+export interface PositionOutcome {
+  status: "open" | "take" | "stop";
+  /** Open time of the bar that closed the position. */
+  exitTime: number | null;
+  ambiguous: boolean;
+  /** Reward over risk on a take, -1 on a stop, 0 while open. */
+  r: number;
+}
+
 // Updates (dto.rs).
 /** Why this copy cannot update itself; the UI links to the release page instead. */
 export type InstallBlocker = "not_appimage" | "translocated";
@@ -219,6 +279,18 @@ export interface Backend {
   setChartIndicators(items: IndicatorInstance[]): Promise<void>;
   /** Every visible chart indicator over all cached bars, cut to bars with `time >= fromTime`. */
   computeIndicators(id: InstrumentId, tf: TimeframeCode, fromTime: number): Promise<IndicatorResult[]>;
+  /** The instrument's drawings in paint order (z, then id), in its current price scale. */
+  getDrawings(id: InstrumentId): Promise<Drawing[]>;
+  /** Validates and stores a drawing (insert or replace by id); resolves to it as stored. */
+  saveDrawing(d: DrawingInput): Promise<Drawing>;
+  /** Removes a drawing; an unknown id is not an error. */
+  deleteDrawing(id: string): Promise<void>;
+  /** Outcome of each position over the cached candles of `tf`, in the order given. */
+  getPositionOutcomes(
+    id: InstrumentId,
+    tf: TimeframeCode,
+    positions: { id: string; position: PositionBody }[],
+  ): Promise<{ id: string; outcome: PositionOutcome }[]>;
   /** A newer version than this one, or null. Also remembers it for `installUpdate`. */
   checkUpdate(): Promise<UpdateInfo | null>;
   /**

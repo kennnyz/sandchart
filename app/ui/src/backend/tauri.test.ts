@@ -88,4 +88,34 @@ describe("tauri backend", () => {
     await tauriBackend.installUpdate((p) => got.push(p));
     expect(got).toEqual([{ kind: "started", total: 10 }, { kind: "installing" }]);
   });
+  it("sends drawing commands with the Rust argument names", async () => {
+    const seen: [string, unknown][] = [];
+    const core = await import("@tauri-apps/api/core");
+    vi.mocked(core.invoke).mockImplementation(((cmd: string, args: unknown) => {
+      seen.push([cmd, args]);
+      return Promise.resolve([]);
+    }) as never);
+    const { tauriBackend } = await import("./tauri");
+    const id = { source: "binance", symbol: "BTCUSDT" };
+    const position = { side: "long" as const, entry: { t: 1, p: 100 }, stop: 90, take: 120, endT: 2 };
+    const drawing = {
+      id: "d",
+      instrument: id,
+      body: { kind: "hline" as const, p: 1 },
+      style: { color: 0, width: 1, dash: false },
+      locked: false,
+      hidden: false,
+      z: 0,
+    };
+    await tauriBackend.getDrawings(id);
+    await tauriBackend.saveDrawing(drawing);
+    await tauriBackend.deleteDrawing("d");
+    await tauriBackend.getPositionOutcomes(id, "1h", [{ id: "p", position }]);
+    expect(seen).toEqual([
+      ["get_drawings", { source: "binance", symbol: "BTCUSDT" }],
+      ["save_drawing", { drawing }],
+      ["delete_drawing", { id: "d" }],
+      ["get_position_outcomes", { source: "binance", symbol: "BTCUSDT", tf: "1h", positions: [{ id: "p", position }] }],
+    ]);
+  });
 });
