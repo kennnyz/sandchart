@@ -23,10 +23,12 @@ This crate is a Sandchart indicator: a WebAssembly component that the app runs i
   where there is no value (the chart draws a gap); never `0.0` as a stand-in.
 - Do not repaint: the value at bar `i` may depend on bars `0..=i` only. Do not look ahead and do
   not normalise by the maximum of the whole window.
-- Ids: the module id is `local.<name>` (lower-case letters, digits, `-`, `_`, one dot). Series ids
-  are unique. `color` is a palette slot, 0 to 7. A `markers` series goes on `Pane::Price`. A
+- Ids: the module id is `local.<name>` (lower-case letters, digits, `-`, `_`, one dot). Param and
+  series ids are unique and use only lower-case letters, digits, `-` and `_`; ids and labels are at
+  most 64 bytes, at most 64 params and 64 series. `color` is a palette slot, 0 to 7. A `markers` series goes on `Pane::Price`. A
   `Band(a, b)` series names two line series of this module on the same pane and carries no data.
-- `version` is semver. Every param `default` must match its kind and lie in its range.
+- `version` is semver. Every param `default` must match its kind and lie in its range. Float
+  bounds are finite (no infinity), int bounds within ±(2^53 - 1).
 - Budget: `DEFAULT_FUEL` per call (about 600 million instructions, shown as a percentage by
   `test`). A good indicator uses a few percent on 100 000 bars. Memory limit 256 MiB.
 - Use `ta::{sma, ema, rma, stdev, highest, lowest, source}` and `ta::SOURCES` from the SDK before
