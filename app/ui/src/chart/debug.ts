@@ -3,8 +3,14 @@
  * inside Tauri `chartDebug()` is always null and the chart records nothing.
  */
 export interface ChartDebug {
-  /** Duration of each `Chart.render` body in ms (cleared when it reaches 10 000). */
+  /** Duration of each `Chart.render` body (one or both layers) in ms (cleared when it reaches 10 000). */
   drawMs: number[];
+  /** Duration of each base layer draw and of each overlay draw in ms (same clearing). */
+  baseMs: number[];
+  overlayMs: number[];
+  /** Base and overlay layer draws since the debug hook was enabled. */
+  baseDraws: number;
+  overlayDraws: number;
   /** Price axis width and the widest price label of the last frame, in CSS px. */
   axisWidth: number;
   widestLabel: number;
@@ -22,7 +28,20 @@ export interface ChartDebug {
 let debug: ChartDebug | null = null;
 
 export function enableChartDebug(): void {
-  debug = { drawMs: [], axisWidth: 0, widestLabel: 0, widestText: "", canvasWidth: 0, plotWidth: 0, historyLabel: null, panes: 0 };
+  debug = {
+    drawMs: [],
+    baseMs: [],
+    overlayMs: [],
+    baseDraws: 0,
+    overlayDraws: 0,
+    axisWidth: 0,
+    widestLabel: 0,
+    widestText: "",
+    canvasWidth: 0,
+    plotWidth: 0,
+    historyLabel: null,
+    panes: 0,
+  };
   (window as unknown as { __sandchartDebug: ChartDebug }).__sandchartDebug = debug;
 }
 

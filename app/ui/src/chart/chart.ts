@@ -1,7 +1,7 @@
 import type { CandleColumns, Candles, Instrument, LiveCandle, TimeframeCode } from "../backend/types";
 import { chartDebug } from "./debug";
 import { alignOffset, hasOwnPane, layoutPanes, overlayRange, paneRange, seriesValues, type IndicatorLayer } from "./indicators";
-import { draw, plotSize, priceAxisWidth, RenderBuffers, type Crosshair, type Series } from "./render";
+import { draw, drawOverlay, plotSize, priceAxisWidth, RenderBuffers, type Crosshair, type FrameInput, type Series } from "./render";
 import type { IndicatorFrame } from "./renderIndicators";
 import { autoscale, PriceScale, type PriceScaleMode } from "./scale";
 import { AXIS_FONT, PRICE_AXIS_WIDTH, type ChartTheme } from "./theme";
@@ -68,12 +68,17 @@ interface GestureEventLike extends UIEvent {
 type Drag = { kind: "pan" | "price"; pointerId: number; lastX: number; lastY: number };
 
 /**
- * Candlestick chart on one Canvas 2D: main pane, price axis on the right, time axis
- * at the bottom. Draws on requestAnimationFrame only when something changed.
+ * Candlestick chart on two stacked Canvas 2D layers: main pane, price axis on the right,
+ * time axis at the bottom. The opaque base layer holds everything that depends on data,
+ * view and theme; the transparent overlay above it holds the crosshair, so a mouse move
+ * redraws only the overlay. Draws on requestAnimationFrame only when something changed.
  */
 export class Chart {
+  /** Base layer; it also takes every pointer event (the overlay lets them through). */
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
+  private readonly overlay: HTMLCanvasElement;
+  private readonly octx: CanvasRenderingContext2D;
   private readonly buffers = new RenderBuffers();
   private readonly resizeObserver: ResizeObserver;
   private series = emptySeries(0);
@@ -92,6 +97,11 @@ export class Chart {
   private axisWidth = PRICE_AXIS_WIDTH;
   private dpr = 1;
   private frame = 0;
+  private baseDirty = false;
+  private overlayDirty = false;
+  /** Input of the last base frame; the overlay draws against it. */
+  private lastFrame: FrameInput | null = null;
+  private readonly crosshair: Crosshair = { x: 0, y: 0, index: null };
   private mouse: { x: number; y: number } | null = null;
   private drag: Drag | null = null;
   private crosshairIndex: number | null = null;
@@ -119,6 +129,12 @@ export class Chart {
     const ctx = this.canvas.getContext("2d", { alpha: false });
     if (!ctx) throw new Error("Canvas 2D is not available");
     this.ctx = ctx;
+    this.overlay = document.createElement("canvas");
+    this.overlay.style.cssText = "position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none";
+    host.appendChild(this.overlay);
+    const octx = this.overlay.getContext("2d");
+    if (!octx) throw new Error("Canvas 2D is not available");
+    this.octx = octx;
 
     this.canvas.addEventListener("pointerdown", this.onPointerDown);
     this.canvas.addEventListener("pointermove", this.onPointerMove);
@@ -345,6 +361,8 @@ export class Chart {
       this.canvas.removeEventListener("gestureend", this.onGestureEnd);
     }
     this.canvas.remove();
+    this.overlay.remove();
+    this.lastFrame = null;
     this.needOlderCb = null;
     this.crosshairCb = null;
   }
@@ -359,7 +377,15 @@ export class Chart {
     this.series = s;
   }
 
+  /** Redraws both layers on the next frame. */
   private invalidate(): void {
+    this.baseDirty = true;
+    this.invalidateOverlay();
+  }
+
+  /** Redraws only the overlay on the next frame (unless the base is dirty too). */
+  private invalidateOverlay(): void {
+    this.overlayDirty = true;
     if (this.frame !== 0 || this.destroyed) return;
     this.frame = requestAnimationFrame(this.render);
   }
@@ -371,6 +397,8 @@ export class Chart {
     this.dpr = window.devicePixelRatio || 1;
     this.canvas.width = Math.max(1, Math.round(rect.width * this.dpr));
     this.canvas.height = Math.max(1, Math.round(rect.height * this.dpr));
+    this.overlay.width = this.canvas.width;
+    this.overlay.height = this.canvas.height;
     this.afterViewChange();
   }
 
@@ -389,7 +417,7 @@ export class Chart {
     else if (v.rightIndex > hi) this.view = { barWidth: v.barWidth, rightIndex: hi };
   }
 
-  /** Call after any change of data, viewport or mouse position. */
+  /** Call after any change of data or viewport. */
   private afterViewChange(): void {
     this.clampView();
     this.updateCrosshair();
@@ -486,24 +514,40 @@ export class Chart {
       return;
     }
     const started = performance.now();
-    const { plotH } = this.plot();
+    const debug = chartDebug();
+    if (this.baseDirty) {
+      this.baseDirty = false;
+      this.renderBase();
+      if (debug) {
+        if (debug.baseMs.length >= 10_000) debug.baseMs.length = 0;
+        debug.baseMs.push(performance.now() - started);
+        debug.baseDraws++;
+      }
+    }
+    if (this.overlayDirty) {
+      this.overlayDirty = false;
+      const overlayStarted = performance.now();
+      this.renderOverlay();
+      if (debug) {
+        if (debug.overlayMs.length >= 10_000) debug.overlayMs.length = 0;
+        debug.overlayMs.push(performance.now() - overlayStarted);
+        debug.overlayDraws++;
+      }
+    }
+    if (debug) {
+      if (debug.drawMs.length >= 10_000) debug.drawMs.length = 0;
+      debug.drawMs.push(performance.now() - started);
+    }
+  };
+
+  private renderBase(): void {
     const priceH = this.priceH();
     const decimals = this.instrument?.priceScale ?? 0;
     const s = this.series;
     const lastClose = s.count > 0 ? s.close[s.count - 1]! : NaN;
     let scale = this.priceScale(priceH);
     this.updatePanes();
-    const m = this.mouse;
-    const axis = priceAxisWidth(
-      this.ctx,
-      this.buffers,
-      this.dpr,
-      scale,
-      decimals,
-      lastClose,
-      m && m.y < priceH ? m.y : null,
-      this.ind.panes,
-    );
+    const axis = priceAxisWidth(this.ctx, this.buffers, this.dpr, scale, decimals, lastClose, this.ind.panes);
     // Grow-only within one series, so the plot does not jitter as labels change length.
     if (axis.width > this.axisWidth) {
       this.axisWidth = axis.width;
@@ -514,33 +558,27 @@ export class Chart {
       this.updatePanes();
     }
     const { plotW } = this.plot();
-    const inPlot = m !== null && m.x >= 0 && m.x < plotW && m.y >= 0 && m.y < plotH;
-    const crosshair: Crosshair | null = inPlot ? { x: m.x, y: m.y, index: this.crosshairIndex } : null;
     const historyStart =
       this.atHistoryStart && s.count > 0 && this.historyLabel ? this.historyLabel(s.time[0]!) : null;
-    draw(
-      {
-        ctx: this.ctx,
-        dpr: this.dpr,
-        width: this.width,
-        height: this.height,
-        axisWidth: this.axisWidth,
-        series: s,
-        view: this.view,
-        scale,
-        priceDecimals: decimals,
-        tf: this.tf,
-        crosshair,
-        historyStart,
-        theme: this.theme,
-        indicators: this.ind,
-      },
-      this.buffers,
-    );
+    const f: FrameInput = {
+      ctx: this.ctx,
+      dpr: this.dpr,
+      width: this.width,
+      height: this.height,
+      axisWidth: this.axisWidth,
+      series: s,
+      view: this.view,
+      scale,
+      priceDecimals: decimals,
+      tf: this.tf,
+      historyStart,
+      theme: this.theme,
+      indicators: this.ind,
+    };
+    draw(f, this.buffers);
+    this.lastFrame = f;
     const debug = chartDebug();
     if (debug) {
-      if (debug.drawMs.length >= 10_000) debug.drawMs.length = 0;
-      debug.drawMs.push(performance.now() - started);
       debug.axisWidth = this.axisWidth;
       debug.widestLabel = axis.widest;
       debug.widestText = axis.widestText;
@@ -549,7 +587,22 @@ export class Chart {
       debug.historyLabel = historyStart ? historyStart.join("|") : null;
       debug.panes = this.ind.panes.length;
     }
-  };
+  }
+
+  private renderOverlay(): void {
+    const f = this.lastFrame;
+    if (!f) return;
+    const { plotW, plotH } = this.plot();
+    const m = this.mouse;
+    const inPlot = m !== null && m.x >= 0 && m.x < plotW && m.y >= 0 && m.y < plotH;
+    const ch = this.crosshair;
+    if (inPlot) {
+      ch.x = m.x;
+      ch.y = m.y;
+      ch.index = this.crosshairIndex;
+    }
+    drawOverlay(f, this.octx, inPlot ? ch : null, this.buffers);
+  }
 
   private local(e: { clientX: number; clientY: number }): { x: number; y: number } {
     const r = this.canvas.getBoundingClientRect();
@@ -583,10 +636,13 @@ export class Chart {
       } else {
         this.stretchPrice(dy, priceH);
       }
-    } else {
-      this.canvas.style.cursor = p.x >= plotW && p.y < priceH ? "ns-resize" : "crosshair";
+      this.afterViewChange();
+      return;
     }
-    this.afterViewChange();
+    this.canvas.style.cursor = p.x >= plotW && p.y < priceH ? "ns-resize" : "crosshair";
+    // Only the mouse moved: the base layer stays as it is.
+    this.updateCrosshair();
+    this.invalidateOverlay();
   };
 
   private readonly onPointerUp = (e: PointerEvent): void => {
@@ -600,7 +656,8 @@ export class Chart {
   private readonly onPointerLeave = (): void => {
     if (this.drag) return;
     this.mouse = null;
-    this.afterViewChange();
+    this.updateCrosshair();
+    this.invalidateOverlay();
   };
 
   private readonly onWheel = (e: WheelEvent): void => {
