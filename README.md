@@ -7,9 +7,9 @@
 ![Platforms: macOS, Windows, Linux](https://img.shields.io/badge/platforms-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)
 ![Status: 0.1, early](https://img.shields.io/badge/status-0.1%20early-orange)
 
-![Sandchart showing a BTCUSDT 1h chart with the watchlist](docs/screenshot.png)
+![Sandchart showing a live BTCUSDT 1h chart from Binance](docs/screenshot.png)
 
-<sub>The screenshot uses sample data from the built-in mock, not real market prices.</sub>
+<sub>Live Binance data, 27 November 2026. The interface is set to Russian; English is one click away.</sub>
 
 ## Why Sandchart
 
