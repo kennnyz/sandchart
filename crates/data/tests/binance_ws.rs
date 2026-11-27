@@ -182,3 +182,26 @@ async fn drop_closes_socket() {
         .expect("server did not see the connection end")
         .unwrap();
 }
+
+#[tokio::test]
+async fn silent_connection_is_dropped_and_reconnected() {
+    use futures::SinkExt;
+    // Connection 0 sends one kline and then goes silent without closing.
+    let server = serve(|n, mut ws| async move {
+        ws.send(Message::text(kline(
+            60_000 * (n as i64 + 1),
+            "101.00",
+            false,
+        )))
+        .await
+        .unwrap();
+        ws
+    })
+    .await;
+    let p = provider(server.url.clone()).with_idle_timeout(Duration::from_millis(100));
+    let mut s = p.live(&instrument(), Timeframe::M1);
+
+    assert_eq!(next(&mut s).await.unwrap().candle.open_time, 60_000);
+    assert!(matches!(next(&mut s).await, Err(ProviderError::Network(_))));
+    assert_eq!(next(&mut s).await.unwrap().candle.open_time, 120_000);
+}

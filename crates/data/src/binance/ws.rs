@@ -18,6 +18,8 @@ use crate::{LiveCandle, ProviderError};
 use super::{Binance, wire::WsEvent};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Binance pings about every 20 s; silence for 3x that means a dead link.
+pub const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -54,6 +56,7 @@ struct State {
     url: Url,
     inst: Instrument,
     backoff: Backoff,
+    idle: Duration,
     socket: Option<Socket>,
     /// Wait this long before the next connect attempt.
     delay: Option<Duration>,
@@ -89,6 +92,7 @@ impl Binance {
             url,
             inst: inst.clone(),
             backoff: self.backoff,
+            idle: self.idle,
             socket: None,
             delay: None,
         };
@@ -116,7 +120,15 @@ async fn next_item(mut st: State) -> Option<(Result<LiveCandle, ProviderError>, 
             }
             continue;
         };
-        match socket.next().await {
+        // Any frame (kline, ping, other text) counts as activity.
+        let read = match time::timeout(st.idle, socket.next()).await {
+            Ok(read) => read,
+            Err(_) => {
+                let err = st.dropped("idle timeout");
+                return Some((Err(err), st));
+            }
+        };
+        match read {
             Some(Ok(Message::Text(text))) => match WsEvent::parse(text.as_str(), &st.inst) {
                 Ok(Some(live)) => {
                     st.backoff.reset();

@@ -25,6 +25,7 @@ pub struct Binance {
     ws_base: Url,
     http: reqwest::Client,
     backoff: ws::Backoff,
+    idle: Duration,
 }
 
 impl Binance {
@@ -39,12 +40,20 @@ impl Binance {
             ws_base,
             http,
             backoff: ws::Backoff::new(RECONNECT_INITIAL, RECONNECT_MAX),
+            idle: ws::IDLE_TIMEOUT,
         }
     }
 
     /// Override the live-stream reconnect delays (default 1 s up to 30 s).
     pub fn with_reconnect_backoff(mut self, initial: Duration, max: Duration) -> Binance {
         self.backoff = ws::Backoff::new(initial, max);
+        self
+    }
+
+    /// Override how long the live stream may stay silent before it is
+    /// treated as dropped (default 60 s).
+    pub fn with_idle_timeout(mut self, idle: Duration) -> Binance {
+        self.idle = idle;
         self
     }
 
