@@ -392,6 +392,10 @@ input:focus-visible {
   padding: 0 8px 0 14px;
   font-weight: 600;
 }
+.wl-actions {
+  display: flex;
+  gap: 2px;
+}
 .wl-columns,
 .wl-row {
   display: flex;

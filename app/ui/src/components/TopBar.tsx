@@ -1,4 +1,4 @@
-import { ChevronDown, Moon, Sun } from "lucide-react";
+import { ChevronDown, Moon, PanelRightOpen, Sun } from "lucide-react";
 import type { ConnectionState, InstrumentId, TimeframeCode } from "../backend/types";
 import { getLanguage, setLanguage, t } from "../i18n";
 import { shortcutLabel, sourceName } from "../labels";
@@ -14,6 +14,9 @@ export interface TopBarProps {
   theme: "dark" | "light";
   onTheme: (t: "dark" | "light") => void;
   onSearch: () => void;
+  /** When the watchlist is hidden, a button here brings it back. */
+  watchlistHidden: boolean;
+  onShowWatchlist: () => void;
 }
 
 /** The brand mark from assets/brand (viewBox 0 0 342 350), filled with `fg`. */
@@ -79,6 +82,16 @@ export function TopBar(p: TopBarProps) {
       >
         {p.theme === "dark" ? <Moon size={16} /> : <Sun size={16} />}
       </button>
+      {p.watchlistHidden && (
+        <button
+          className="icon-button"
+          data-testid="watchlist-show"
+          title={t("watchlist.show")}
+          onClick={p.onShowWatchlist}
+        >
+          <PanelRightOpen size={16} />
+        </button>
+      )}
     </header>
   );
 }

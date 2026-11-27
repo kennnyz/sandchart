@@ -1,9 +1,8 @@
-import { Plus, X } from "lucide-react";
+import { PanelRightClose, Plus, X } from "lucide-react";
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 import type { Backend, DayChange, InstrumentId } from "../backend/types";
 import { formatBp, formatPrice } from "../chart/format";
 import { t } from "../i18n";
-import { shortcutLabel } from "../labels";
 
 const ROW_HEIGHT = 36;
 /** Pointer travel (px) that turns a press into a drag instead of a click. */
@@ -19,6 +18,8 @@ export interface WatchlistProps {
   onOpen: (id: InstrumentId) => void;
   onChange: (ids: InstrumentId[]) => void;
   onAdd: () => void;
+  /** Hides the panel; the top bar's watchlist button brings it back. */
+  onHide: () => void;
 }
 
 const keyOf = (id: InstrumentId) => `${id.source}/${id.symbol}`;
@@ -26,7 +27,7 @@ const keyOf = (id: InstrumentId) => `${id.source}/${id.symbol}`;
 type Drag = { pointerId: number; from: number; to: number; startY: number; moved: boolean };
 
 /** Pairs with their last price and 24 h change; click opens, drag reorders, × removes. */
-export function Watchlist({ backend, ids, savedVersion, current, onOpen, onChange, onAdd }: WatchlistProps) {
+export function Watchlist({ backend, ids, savedVersion, current, onOpen, onChange, onAdd, onHide }: WatchlistProps) {
   const [quotes, setQuotes] = useState<Map<string, DayChange>>(new Map());
   const [scales, setScales] = useState<Map<string, number>>(new Map());
   const [drag, setDrag] = useState<Drag | null>(null);
@@ -116,9 +117,14 @@ export function Watchlist({ backend, ids, savedVersion, current, onOpen, onChang
     <aside className="watchlist" data-testid="watchlist">
       <div className="wl-header">
         <span>{t("watchlist.title")}</span>
-        <button className="icon-button" title={t("watchlist.add")} onClick={onAdd}>
-          <Plus size={16} />
-        </button>
+        <div className="wl-actions">
+          <button className="icon-button" data-testid="watchlist-add" title={t("watchlist.add")} onClick={onAdd}>
+            <Plus size={16} />
+          </button>
+          <button className="icon-button" data-testid="watchlist-hide" title={t("watchlist.hide")} onClick={onHide}>
+            <PanelRightClose size={16} />
+          </button>
+        </div>
       </div>
       <div className="wl-columns">
         <span className="wl-sym">{t("watchlist.col.symbol")}</span>
@@ -132,7 +138,6 @@ export function Watchlist({ backend, ids, savedVersion, current, onOpen, onChang
             <div className="body">{t("watchlist.empty.body")}</div>
             <button className="primary-button" onClick={onAdd}>
               {t("watchlist.empty.button")}
-              <kbd>{shortcutLabel("K")}</kbd>
             </button>
           </div>
         )}
@@ -174,7 +179,7 @@ export function Watchlist({ backend, ids, savedVersion, current, onOpen, onChang
           );
         })}
       </div>
-      <div className="wl-footer">{t("watchlist.hint", { shortcut: shortcutLabel("K") })}</div>
+      <div className="wl-footer">{t("watchlist.hint")}</div>
     </aside>
   );
 }

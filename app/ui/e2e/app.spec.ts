@@ -248,3 +248,41 @@ test("screens_match_design", async ({ page }, info) => {
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await shot(page, info, "main-light");
 });
+
+test("watchlist_add_button_adds_with_enter_and_click", async ({ page }) => {
+  await openApp(page);
+  await expect(legend(page)).toContainText("BTCUSDT");
+
+  await page.getByTestId("watchlist-add").click();
+  await page.getByTestId("search-input").fill("doge");
+  await expect(page.getByTestId("search-row").first()).toContainText("DOGE");
+  await page.getByTestId("search-input").press("Enter");
+  await expect.poll(() => watchlistOrder(page)).toContain("DOGEUSDT");
+  // Adding does not switch the chart.
+  await expect(legend(page)).toContainText("BTCUSDT");
+
+  await page.getByTestId("watchlist-add").click();
+  await page.getByTestId("search-input").fill("ada");
+  await page.getByTestId("search-row").first().click();
+  await expect.poll(() => watchlistOrder(page)).toContain("ADAUSDT");
+  await expect(legend(page)).toContainText("BTCUSDT");
+});
+
+test("watchlist_can_be_hidden_and_shown", async ({ page }) => {
+  await openApp(page);
+  const chartWidth = () => page.getByTestId("chart").evaluate((el) => el.getBoundingClientRect().width);
+  const before = await chartWidth();
+
+  await page.getByTestId("watchlist-hide").click();
+  await expect(page.getByTestId("watchlist")).toBeHidden();
+  await expect.poll(chartWidth).toBeGreaterThan(before + 200);
+
+  await page.reload();
+  await expect(legend(page)).toHaveAttribute("data-time", /^\d+$/);
+  await expect(page.getByTestId("watchlist")).toBeHidden();
+
+  await page.getByTestId("watchlist-show").click();
+  await expect(page.getByTestId("watchlist")).toBeVisible();
+  await page.reload();
+  await expect(page.getByTestId("watchlist")).toBeVisible();
+});

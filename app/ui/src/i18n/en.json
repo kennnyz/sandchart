@@ -29,10 +29,10 @@
   "watchlist.col.symbol": "Symbol",
   "watchlist.col.last": "Last",
   "watchlist.col.change": "24h",
-  "watchlist.hint": "Drag to reorder · {shortcut} to add a pair",
+  "watchlist.hint": "Drag to reorder · + to add a pair",
   "watchlist.remove": "Remove {symbol}",
   "watchlist.empty.title": "No pairs yet",
-  "watchlist.empty.body": "Find a pair and press ⇧↵ to keep it here.",
+  "watchlist.empty.body": "Search for a pair and press ↵ to keep it here. Your list stays on this computer.",
   "watchlist.empty.button": "Add a pair",
   "search.label": "Symbol search",
   "search.placeholder": "Search pairs, e.g. BTCUSDT",
@@ -52,5 +52,8 @@
   "loading.title": "Loading {symbol} · {tf}",
   "loading.detail": "1 000 candles from {source}",
   "history.start": "Start of history",
-  "history.first": "First candle {date}"
+  "history.first": "First candle {date}",
+  "watchlist.hide": "Hide the watchlist",
+  "watchlist.show": "Show the watchlist",
+  "search.footerAdd": "↑↓ navigate · ↵ add to watchlist · ⇧↵ open"
 }

@@ -5,7 +5,7 @@ import { dark, light } from "./chart/theme";
 import { ChartView, Loading } from "./components/ChartView";
 import { StatusBar } from "./components/StatusBar";
 import { tfLabel } from "./components/TimeframePicker";
-import { SymbolSearch } from "./components/SymbolSearch";
+import { SymbolSearch, type SearchMode } from "./components/SymbolSearch";
 import { TopBar } from "./components/TopBar";
 import { Watchlist } from "./components/Watchlist";
 import { useLanguage } from "./i18n";
@@ -24,6 +24,17 @@ function storedTheme(): ThemeName {
   }
 }
 
+const WATCHLIST_VISIBLE_KEY = "sandchart.watchlist.visible";
+
+/** The watchlist panel is shown unless the user hid it. */
+function storedWatchlistVisible(): boolean {
+  try {
+    return localStorage.getItem(WATCHLIST_VISIBLE_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
 const sameId = (a: InstrumentId, b: InstrumentId) => a.source === b.source && a.symbol === b.symbol;
 
 export function App() {
@@ -35,13 +46,24 @@ export function App() {
   const [connection, setConnection] = useState<ConnectionState>("connecting");
   const [watchlist, setWatchlistState] = useState<InstrumentId[]>([]);
   const [savedVersion, setSavedVersion] = useState(0);
-  const [searchOpen, setSearchOpen] = useState(false);
+  /** The open search dialog and what ↵ does in it; null when closed. */
+  const [searchMode, setSearchMode] = useState<SearchMode | null>(null);
+  const [watchlistVisible, setWatchlistVisible] = useState(storedWatchlistVisible);
   /** Waiting for the instrument list to open the default pair (first run). */
   const [waitingDefault, setWaitingDefault] = useState(true);
 
   useLayoutEffect(() => {
     document.documentElement.dataset.theme = themeName;
   }, [themeName]);
+
+  const showWatchlist = (visible: boolean) => {
+    setWatchlistVisible(visible);
+    try {
+      localStorage.setItem(WATCHLIST_VISIBLE_KEY, visible ? "1" : "0");
+    } catch {
+      // No storage: the choice lasts for this session only.
+    }
+  };
 
   const changeTheme = (name: ThemeName) => {
     setThemeName(name);
@@ -130,7 +152,7 @@ export function App() {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
-        setSearchOpen(true);
+        setSearchMode("open");
       }
     };
     window.addEventListener("keydown", onKey);
@@ -149,7 +171,9 @@ export function App() {
         connection={connection}
         theme={themeName}
         onTheme={changeTheme}
-        onSearch={() => setSearchOpen(true)}
+        onSearch={() => setSearchMode("open")}
+        watchlistHidden={!watchlistVisible}
+        onShowWatchlist={() => showWatchlist(true)}
       />
       <div className="main">
         <div className="chart-col">
@@ -167,6 +191,7 @@ export function App() {
             />
           )}
         </div>
+        {watchlistVisible && (
         <Watchlist
           backend={backend}
           ids={watchlist}
@@ -174,16 +199,19 @@ export function App() {
           current={current}
           onOpen={setCurrent}
           onChange={saveWatchlist}
-          onAdd={() => setSearchOpen(true)}
+          onAdd={() => setSearchMode("add")}
+          onHide={() => showWatchlist(false)}
         />
+        )}
       </div>
       <StatusBar source={sourceName(current?.source ?? "binance")} connection={connection} />
-      {searchOpen && (
+      {searchMode && (
         <SymbolSearch
           backend={backend}
+          mode={searchMode}
           onOpen={(i) => setCurrent(i.id)}
           onAdd={addToWatchlist}
-          onClose={() => setSearchOpen(false)}
+          onClose={() => setSearchMode(null)}
         />
       )}
     </div>

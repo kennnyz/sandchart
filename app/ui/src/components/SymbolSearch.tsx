@@ -4,8 +4,12 @@ import type { Backend, Instrument } from "../backend/types";
 import { t } from "../i18n";
 import { sourceName } from "../labels";
 
+export type SearchMode = "open" | "add";
+
 export interface SymbolSearchProps {
   backend: Backend;
+  /** What ↵ and a click do; ⇧ does the other one. "add" when opened from the watchlist. */
+  mode: SearchMode;
   onOpen: (i: Instrument) => void;
   onAdd: (i: Instrument) => void;
   onClose: () => void;
@@ -25,15 +29,19 @@ function Highlight({ text, query }: { text: string; query: string }) {
   );
 }
 
-/** Search dialog (⌘K or the symbol button): ↑↓ select, ↵ open, ⇧↵ add to the watchlist. */
-export function SymbolSearch({ backend, onOpen, onAdd, onClose }: SymbolSearchProps) {
+/**
+ * Search dialog. From ⌘K or the symbol button ↵ opens the pair and ⇧↵ adds it to the
+ * watchlist; from the watchlist's add button the two are swapped.
+ */
+export function SymbolSearch({ backend, mode, onOpen, onAdd, onClose }: SymbolSearchProps) {
+  const kindFor = (shift: boolean): SearchMode => (shift ? (mode === "add" ? "open" : "add") : mode);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<{ query: string; items: Instrument[] } | null>(null);
   const [selected, setSelected] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   // Enter pressed before the results for the typed text arrived: act when they do.
-  const pending = useRef<"open" | "add" | null>(null);
+  const pending = useRef<SearchMode | null>(null);
 
   useEffect(() => inputRef.current?.focus(), []);
 
@@ -54,7 +62,7 @@ export function SymbolSearch({ backend, onOpen, onAdd, onClose }: SymbolSearchPr
 
   const current = results?.query === query ? results.items : null;
 
-  const act = (kind: "open" | "add", item: Instrument | undefined) => {
+  const act = (kind: SearchMode, item: Instrument | undefined) => {
     if (!item) return;
     if (kind === "open") onOpen(item);
     else onAdd(item);
@@ -86,7 +94,7 @@ export function SymbolSearch({ backend, onOpen, onAdd, onClose }: SymbolSearchPr
       if (n) setSelected((s) => (s - 1 + n) % n);
     } else if (e.key === "Enter") {
       e.preventDefault();
-      const kind = e.shiftKey ? "add" : "open";
+      const kind = kindFor(e.shiftKey);
       if (current) act(kind, current[selected]);
       else pending.current = kind;
     }
@@ -120,7 +128,7 @@ export function SymbolSearch({ backend, onOpen, onAdd, onClose }: SymbolSearchPr
               role="option"
               aria-selected={i === selected}
               onPointerMove={() => setSelected(i)}
-              onClick={(e) => act(e.shiftKey ? "add" : "open", it)}
+              onClick={(e) => act(kindFor(e.shiftKey), it)}
             >
               <span className="sym mono">
                 <Highlight text={it.id.symbol} query={query} />
@@ -135,7 +143,7 @@ export function SymbolSearch({ backend, onOpen, onAdd, onClose }: SymbolSearchPr
           {current && current.length === 0 && <div className="search-none">{t("search.none", { q: query })}</div>}
         </div>
         <div className="search-footer mono">
-          <span>{t("search.footer")}</span>
+          <span>{t(mode === "add" ? "search.footerAdd" : "search.footer")}</span>
           <span>{t("search.count", { n: items.length })}</span>
         </div>
       </div>

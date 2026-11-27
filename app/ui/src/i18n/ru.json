@@ -29,10 +29,10 @@
   "watchlist.col.symbol": "Пара",
   "watchlist.col.last": "Цена",
   "watchlist.col.change": "24ч",
-  "watchlist.hint": "Перетащите для порядка · {shortcut} — добавить пару",
+  "watchlist.hint": "Перетащите для порядка · + добавить пару",
   "watchlist.remove": "Убрать {symbol}",
   "watchlist.empty.title": "Пока нет пар",
-  "watchlist.empty.body": "Найдите пару и нажмите ⇧↵, чтобы сохранить её здесь.",
+  "watchlist.empty.body": "Найдите пару и нажмите ↵, чтобы сохранить её здесь. Список хранится на этом компьютере.",
   "watchlist.empty.button": "Добавить пару",
   "search.label": "Поиск пары",
   "search.placeholder": "Поиск пары, например BTCUSDT",
@@ -52,5 +52,8 @@
   "loading.title": "Загрузка {symbol} · {tf}",
   "loading.detail": "1 000 свечей из {source}",
   "history.start": "Начало истории",
-  "history.first": "Первая свеча {date}"
+  "history.first": "Первая свеча {date}",
+  "watchlist.hide": "Скрыть список пар",
+  "watchlist.show": "Показать список пар",
+  "search.footerAdd": "↑↓ выбор · ↵ в список · ⇧↵ открыть"
 }
