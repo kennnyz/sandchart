@@ -49,7 +49,7 @@ jobs:
             .
             indicators
       # Indicator guests: the host tests load these .wasm files.
-      - run: cargo build --manifest-path indicators/Cargo.toml --target wasm32-wasip2 --release
+      - run: cargo build --manifest-path indicators/Cargo.toml --target wasm32-wasip2 --release --locked
       - run: cargo fmt --check
       - run: cargo fmt --check --manifest-path indicators/Cargo.toml
       - run: cargo clippy --all-targets -- -D warnings

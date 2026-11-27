@@ -41,7 +41,7 @@ pnpm --dir app/ui exec playwright install chromium
 pnpm --dir app/ui exec playwright test  # e2e against the mock, serves on port 4173
 
 # Indicators (own workspace; CI also runs these)
-cargo build --manifest-path indicators/Cargo.toml --target wasm32-wasip2 --release
+cargo build --manifest-path indicators/Cargo.toml --target wasm32-wasip2 --release --locked
 cargo fmt --check --manifest-path indicators/Cargo.toml
 cargo clippy --manifest-path indicators/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path indicators/Cargo.toml

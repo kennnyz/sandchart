@@ -63,7 +63,7 @@ jobs:
         with:
           key: ${{ matrix.target }}
       # The app embeds the built-in indicators, and the author CLI embeds them too.
-      - run: cargo build --manifest-path indicators/Cargo.toml --target wasm32-wasip2 --release
+      - run: cargo build --manifest-path indicators/Cargo.toml --target wasm32-wasip2 --release --locked
       # tauri-action without `tagName` only builds; the draft release is created in the
       # publish job once every platform has succeeded. The CLI is run with node from
       # `app/` (where beforeBuildCommand paths resolve), so the `tauri` npm script
