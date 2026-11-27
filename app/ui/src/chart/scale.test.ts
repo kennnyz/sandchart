@@ -41,6 +41,31 @@ describe("PriceScale", () => {
   });
 });
 
+describe("log mode edge cases", () => {
+  it("stays finite and monotonic with min 0 and min -5", () => {
+    for (const min of [0, -5]) {
+      const s = new PriceScale(min, 100, 400, "log");
+      const ys = [1, 5, 50, 100].map((p) => s.toY(p));
+      for (const y of ys) expect(Number.isFinite(y)).toBe(true);
+      for (let i = 1; i < ys.length; i++) expect(ys[i]!).toBeLessThan(ys[i - 1]!);
+      expect(Number.isFinite(s.toY(0))).toBe(true);
+      expect(Number.isFinite(s.fromY(200))).toBe(true);
+    }
+  });
+
+  it("autoscale lower bound stays >= 1 in log mode", () => {
+    const [lo, hi] = autoscale([1, 2], [3, 100], [0, 1], 0.08, "log");
+    expect(lo).toBeGreaterThanOrEqual(1);
+    expect(hi).toBeGreaterThan(100);
+    expect(autoscale([0], [0], [0, 0], 0.08, "log")[0]).toBeGreaterThanOrEqual(1);
+  });
+
+  it("narrow log range still returns >= 2 ticks", () => {
+    const t = new PriceScale(120, 180, 400, "log").ticks(8);
+    expect(t.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
 describe("autoscale", () => {
   it("pads 8%", () => {
     const lows = [10, 20, 5, 30];

@@ -2,17 +2,22 @@ export type PriceScaleMode = "linear" | "log";
 
 /** Maps prices (as tick counts) to pixel rows; y = 0 is the top (max price). */
 export class PriceScale {
+  /** Effective bounds: in log mode clamped to at least 1 tick. */
+  readonly min: number;
+  readonly max: number;
   private readonly lo: number;
   private readonly hi: number;
 
   constructor(
-    readonly min: number,
-    readonly max: number,
+    min: number,
+    max: number,
     readonly heightPx: number,
     readonly mode: PriceScaleMode,
   ) {
-    this.lo = this.forward(min);
-    this.hi = this.forward(max);
+    this.min = mode === "log" ? Math.max(1, min) : min;
+    this.max = mode === "log" ? Math.max(1, max) : max;
+    this.lo = this.forward(this.min);
+    this.hi = this.forward(this.max);
   }
 
   private forward(p: number): number {
@@ -26,7 +31,8 @@ export class PriceScale {
   toY(price: number): number {
     const span = this.hi - this.lo;
     if (span === 0) return this.heightPx / 2;
-    return ((this.hi - this.forward(price)) / span) * this.heightPx;
+    const p = this.mode === "log" ? Math.max(1, price) : price;
+    return ((this.hi - this.forward(p)) / span) * this.heightPx;
   }
 
   fromY(y: number): number {
@@ -62,6 +68,11 @@ function linearTicks(min: number, max: number, maxCount: number): number[] {
 
 function logTicks(min: number, max: number, maxCount: number): number[] {
   if (min <= 0) return linearTicks(min, max, maxCount);
+  const result = logTicksRaw(min, max, maxCount);
+  return result.length < 2 ? linearTicks(min, max, maxCount) : result;
+}
+
+function logTicksRaw(min: number, max: number, maxCount: number): number[] {
   const firstDecade = Math.floor(Math.log10(min));
   const lastDecade = Math.floor(Math.log10(max));
   for (const mantissas of [[1, 2, 5], [1]]) {
@@ -90,6 +101,7 @@ export function autoscale(
   highs: Float64Array | number[],
   range: [number, number],
   padding = 0.08,
+  mode: PriceScaleMode = "linear",
 ): [number, number] {
   let min = Infinity;
   let max = -Infinity;
@@ -100,6 +112,12 @@ export function autoscale(
     if (hi !== undefined && hi > max) max = hi;
   }
   if (min > max) return [0, 1];
+  if (mode === "log") {
+    const lo = Math.max(1, min);
+    const hi = Math.max(1, max);
+    const pad = (Math.log(hi) - Math.log(lo)) * padding || 0.01;
+    return [Math.max(1, Math.exp(Math.log(lo) - pad)), Math.exp(Math.log(hi) + pad)];
+  }
   const span = max - min;
   const pad = span > 0 ? span * padding : Math.max(1, Math.abs(max) * 0.01);
   return [min - pad, max + pad];
