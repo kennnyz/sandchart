@@ -6,7 +6,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
-use sandchart_indicators::{Limits, Runtime};
+use sandchart_indicators::{Limits, Meta, Runtime, is_user_id};
 
 pub fn run(dir: &Path) -> Result<ExitCode, String> {
     if !dir.join("Cargo.toml").is_file() {
@@ -41,11 +41,25 @@ pub fn run(dir: &Path) -> Result<ExitCode, String> {
         "cargo built nothing to load: set crate-type = [\"cdylib\"] under [lib] in Cargo.toml",
     )?;
     let bytes = fs::read(&wasm).map_err(|e| format!("cannot read {}: {e}", wasm.display()))?;
-    let runtime = Runtime::new(Limits::default(), None).map_err(|e| e.to_string())?;
-    let module = runtime.load(&bytes).map_err(|e| e.to_string())?;
-    let meta = module.meta();
+    let meta = check(&bytes)?;
     println!("ok {} {} → {}", meta.id, meta.version, wasm.display());
     Ok(ExitCode::SUCCESS)
+}
+
+/// Loads the built module in the host and checks its id, as the app does at install.
+fn check(bytes: &[u8]) -> Result<Meta, String> {
+    let runtime = Runtime::new(Limits::default(), None).map_err(|e| e.to_string())?;
+    let module = runtime.load(bytes).map_err(|e| e.to_string())?;
+    let meta = module.meta();
+    if !is_user_id(&meta.id) {
+        return Err(format!(
+            "the indicator id {:?} is reserved: ids starting with \"builtin.\" belong to the \
+             indicators that come with Sandchart, and the app will refuse to install it; give \
+             yours an id like \"author.name\" in meta()",
+            meta.id
+        ));
+    }
+    Ok(meta.clone())
 }
 
 /// The `.wasm` of the last cdylib artifact in cargo's JSON messages.
@@ -76,6 +90,19 @@ fn find_wasm(stdout: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reserved_id_fails_the_check() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../indicators/target/wasm32-wasip2/release/builtin_sma.wasm");
+        let bytes = fs::read(&path)
+            .unwrap_or_else(|e| panic!("{}: {e}; build the guests first", path.display()));
+        let err = check(&bytes).unwrap_err();
+        assert!(
+            err.contains("builtin.sma") && err.contains("reserved"),
+            "{err}"
+        );
+    }
 
     #[test]
     fn picks_the_cdylib_wasm() {
