@@ -48,11 +48,16 @@ You need Rust (stable, from [rustup](https://rustup.rs/)) and the WebAssembly ta
 rustup target add wasm32-wasip2
 ```
 
-Then the `sandchart-indicator` command. Either download it from the [Releases](https://github.com/kennnyz/sandchart/releases) page (the archive `sandchart-indicator-<target>.tar.gz`, or `.zip` for Windows, holds one binary; put it on your `PATH`), or build it:
+Then the `sandchart-indicator` command. Either download it from the [Releases](https://github.com/kennnyz/sandchart/releases) page (the archive `sandchart-indicator-<target>.tar.gz`, or `.zip` for Windows, holds one binary; put it on your `PATH`), or build it from a clone:
 
 ```sh
-cargo install --git https://github.com/kennnyz/sandchart sandchart-indicator-cli
+git clone https://github.com/kennnyz/sandchart
+cd sandchart
+cargo build --manifest-path indicators/Cargo.toml --target wasm32-wasip2 --release
+cargo install --path crates/indicator-cli
 ```
+
+The second command builds the built-in indicators, which the tool embeds. `cargo install --git https://github.com/kennnyz/sandchart sandchart-indicator-cli` does not work for that reason: the built files are not in the repository.
 
 `sandchart-indicator --help` lists three commands: `new`, `build` and `test`.
 

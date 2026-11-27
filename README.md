@@ -155,11 +155,13 @@ For the AppImage: `chmod +x Sandchart_*.AppImage`, then run it. For the `.deb`: 
 
 ## Write your own indicators
 
-Indicators are WebAssembly modules. The [guide](docs/indicators.md) shows how to write one in Rust, or how to hand the job to your coding agent. You need the `sandchart-indicator` command: download the archive for your system (`sandchart-indicator-<target>.tar.gz`, or `.zip` on Windows) from the [Releases](../../releases) page and put the binary on your `PATH`, or run:
+Indicators are WebAssembly modules. The [guide](docs/indicators.md) shows how to write one in Rust, or how to hand the job to your coding agent. You need the `sandchart-indicator` command: download the archive for your system (`sandchart-indicator-<target>.tar.gz`, or `.zip` on Windows) from the [Releases](../../releases) page and put the binary on your `PATH`, or build it from a clone:
 
 ```sh
 rustup target add wasm32-wasip2
-cargo install --git https://github.com/kennnyz/sandchart sandchart-indicator-cli
+git clone https://github.com/kennnyz/sandchart && cd sandchart
+cargo build --manifest-path indicators/Cargo.toml --target wasm32-wasip2 --release
+cargo install --path crates/indicator-cli
 ```
 
 ## Verify your download
