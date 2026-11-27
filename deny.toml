@@ -12,10 +12,12 @@ allow = [
     "Unicode-3.0",
 ]
 confidence-threshold = 0.8
+unused-allowed-license = "allow"
 
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+allow-wildcard-paths = true
 
 [sources]
 unknown-registry = "deny"
