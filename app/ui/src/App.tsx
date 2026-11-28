@@ -5,6 +5,8 @@ import { dark, light } from "./chart/theme";
 import { ChartView, Loading } from "./components/ChartView";
 import { DrawingToolbar } from "./components/DrawingToolbar";
 import { IndicatorsDialog } from "./components/IndicatorsDialog";
+import { ShortcutsDialog } from "./components/ShortcutsDialog";
+import { helpKey } from "./shortcuts";
 import { StatusBar } from "./components/StatusBar";
 import { tfLabel } from "./components/TimeframePicker";
 import { SymbolSearch, type SearchMode } from "./components/SymbolSearch";
@@ -61,6 +63,7 @@ export function App() {
   const [waitingDefault, setWaitingDefault] = useState(true);
   const [indicators] = useState(() => indicatorStore(backend));
   const [indicatorsOpen, setIndicatorsOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [drawings] = useState(() => drawingStore(backend));
   const [updates] = useState(() => updateStore(backend));
   const [replay] = useState(() => replayStore(backend));
@@ -203,6 +206,18 @@ export function App() {
     if (!watchlist.some((id) => sameId(id, i.id))) saveWatchlist([...watchlist, i.id]);
   };
 
+  // ? lists the keyboard shortcuts.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!helpKey(e)) return;
+      e.preventDefault();
+      setShortcutsOpen(true);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  const closeShortcuts = useCallback(() => setShortcutsOpen(false), []);
+
   // ⌘K / Ctrl+K opens the search from anywhere.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -290,6 +305,7 @@ export function App() {
       {indicatorsOpen && (
         <IndicatorsDialog backend={backend} store={indicators} onClose={() => setIndicatorsOpen(false)} />
       )}
+      {shortcutsOpen && <ShortcutsDialog onClose={closeShortcuts} />}
       {searchMode && (
         <SymbolSearch
           backend={backend}

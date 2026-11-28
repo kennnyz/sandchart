@@ -93,6 +93,7 @@ Changing the timeframe or the update interval keeps a caught-up replay finished.
 | Shift+B | Buy |
 | Shift+S | Sell |
 | Shift+C | Close the trade |
+| ? | The list of every keyboard shortcut of the app |
 | Esc | Cancel picking a start, close a dropdown, or answer Cancel to the question before trades are dropped |
 
 The replay keys never use Alt, so they do not clash with the drawing tools (Alt plus a letter). They do nothing while you type in a text field. Space on a control you reached with Tab presses that control instead.

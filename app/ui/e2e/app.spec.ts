@@ -290,3 +290,28 @@ test("watchlist_can_be_hidden_and_shown", async ({ page }) => {
   await page.reload();
   await expect(page.getByTestId("watchlist")).toBeVisible();
 });
+
+test("question_mark_lists_the_keyboard_shortcuts_in_the_ui_language", async ({ page }) => {
+  await openApp(page);
+  await page.keyboard.press("Shift+Slash");
+  const sheet = page.getByTestId("shortcuts");
+  await expect(sheet).toBeVisible();
+  await expect(sheet).toContainText("Keyboard shortcuts");
+  await expect(page.getByTestId("shortcuts-tools")).toContainText("Trend line");
+  await expect(page.getByTestId("shortcuts-replay")).toContainText("⇧B");
+  await expect(page.getByTestId("shortcuts-alerts")).toContainText("Price alert at the crosshair price");
+  await page.keyboard.press("Escape");
+  await expect(sheet).toHaveCount(0);
+
+  // Not while typing in a field.
+  await page.getByTestId("symbol-button").click();
+  await page.getByTestId("search").locator("input").press("Shift+Slash");
+  await expect(sheet).toHaveCount(0);
+  await page.keyboard.press("Escape");
+
+  await page.getByTestId("lang-button").click();
+  await page.keyboard.press("Shift+Slash");
+  await expect(sheet).toContainText("Горячие клавиши");
+  await sheet.getByRole("button").click();
+  await expect(sheet).toHaveCount(0);
+});

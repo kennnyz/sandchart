@@ -15,6 +15,9 @@ import {
 } from "../backend/types";
 import { buildsFrom, bucketStart, closeTime } from "../timeframes";
 
+/** The replay keys as shown in tooltips, menus and the shortcut list ("→", "Space", "⇧B"). */
+export const REPLAY_KEYS = { step: "→", play: "Space", buy: "⇧B", sell: "⇧S", close: "⇧C" } as const;
+
 /** Bars per second of Play. */
 export const SPEEDS = [1, 2, 3, 5, 10] as const;
 export type Speed = (typeof SPEEDS)[number];

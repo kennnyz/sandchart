@@ -118,6 +118,7 @@ The eye button at the bottom of the tools rail opens a menu. While drawings are 
 | ⇧⌘Z / Ctrl+Shift+Z | Redo |
 | ⌘Enter / Ctrl+Enter | Save a note |
 | Esc | Cancel, close, deselect |
+| ? | The list of every keyboard shortcut of the app |
 
 Shortcuts follow the physical key, so they work on any keyboard layout. They do nothing while you type in a text field.
 

@@ -19,7 +19,7 @@ import { useEffect, useRef, useState, type ChangeEvent, type MouseEvent } from "
 import { TIMEFRAME_CODES } from "../backend/types";
 import { formatCrosshairTime, parseUtcDateTime } from "../chart/format";
 import { t } from "../i18n";
-import { baseChoices, MAX_REPLAY_FILE_MIB, replayKeyAction, SPEEDS, type ReplayController } from "../state/replay";
+import { baseChoices, MAX_REPLAY_FILE_MIB, REPLAY_KEYS, replayKeyAction, SPEEDS, type ReplayController } from "../state/replay";
 import { Menu, type MenuItem } from "./Menu";
 import { fillTime } from "./ReplayStats";
 import { tfLabel } from "./TimeframePicker";
@@ -32,8 +32,6 @@ export interface ReplayBarProps {
   onDate: (time: number) => void;
 }
 
-/** The replay keys as shown in tooltips and menus ("→", "Space", "⇧B"). */
-export const REPLAY_KEYS = { step: "→", play: "Space", buy: "⇧B", sell: "⇧S", close: "⇧C" } as const;
 const KEYS = REPLAY_KEYS;
 const titled = (name: string, shortcut: string) => t("replay.shortcut", { name, shortcut });
 
