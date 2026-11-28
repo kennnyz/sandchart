@@ -37,6 +37,8 @@ pub const MAX_BARS: u32 = 5000;
 const MAX_NAME_BYTES: usize = 64;
 /// Most chart pages one call walks back through (1000 candles each).
 const MAX_PAGES: usize = 8;
+/// Length of a calendar-month bar when judging where a position's bars end.
+const MONTH_MS: i64 = 31 * 24 * 60 * 60 * 1000;
 /// Least time between two failed instrument-list downloads.
 const SYNC_RETRY: Duration = Duration::from_secs(60);
 
@@ -103,6 +105,12 @@ fn check_name(what: &str, s: &str) -> Result<(), String> {
         return Err(format!("{what} must be 1 to {MAX_NAME_BYTES} bytes"));
     }
     Ok(())
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
 /// A new id for a drawing or alert: unique across processes and calls.
@@ -503,24 +511,29 @@ impl Sandchart {
     }
 
     #[tool(
-        description = "Outcome of a long or short position over the cached candles of a \
-                       timeframe (fetched back to the entry first): status open, take or stop, \
-                       exitTime, ambiguous (one bar hit both; counts as stop), and r.",
+        description = "Outcome of a long or short position over the candles of a timeframe \
+                       (fetched back from endT to the entry first, at most 5000 bars): status \
+                       open, take or stop, exitTime, ambiguous (one bar hit both; counts as \
+                       stop), and r.",
         annotations(read_only_hint = true)
     )]
     async fn position_outcome(&self, Parameters(p): Parameters<PositionInput>) -> ToolResult {
         let tf = timeframe(&p.timeframe)?;
         p.position.validate()?;
         let inst = self.instrument(&p.source, &p.symbol).await?;
-        let f = self
-            .fetch(
-                &inst.id,
-                tf,
-                MAX_BARS as usize,
-                None,
-                Some(p.position.entry.t),
-            )
-            .await?;
+        // Back from the bar after endT, so an old position is reached however long ago it
+        // ended; one that ends from now on reads the newest candles.
+        let bar = tf.fixed_ms().unwrap_or(MONTH_MS);
+        let before = Some(p.position.end_t.saturating_add(bar)).filter(|&t| t <= now_ms());
+        let (entry, limit) = (p.position.entry.t, MAX_BARS as usize);
+        let f = self.fetch(&inst.id, tf, limit, before, Some(entry)).await?;
+        if !f.at_history_start && f.candles.first().is_some_and(|c| c.open_time > entry) {
+            return Err(format!(
+                "the entry is more than {MAX_BARS} bars before endT on {}; set endT closer \
+                 to the entry or use a longer timeframe",
+                tf.code()
+            ));
+        }
         let mut outcomes = self
             .engine
             .position_outcomes(&inst.id, tf, vec![(String::new(), p.position)])

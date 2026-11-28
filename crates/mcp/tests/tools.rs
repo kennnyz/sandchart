@@ -41,29 +41,6 @@ fn price(ticks: i64) -> String {
     format!("{}.{:02}", ticks / 100, ticks % 100)
 }
 
-fn klines() -> String {
-    let rows: Vec<Value> = (0..BARS)
-        .map(|i| {
-            let c = candle(i);
-            json!([
-                c.open_time,
-                price(c.open),
-                price(c.high),
-                price(c.low),
-                price(c.close),
-                "1.00000000",
-                c.open_time + H - 1,
-                "0",
-                1,
-                "0",
-                "0",
-                "0"
-            ])
-        })
-        .collect();
-    Value::Array(rows).to_string()
-}
-
 /// Kline rows for `candles`, as Binance sends them.
 fn kline_rows(candles: &[Candle]) -> String {
     let rows: Vec<Value> = candles
@@ -117,16 +94,10 @@ async fn harness_with(info: ResponseTemplate) -> Harness {
         .respond_with(info)
         .mount(&mock)
         .await;
-    // The newest page; nothing exists before it, so a page further back is empty.
+    // Nothing exists before the 30 candles, so a page further back is empty.
     Mock::given(method("GET"))
         .and(path("/api/v3/klines"))
-        .and(query_param_is_missing("endTime"))
-        .respond_with(json_body(klines()))
-        .mount(&mock)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/api/v3/klines"))
-        .respond_with(json_body("[]".to_owned()))
+        .respond_with(Series((0..BARS).map(candle).collect()))
         .mount(&mock)
         .await;
     serve(mock).await
@@ -904,4 +875,60 @@ async fn the_newest_candle_is_asked_for_again_while_it_is_forming() {
     assert_eq!(last(&again), "104.75");
     assert_eq!(again["candles"].as_array().unwrap().len(), 2);
     assert_eq!(h.requests("/api/v3/klines").await, 2);
+}
+
+/// An exchange with a long series: every klines request gets the candles that open at or
+/// before its `endTime` (all when there is none), at most `limit`, as Binance answers.
+struct Series(Vec<Candle>);
+
+impl wiremock::Respond for Series {
+    fn respond(&self, req: &wiremock::Request) -> ResponseTemplate {
+        let q = |k: &str| {
+            req.url
+                .query_pairs()
+                .find(|(n, _)| n == k)
+                .and_then(|(_, v)| v.parse::<i64>().ok())
+        };
+        let end = q("endTime").unwrap_or(i64::MAX);
+        let limit = q("limit").unwrap_or(500) as usize;
+        let upto: Vec<Candle> = self
+            .0
+            .iter()
+            .copied()
+            .filter(|c| c.open_time <= end)
+            .collect();
+        json_body(kline_rows(&upto[upto.len().saturating_sub(limit)..]))
+    }
+}
+
+#[tokio::test]
+async fn a_position_is_resolved_from_its_end_back_and_refused_past_5000_bars() {
+    let mock = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v3/exchangeInfo"))
+        .respond_with(json_body(EXCHANGE_INFO.to_owned()))
+        .mount(&mock)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v3/klines"))
+        .respond_with(Series((0..7_000).map(candle).collect()))
+        .mount(&mock)
+        .await;
+    let h = serve(mock).await;
+    // Bar 1500 closes at 1600.00; bar 1501 reaches 1601.50, the take. The entry is 4900 bars
+    // before the end but 5500 before now: the walk starts at the end.
+    let at = |i: i64| T0 + i * H;
+    let position = |entry: i64, end: i64| {
+        let p = candle(entry).close;
+        json!({ "symbol": "BTCUSDT", "timeframe": "1h", "position": {
+            "side": "long", "entry": { "t": at(entry), "p": p },
+            "stop": p - 100, "take": p + 150, "endT": at(end)
+        } })
+    };
+    let got = h.call("position_outcome", position(1_500, 6_400)).await;
+    assert_eq!(got["status"], "take");
+    assert_eq!(got["exitTime"], at(1_501));
+
+    let e = h.fail("position_outcome", position(100, 6_400)).await;
+    assert_contains(&e, "more than 5000 bars before endT");
 }

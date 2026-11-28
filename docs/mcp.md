@@ -226,7 +226,7 @@ Deletes a drawing by `id`, and the alerts that follow it. An unknown id is not a
 
 ### position_outcome
 
-How a long or short position played out over the cached candles of a timeframe, by the same rule as position drawings: the first bar after the entry bar that reaches the stop or the take decides, and a bar that reaches both counts as a stop and is marked `ambiguous`. Candles back to the entry are fetched first (at most 5000).
+How a long or short position played out over the cached candles of a timeframe, by the same rule as position drawings: the first bar after the entry bar that reaches the stop or the take decides, and a bar that reaches both counts as a stop and is marked `ambiguous`. The candles from `endT` back to the entry are fetched first, at most 5000 bars; an entry further back than that is refused with an error (`the entry is more than 5000 bars before endT`), so set `endT` closer or use a longer timeframe.
 
 | Input | |
 | --- | --- |
