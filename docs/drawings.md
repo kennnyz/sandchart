@@ -47,8 +47,9 @@ Double-click a drawing, or select it and press Enter, to open its style popover.
 - **Width**: 1 to 4 px.
 - **Dashed**: a dashed line instead of a solid one.
 - **Options of the tool**: extend left and right on a trend line, extend right on a rectangle, the levels of a Fibonacci retracement (at least one stays on).
+- **Alert** (horizontal and trend lines): set an alert on the line, crossing it either way, above or below; see [Alerts](alerts.md). The alert is not part of the undo history.
 - **Locked**: a locked drawing can still be selected, styled and deleted, but not moved or reshaped. Use it for levels you do not want to nudge by accident.
-- **Delete** removes the drawing.
+- **Delete** removes the drawing, and its alert with it.
 
 Tab moves between the controls and stays inside the popover; Esc or a click outside closes it.
 

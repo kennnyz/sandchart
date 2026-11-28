@@ -29,6 +29,7 @@
 - Indicators: SMA, EMA, Bollinger bands, RSI and MACD are built in, and you can add your own as WebAssembly modules. They run in a sandbox with no files, no network and no clock, under memory and work limits. Lines, histograms, markers and bands draw over the candles or in panes of their own, and a repaint check warns about indicators that change their past. Write one in Rust with the `sandchart-indicator` command, or let your coding agent do it: see [Writing indicators](docs/indicators.md).
 - Drawing tools: trend lines, horizontal levels, rectangles, Fibonacci retracements, long and short positions with their outcome, a brush, notes on bars and a ruler. Drawings are stored per pair in the local SQLite file, show on every timeframe, snap to bar prices with the magnet and undo with Cmd/Ctrl+Z. See [Drawing tools](docs/drawings.md).
 - Replay: step or play through history bar by bar with no future bar on screen, take paper trades with a draggable stop and take, and see the results in R (win rate, total and average R, profit factor, drawdown). Save the session to a `.replay` file that carries its own candles, so anyone opens it offline and gets the same trades and numbers. See [Replay](docs/replay.md).
+- Alerts: a price alert at the crosshair price (Alt+A) or an alert on a horizontal or trend line, crossing above, below or either way. Wicks and gaps count, each alert fires once with an OS notification and a message in the app, and a panel under the watchlist lists, re-arms and deletes them. They run while the app is open, on your machine only. See [Alerts](docs/alerts.md).
 - Monochrome candles (colour appears only in numbers and indicator series), dark and light themes, English and Russian interface.
 - Builds for macOS (Apple silicon and Intel), Windows and Linux.
 
@@ -244,7 +245,9 @@ Sandchart holds no exchange API keys, has no accounts and sends no telemetry. Th
 
 The update requests are plain downloads of public files. Nothing about you or your charts is sent. To stop the automatic check, click the version in the status bar and turn off **Check automatically**.
 
-Your watchlist and cached candles stay in a local SQLite file in your user data folder.
+Alerts add no host: their live prices come from `data-stream.binance.vision` like the chart's, and their notifications are shown by your operating system, with no push service in between.
+
+Your watchlist, drawings, alerts and cached candles stay in a local SQLite file in your user data folder.
 
 ## Third-party notices
 
