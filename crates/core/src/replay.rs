@@ -884,8 +884,9 @@ impl ReplayFile {
 }
 
 /// Candles of the `base` timeframe as a file may hold them: every number and every close time
-/// inside ±(2^53 - 1) (so a start, cut or catch-up time, each a close time, is too),
-/// strictly ascending open times, low ≤ open, close ≤ high and a volume that is not negative.
+/// inside ±(2^53 - 1) (so a start, cut or catch-up time, each a close time, is too), each
+/// opening on a `base` bucket boundary, strictly ascending open times (on the grid that also
+/// rules out overlaps), low ≤ open, close ≤ high and a volume that is not negative.
 pub fn check_candles(base: Timeframe, candles: &[Candle]) -> Result<(), String> {
     for (i, c) in candles.iter().enumerate() {
         for v in [c.open_time, c.open, c.high, c.low, c.close, c.volume] {
@@ -897,6 +898,13 @@ pub fn check_candles(base: Timeframe, candles: &[Candle]) -> Result<(), String> 
         if closes > JS_SAFE_MAX {
             return Err(format!(
                 "candle {i}: its close time {closes} is outside ±(2^53 - 1)"
+            ));
+        }
+        if base.bucket_start(c.open_time) != c.open_time {
+            return Err(format!(
+                "candle {i}: open time {} is not on the {} grid",
+                c.open_time,
+                base.code()
             ));
         }
         if c.low > c.open.min(c.close) {

@@ -301,8 +301,8 @@ async fn broken_or_oversized_files_leave_the_session_alone() {
     assert_eq!(msg, "the candles do not match the file's sha256");
     let msg = replay_err(engine.replay_open(&vec![b' '; MAX_FILE_BYTES + 1]));
     assert!(msg.starts_with("the replay file is 32 MiB"), "{msg}");
-    // A cut past what the UI can hold (a candle closing after 2^53 - 1) is refused before the
-    // open session is replaced.
+    // A cut past what the UI can hold (a candle closing after 2^53 - 1) and a candle off the
+    // hour grid are refused before the open session is replaced.
     let last = (sandchart_core::JS_SAFE_MAX / H) * H;
     let mut hostile = file_at(2, 2);
     hostile.candles.push(Candle {
@@ -318,6 +318,10 @@ async fn broken_or_oversized_files_leave_the_session_alone() {
             last + H
         )
     );
+    let mut off_grid = file_at(2, 2);
+    off_grid.candles[1].open_time += 1;
+    let msg = replay_err(engine.replay_open(off_grid.to_json().as_bytes()));
+    assert!(msg.ends_with("is not on the 1h grid"), "{msg}");
     let st = engine.replay_state(TF, 0, 0).unwrap();
     assert_eq!(st.cut, T0 + 551 * H, "the session started above");
 }

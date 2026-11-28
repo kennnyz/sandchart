@@ -944,6 +944,58 @@
         ]
       },
       "error": "candle 1: its close time 9007199254800000 is outside ±(2^53 - 1)"
+    },
+    {
+      "name": "a version 2 candle off its base's grid is refused",
+      "file": {
+        "version": 2,
+        "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
+        "base": "1h",
+        "start": 7200000,
+        "cut": 10830000,
+        "sha256": "d117da007026617716ea604f3bed75b865ce86df0d1e701c08f4448314eacb2c",
+        "commands": [],
+        "candles": [
+          [3600000, 100, 101, 99, 100, 7],
+          [7230000, 100, 101, 99, 100, 7]
+        ]
+      },
+      "error": "candle 1: open time 7230000 is not on the 1h grid"
+    },
+    {
+      "name": "a version 2 month candle that does not open on the 1st is refused",
+      "file": {
+        "version": 2,
+        "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
+        "base": "1M",
+        "start": 1706745600000,
+        "cut": 1706745600000,
+        "sha256": "152a053cbc402c49b96bdb3681f94ad5b9d06c9f3ec498768296929cea3e6efb",
+        "commands": [],
+        "candles": [
+          [1704067200000, 100, 101, 99, 100, 7],
+          [1706832000000, 100, 101, 99, 100, 7]
+        ]
+      },
+      "error": "candle 1: open time 1706832000000 is not on the 1M grid"
+    },
+    {
+      "name": "a version 1 candle that overlaps the one before (off its timeframe's grid) is refused",
+      "file": {
+        "version": 1,
+        "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
+        "timeframe": "4h",
+        "start": 1,
+        "current": 2,
+        "sha256": "69b47402915d4966cd629a375307b3c7d4998dbbb6dec5b92618d1c676cebc1b",
+        "commands": [],
+        "candles": [
+          [0, 100, 101, 99, 100, 7],
+          [14400000, 100, 101, 99, 100, 7],
+          [18000000, 100, 101, 99, 100, 7]
+        ]
+      },
+      "error": "candle 2: open time 18000000 is not on the 4h grid"
     }
   ],
   "aggregates": [
