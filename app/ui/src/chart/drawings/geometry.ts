@@ -235,6 +235,31 @@ export function distToRect(px: number, py: number, ax: number, ay: number, bx: n
   );
 }
 
+/** The line a-b (extended past a and/or b by the flags) passes through `box`. */
+export function lineTouchesBox(
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  extendA: boolean,
+  extendB: boolean,
+  box: { left: number; top: number; right: number; bottom: number },
+): boolean {
+  const { left: l, top: t } = box;
+  return clipLine(ax - l, ay - t, bx - l, by - t, extendA, extendB, box.right - l, box.bottom - t) !== null;
+}
+
+/** The box from (left, top) to (right, bottom) and `box` share a point. */
+export function boxesOverlap(
+  left: number,
+  top: number,
+  right: number,
+  bottom: number,
+  box: { left: number; top: number; right: number; bottom: number },
+): boolean {
+  return left <= box.right && right >= box.left && top <= box.bottom && bottom >= box.top;
+}
+
 export function insideRect(px: number, py: number, ax: number, ay: number, bx: number, by: number): boolean {
   return px >= Math.min(ax, bx) && px <= Math.max(ax, bx) && py >= Math.min(ay, by) && py <= Math.max(ay, by);
 }

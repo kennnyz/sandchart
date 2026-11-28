@@ -100,10 +100,23 @@ describe("trend", () => {
     expect(tool.hitTest(right, 400, 600, 6)).toBe(false);
     const left = tool.layout(body(true, false), c);
     expect(tool.hitTest(left, 400, 600, 6)).toBe(true);
+    // The ends, then the middle, which moves the whole line.
     expect(tool.handles(g)).toEqual([
       { x: 500, y: 500 },
       { x: 600, y: 400 },
+      { x: 550, y: 450 },
     ]);
+    expect(tool.grip).toBe(2);
+  });
+
+  it("touches a selection box it crosses, also where it is only extended", () => {
+    const g = tool.layout(body(), c);
+    expect(tool.touches(g, { left: 540, top: 440, right: 560, bottom: 460 })).toBe(true);
+    // The box sits on the line's path, but past its end.
+    expect(tool.touches(g, { left: 690, top: 290, right: 710, bottom: 310 })).toBe(false);
+    expect(tool.touches(tool.layout(body(false, true), c), { left: 690, top: 290, right: 710, bottom: 310 })).toBe(true);
+    // Inside the line's bounds but beside it.
+    expect(tool.touches(g, { left: 505, top: 405, right: 540, bottom: 440 })).toBe(false);
   });
 
   it("is not hit or painted when it lies outside the plot", () => {
@@ -152,13 +165,37 @@ describe("rect", () => {
     expect(tool.hitTest(tool.layout(body(true), c), 990, 500, 6)).toBe(true);
   });
 
-  it("has a handle on every corner", () => {
+  it("has a handle on every corner and in the middle of every edge", () => {
     expect(tool.handles(tool.layout(body(), c))).toEqual([
       { x: 400, y: 600 },
       { x: 600, y: 600 },
       { x: 600, y: 400 },
       { x: 400, y: 400 },
+      // Edges: a's price, b's time, b's price, a's time.
+      { x: 500, y: 600 },
+      { x: 600, y: 500 },
+      { x: 500, y: 400 },
+      { x: 400, y: 500 },
     ]);
+  });
+
+  it("resizes only one side with an edge handle", () => {
+    const b = body();
+    // Moving along the edge does nothing; only the side under the handle follows.
+    expect(tool.moveHandle(b, 4, at(470, 650), false)).toEqual({ ...b, a: at(400, 650) });
+    expect(tool.moveHandle(b, 5, at(700, 450), false)).toEqual({ ...b, b: at(700, 400) });
+    expect(tool.moveHandle(b, 6, at(520, 300), false)).toEqual({ ...b, b: at(600, 300) });
+    expect(tool.moveHandle(b, 7, at(350, 550), false)).toEqual({ ...b, a: at(350, 600) });
+    // An edge may meet the opposite one (a flat zone is still a zone), but not both corners.
+    const flat: Rect = { kind: "rect", a: at(400, 500), b: at(600, 500), extendRight: false };
+    expect(tool.moveHandle(flat, 5, at(400, 500), false)).toBe(flat);
+  });
+
+  it("touches a selection box that overlaps it", () => {
+    const g = tool.layout(body(), c);
+    expect(tool.touches(g, { left: 590, top: 590, right: 700, bottom: 700 })).toBe(true);
+    expect(tool.touches(g, { left: 450, top: 450, right: 460, bottom: 460 })).toBe(true);
+    expect(tool.touches(g, { left: 610, top: 300, right: 700, bottom: 700 })).toBe(false);
   });
 
   it("moves both corners with the body", () => {
@@ -243,7 +280,19 @@ describe("brush", () => {
   it("is a sticky stroke tool", () => {
     expect(tool.placement).toEqual({ clicks: 2, stroke: true });
     expect(tool.sticky).toBe(true);
-    expect(tool.handles(tool.layout({ kind: "brush", points: stroke([1, 2], [1, 2]) }, c))).toEqual([]);
+    const g = tool.layout({ kind: "brush", points: stroke([1, 5, 9], [1, 2, 3]) }, c);
+    // Nothing to reshape; the ends are marked while it is selected.
+    expect(tool.handles(g)).toEqual([]);
+    expect(tool.markers!(g)).toEqual([
+      { x: 1, y: 1 },
+      { x: 9, y: 3 },
+    ]);
+  });
+
+  it("touches a selection box one of its segments crosses", () => {
+    const g = tool.layout({ kind: "brush", points: stroke([100, 200, 200], [100, 100, 300]) }, c);
+    expect(tool.touches(g, { left: 190, top: 150, right: 210, bottom: 160 })).toBe(true);
+    expect(tool.touches(g, { left: 120, top: 150, right: 180, bottom: 250 })).toBe(false);
   });
 
   it("drops the points of a straight stretch", () => {
@@ -352,5 +401,31 @@ describe("on a log price scale", () => {
     expect(toolFor("position")!.moveHandle(long, 0, la(0, 100), false)).toMatchObject({ stop: e - 1 });
     const fib = bodies[3]!;
     expect(toolFor("fib")!.moveHandle(fib, 0, to, false)).toMatchObject({ a: to });
+  });
+});
+
+describe("selection box", () => {
+  const bodies: DrawingBody[] = [
+    { kind: "hline", p: 700 },
+    { kind: "fib", a: at(400, 600), b: at(600, 400), levels: [0, 0.5, 1] },
+    { kind: "position", side: "long", entry: at(400, 500), stop: c.p(550), take: c.p(400), endT: c.t(600) },
+    { kind: "note", t: c.t(500), text: "n" },
+  ];
+  /** A point on the body: where the tool's own hit test says so. */
+  function onBody(body: DrawingBody): { x: number; y: number } {
+    const tool = toolFor(body.kind)!;
+    const g = tool.layout(body, c);
+    for (let y = 0; y <= 1000; y += 2) for (let x = 0; x <= 1000; x += 10) if (tool.hitTest(g, x, y, 0)) return { x, y };
+    throw new Error(`no point on ${body.kind}`);
+  }
+
+  it("touches every kind through a small box on its body, and not far from it", () => {
+    for (const body of bodies) {
+      const tool = toolFor(body.kind)!;
+      const g = tool.layout(body, c);
+      const p = onBody(body);
+      expect(tool.touches(g, { left: p.x - 2, top: p.y - 2, right: p.x + 2, bottom: p.y + 2 }), body.kind).toBe(true);
+      expect(tool.touches(g, { left: 900, top: 900, right: 990, bottom: 990 }), body.kind).toBe(false);
+    }
   });
 });

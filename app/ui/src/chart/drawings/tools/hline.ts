@@ -47,6 +47,10 @@ export const hlineTool: ToolDef<Hline, HlineGeom> = {
     return x >= 0 && x <= g.plotW && Math.abs(y - g.y) <= tol;
   },
 
+  touches(g, box) {
+    return g.y >= box.top && g.y <= box.bottom && box.right >= 0 && box.left <= g.plotW;
+  },
+
   handles(g) {
     return [{ x: g.plotW / 2, y: g.y }];
   },

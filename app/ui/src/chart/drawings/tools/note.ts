@@ -1,6 +1,7 @@
 import { StickyNote } from "lucide-react";
 import type { DrawingBody } from "../../../backend/types";
 import { SANS_FAMILY } from "../../theme";
+import { boxesOverlap } from "../geometry";
 import { pill } from "../label";
 import type { ToolDef } from "../registry";
 
@@ -89,6 +90,11 @@ export const noteTool: ToolDef<Note, NoteGeom> = {
 
   hitTest(g, x, y, tol) {
     return Math.hypot(x - g.x, y - g.y) <= MARKER_R + tol;
+  },
+
+  touches(g, box) {
+    const r = MARKER_R;
+    return boxesOverlap(g.x - r, g.y - r, g.x + r, g.y + r, box);
   },
 
   handles() {

@@ -1,5 +1,6 @@
 import { RectangleHorizontal } from "lucide-react";
 import type { Anchor, DrawingBody } from "../../../backend/types";
+import { boxesOverlap } from "../geometry";
 import type { ToolDef } from "../registry";
 
 type Rect = Extract<DrawingBody, { kind: "rect" }>;
@@ -83,13 +84,26 @@ export const rectTool: ToolDef<Rect, RectGeom> = {
     return x >= g.left - tol && x <= g.right + tol && y >= g.top - tol && y <= g.bottom + tol;
   },
 
-  /** Corners: a, (b time, a price), b, (a time, b price). */
+  touches(g, box) {
+    return boxesOverlap(g.left, g.top, g.right, g.bottom, box);
+  },
+
+  /**
+   * Corners: a, (b time, a price), b, (a time, b price). Then the middles of the edges at
+   * a's price, b's time, b's price and a's time; each moves only its side.
+   */
   handles(g) {
+    const mx = (g.ax + g.bx) / 2;
+    const my = (g.ay + g.by) / 2;
     return [
       { x: g.ax, y: g.ay },
       { x: g.bx, y: g.ay },
       { x: g.bx, y: g.by },
       { x: g.ax, y: g.by },
+      { x: mx, y: g.ay },
+      { x: g.bx, y: my },
+      { x: mx, y: g.by },
+      { x: g.ax, y: my },
     ];
   },
 
@@ -99,14 +113,18 @@ export const rectTool: ToolDef<Rect, RectGeom> = {
 
   moveHandle(body, index, at) {
     const { a, b } = body;
-    const [na, nb]: [Anchor, Anchor] =
-      index === 0
-        ? [{ t: at.t, p: at.p }, b]
-        : index === 1
-          ? [{ t: a.t, p: at.p }, { t: at.t, p: b.p }]
-          : index === 2
-            ? [a, { t: at.t, p: at.p }]
-            : [{ t: at.t, p: a.p }, { t: b.t, p: at.p }];
+    const corners: [Anchor, Anchor][] = [
+      [{ t: at.t, p: at.p }, b],
+      [{ t: a.t, p: at.p }, { t: at.t, p: b.p }],
+      [a, { t: at.t, p: at.p }],
+      [{ t: at.t, p: a.p }, { t: b.t, p: at.p }],
+      // Edges.
+      [{ t: a.t, p: at.p }, b],
+      [a, { t: at.t, p: b.p }],
+      [a, { t: b.t, p: at.p }],
+      [{ t: at.t, p: a.p }, b],
+    ];
+    const [na, nb] = corners[index] ?? [a, b];
     if (same(na, nb)) return body;
     return { ...body, a: na, b: nb };
   },

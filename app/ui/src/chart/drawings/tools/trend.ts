@@ -1,6 +1,6 @@
 import { Slash } from "lucide-react";
 import type { DrawingBody } from "../../../backend/types";
-import { clipLine, distToLine } from "../geometry";
+import { clipLine, distToLine, lineTouchesBox } from "../geometry";
 import type { ToolDef } from "../registry";
 
 type Trend = Extract<DrawingBody, { kind: "trend" }>;
@@ -70,12 +70,19 @@ export const trendTool: ToolDef<Trend, TrendGeom> = {
     return g.seg !== null && distToLine(x, y, g.ax, g.ay, g.bx, g.by, g.extA, g.extB) <= tol;
   },
 
+  touches(g, box) {
+    return g.seg !== null && lineTouchesBox(g.ax, g.ay, g.bx, g.by, g.extA, g.extB, box);
+  },
+
+  /** The ends, then the middle (the grip). */
   handles(g) {
     return [
       { x: g.ax, y: g.ay },
       { x: g.bx, y: g.by },
+      { x: (g.ax + g.bx) / 2, y: (g.ay + g.by) / 2 },
     ];
   },
+  grip: 2,
 
   moveBy(body, m) {
     return { ...body, a: m.anchor(body.a), b: m.anchor(body.b) };
