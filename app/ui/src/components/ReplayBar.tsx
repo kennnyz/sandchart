@@ -21,6 +21,7 @@ import { formatCrosshairTime } from "../chart/format";
 import { t } from "../i18n";
 import { baseChoices, MAX_REPLAY_FILE_MIB, replayKeyAction, SPEEDS, type ReplayController } from "../state/replay";
 import { Menu, type MenuItem } from "./Menu";
+import { fillTime } from "./ReplayStats";
 import { tfLabel } from "./TimeframePicker";
 
 export interface ReplayBarProps {
@@ -390,6 +391,9 @@ export function ReplayBar({ replay: r, range, onDate }: ReplayBarProps) {
         >
           <FastForward size={16} />
         </button>
+        <span className="replay-time mono" data-testid="replay-time" data-time={v?.cut ?? ""} title={t("replay.time")}>
+          {v ? fillTime(v.cut) : ""}
+        </span>
         <div className="divider" />
         <button
           className="text-button with-icon"

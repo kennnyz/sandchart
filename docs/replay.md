@@ -42,6 +42,7 @@ The replay bar sits centred under the chart, with the results under it:
 | 1x 2x 3x 5x 10x | Speed of Play, in steps per second. |
 | Update interval ▾ | The step: how much each Step reveals (see below). |
 | Jump to real time | Steps to the newest closed bar at once; the replay then has caught up (see below). |
+| Date and time | Where the replay stands: the close of the last revealed bar of the update interval, in UTC. |
 | Buy | Opens a long at the close of the current step. |
 | Sell | Opens a short at the close of the current step. |
 | Close trade | Closes the open trade at the close of the current step. |

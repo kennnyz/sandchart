@@ -1255,6 +1255,15 @@ button:disabled {
   color: var(--muted);
   white-space: nowrap;
 }
+/* Where the replay stands (UTC), in a fixed width so the bar does not shift as it changes. */
+.replay-time {
+  flex: none;
+  width: 17ch;
+  margin: 0 6px;
+  color: var(--fg);
+  text-align: center;
+  white-space: nowrap;
+}
 /* The status ("Real time reached", "End of data", a load failure) keeps its room when empty. */
 .replay-status {
   flex: none;

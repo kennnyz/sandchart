@@ -86,9 +86,16 @@ test("replay_start_step_play_trade_save_open_exit", async ({ page }) => {
   expect(start).toBeLessThan(live);
   await expect(page.getByTestId("legend")).toHaveAttribute("data-time", String(start));
 
+  // The bar shows where the replay stands: the close of the current bar, in UTC.
+  const time = page.getByTestId("replay-time");
+  await expect(time).toHaveAttribute("data-time", String(start + H));
+  const d = new Date(start + H);
+  await expect(time).toContainText(`${d.getUTCFullYear()} ${String(d.getUTCHours()).padStart(2, "0")}:00`);
+
   // Step with the button and with →.
   await page.getByTestId("replay-step").click();
   await expect.poll(() => lastBar(page)).toBe(start + H);
+  await expect(time).toHaveAttribute("data-time", String(start + 2 * H));
   await page.keyboard.press("ArrowRight");
   await expect.poll(() => lastBar(page)).toBe(start + 2 * H);
 
