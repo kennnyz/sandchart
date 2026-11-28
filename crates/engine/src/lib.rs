@@ -32,7 +32,7 @@ pub use indicators::{
     InstanceResult, MAX_INDICATOR_BARS,
 };
 pub use live::{ConnectionState, LiveEvent, LiveHandle};
-pub use replay::{REPLAY_CONTEXT, ReplayState};
+pub use replay::{REBASE_CONTEXT, REPLAY_CONTEXT, ReplayState};
 
 /// Candles per provider request and per chart page.
 pub(crate) const PAGE: u16 = 1000;

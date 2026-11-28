@@ -413,21 +413,24 @@ async fn a_replayed_pair_is_not_evaluated_and_resumes_from_the_last_price() {
         !f.provider.open("BTCUSDT").is_empty()
     })
     .await;
-    // A closed bar to replay from (stored before its event comes), then the baseline.
-    f.provider.opened.lock().unwrap()["BTCUSDT"][0]
-        .1
-        .send(Ok(LiveCandle {
-            candle: bar(open - h, 9_000, 9_100, 9_050),
-            closed: true,
-        }))
-        .unwrap();
+    // Two closed bars to replay from, so the replay has not caught up (stored before
+    // their events come), then the baseline.
+    for back in [2, 1] {
+        f.provider.opened.lock().unwrap()["BTCUSDT"][0]
+            .1
+            .send(Ok(LiveCandle {
+                candle: bar(open - back * h, 9_000, 9_100, 9_050),
+                closed: true,
+            }))
+            .unwrap();
+    }
     let p = &f.provider;
     p.send("BTCUSDT", Timeframe::H1, bar(open, 9_900, 9_950, 9_950));
-    for _ in 0..2 {
+    for _ in 0..3 {
         chart.receiver().recv().await.unwrap();
     }
     f.engine
-        .replay_start(&id("BTCUSDT"), Timeframe::H1, open - h)
+        .replay_start(&id("BTCUSDT"), Timeframe::H1, open - 2 * h)
         .await
         .unwrap();
     p.send("BTCUSDT", Timeframe::H1, bar(open, 9_900, 10_200, 10_100));

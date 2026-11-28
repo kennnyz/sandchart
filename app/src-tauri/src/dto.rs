@@ -95,7 +95,7 @@ impl From<DtoError> for ProblemDto {
 }
 
 /// JavaScript numbers hold integers exactly only up to 2^53 - 1.
-fn safe(v: i64) -> Result<i64, DtoError> {
+pub fn safe(v: i64) -> Result<i64, DtoError> {
     if v.unsigned_abs() > JS_SAFE_MAX.unsigned_abs() {
         Err(DtoError::UnsafeTicks)
     } else {
@@ -626,18 +626,24 @@ pub struct PositionOutcomeDto {
 
 // Replay.
 
-/// The replay session as the UI sees it: the revealed bars from index `from` on (never a
-/// bar after `current`), the trades from index `tradesFrom` on, and the statistics.
+/// The replay session as a chart of `tf` shows it: the revealed bars of `tf` from index
+/// `from` on (never data after the cut), the trades from index `tradesFrom` on, and the
+/// statistics.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReplayStateDto {
     pub instrument: InstrumentDto,
+    /// The step resolution.
+    pub base: &'static str,
     pub tf: &'static str,
     pub start: u32,
     pub current: u32,
-    /// The close time of the current bar; commands carry it as their time.
+    /// The close time of the last revealed base candle; commands carry it as their time.
     pub cut: i64,
     pub at_end: bool,
+    pub caught_up: bool,
+    /// The last bar of `tf` is still forming.
+    pub partial: bool,
     pub from: u32,
     pub bars: ColumnsDto,
     pub trades_from: u32,
@@ -659,11 +665,14 @@ pub fn to_replay_state_dto(s: ReplayState) -> Result<ReplayStateDto, DtoError> {
     Ok(ReplayStateDto {
         bars: ColumnsDto::from_candles(&s.bars)?,
         instrument: s.instrument.into(),
+        base: s.base.code(),
         tf: s.tf.code(),
         start: s.start,
         current: s.current,
         cut: s.cut,
         at_end: s.at_end,
+        caught_up: s.caught_up,
+        partial: s.partial,
         from: s.from,
         trades_from: s.trades_from,
         trades: s.trades,
@@ -1110,11 +1119,14 @@ mod tests {
             simulate(Timeframe::M1, &candles, close(1), close(3), &commands).unwrap();
         let state = ReplayState {
             instrument: page(vec![]).instrument,
+            base: Timeframe::M1,
             tf: Timeframe::M1,
             start: 1,
             current: 3,
             cut: close(3),
             at_end: false,
+            caught_up: false,
+            partial: false,
             from: 3,
             bars: candles[3..].to_vec(),
             trades_from: 0,
@@ -1129,8 +1141,8 @@ mod tests {
                     "id": { "source": "binance", "symbol": "BTCUSDT" },
                     "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5
                 },
-                "tf": "1m", "start": 1, "current": 3, "cut": 1_700_000_240_000i64,
-                "atEnd": false, "from": 3,
+                "base": "1m", "tf": "1m", "start": 1, "current": 3, "cut": 1_700_000_240_000i64,
+                "atEnd": false, "caughtUp": false, "partial": false, "from": 3,
                 "bars": {
                     "time": [1_700_000_180_000i64], "open": [103], "high": [123], "low": [93],
                     "close": [113], "volume": [8]
