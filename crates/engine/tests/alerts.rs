@@ -699,7 +699,9 @@ async fn a_drawing_saved_as_another_kind_takes_its_alerts_with_it() {
         t: 0,
         text: "x".into(),
     };
-    e.save_drawing(drawing("h1", "BTCUSDT", note)).await.unwrap();
+    e.save_drawing(drawing("h1", "BTCUSDT", note))
+        .await
+        .unwrap();
     assert!(e.alerts().await.unwrap().is_empty());
     assert_eq!(
         tokio::time::timeout(Duration::from_secs(5), f.events.recv())
@@ -712,4 +714,42 @@ async fn a_drawing_saved_as_another_kind_takes_its_alerts_with_it() {
         f.provider.open("BTCUSDT").is_empty()
     })
     .await;
+}
+
+/// Runs one SQL batch on the fixture's database from another connection.
+fn sql(dir: &std::path::Path, batch: &str) {
+    let conn = rusqlite::Connection::open(dir.join("sandchart.db")).unwrap();
+    conn.busy_timeout(Duration::from_secs(5)).unwrap();
+    conn.execute_batch(batch).unwrap();
+}
+
+#[tokio::test]
+async fn a_firing_that_cannot_be_stored_is_still_reported_and_stored_on_the_retry() {
+    let mut f = fixture(&["BTCUSDT"]).await;
+    f.engine
+        .set_alert(price_alert("a1", "BTCUSDT", 10_000, Direction::Above))
+        .await
+        .unwrap();
+    until("the alert stream opens", || {
+        !f.provider.open("BTCUSDT").is_empty()
+    })
+    .await;
+    // The write of the firing fails: the table is gone for a moment.
+    sql(f._dir.path(), "ALTER TABLE alerts RENAME TO alerts_away");
+    let p = &f.provider;
+    p.send("BTCUSDT", Timeframe::M1, bar(0, 9_980, 9_990, 9_990));
+    p.send("BTCUSDT", Timeframe::M1, bar(0, 9_980, 10_005, 10_002));
+    let fired = next_fired(&mut f.events).await;
+    assert_eq!(fired.id, "a1");
+    sql(f._dir.path(), "ALTER TABLE alerts_away RENAME TO alerts");
+    let mut stored = Vec::new();
+    for _ in 0..300 {
+        stored = f.engine.alerts().await.unwrap();
+        if stored.iter().all(|a| !a.active) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(stored, vec![fired]);
+    none_fired(&mut f.events).await;
 }

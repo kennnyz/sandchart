@@ -535,16 +535,45 @@ impl Engine {
     }
 }
 
+/// Wait before the one retry of a firing that could not be stored.
+const FIRE_RETRY: Duration = Duration::from_millis(500);
+
 /// Stores alerts that fired in the stream task of their pair, then reports them. Runs as a
 /// task of its own: the stream may be stopped right after (its last alert fired), and that
-/// must not cancel the write.
+/// must not cancel the write. A write that fails is reported all the same (the price did
+/// reach the level) and tried once more; if that fails too, the alert stays active in the
+/// store and the next reload arms it again.
 pub(crate) async fn record_fired(shared: crate::Shared, fired: Vec<Alert>) {
+    let store = |a: &Alert| {
+        let a = a.clone();
+        blocking(&shared.store, move |s| s.fire_alert(&a))
+    };
     for a in fired {
-        let stored = a.clone();
-        match blocking(&shared.store, move |s| s.fire_alert(&stored)).await {
+        match store(&a).await {
             Ok(true) => shared.alerts.send(AlertEvent::Fired(a)),
-            Ok(false) => {} // deleted or fired meanwhile
-            Err(e) => eprintln!("alert {} fired but cannot be stored: {e}", a.id),
+            Ok(false) => {} // deleted, replaced or fired meanwhile
+            Err(e) => {
+                eprintln!(
+                    "alert {} fired but cannot be stored, trying again: {e}",
+                    a.id
+                );
+                shared.alerts.send(AlertEvent::Fired(a.clone()));
+                tokio::time::sleep(FIRE_RETRY).await;
+                if let Err(e) = store(&a).await {
+                    eprintln!("alert {} fired but cannot be stored: {e}", a.id);
+                }
+                // Whatever the store holds now is what must be armed.
+                let (st, hub, now) = (
+                    shared.store.clone(),
+                    shared.alerts.clone(),
+                    (shared.clock)(),
+                );
+                let reloaded = crate::spawn_blocking(move || Ok(hub.reload(&st, now)?)).await;
+                if let Err(e) = reloaded {
+                    eprintln!("cannot re-arm the alerts: {e}");
+                }
+                shared.alerts.send(AlertEvent::Changed);
+            }
         }
     }
 }

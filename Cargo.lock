@@ -4216,6 +4216,7 @@ version = "0.2.0"
 dependencies = [
  "async-trait",
  "futures",
+ "rusqlite",
  "sandchart-core",
  "sandchart-data",
  "sandchart-indicators",

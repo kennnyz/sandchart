@@ -817,7 +817,13 @@ fn a_second_process_never_migrates_an_older_apps_database() {
     Store::open(&path).unwrap().migrate_down_to(3).unwrap();
     let err = Store::open_existing(&path).err().expect("refused");
     assert!(
-        matches!(err, StoreError::SchemaTooOld { found: 3, supported: 4 }),
+        matches!(
+            err,
+            StoreError::SchemaTooOld {
+                found: 3,
+                supported: 4
+            }
+        ),
         "{err:?}"
     );
     assert_contains_text(&err.to_string(), "update the Sandchart app first");
@@ -860,14 +866,21 @@ fn a_line_alert_needs_an_hline_or_trend_drawing_of_its_pair() {
     let mut store = Store::open_in_memory().unwrap();
     store.upsert_drawing(&drawing("t", "BTCUSDT", 0)).unwrap();
     store
-        .upsert_drawing(&with_body(drawing("h", "BTCUSDT", 0), DrawingBody::Hline { p: 5 }))
+        .upsert_drawing(&with_body(
+            drawing("h", "BTCUSDT", 0),
+            DrawingBody::Hline { p: 5 },
+        ))
         .unwrap();
     store
         .upsert_drawing(&with_body(drawing("r", "BTCUSDT", 0), rect()))
         .unwrap();
     store.upsert_drawing(&drawing("e", "ETHUSDT", 0)).unwrap();
-    store.upsert_alert(&alert("a1", "BTCUSDT", on_drawing("t"))).unwrap();
-    store.upsert_alert(&alert("a2", "BTCUSDT", on_drawing("h"))).unwrap();
+    store
+        .upsert_alert(&alert("a1", "BTCUSDT", on_drawing("t")))
+        .unwrap();
+    store
+        .upsert_alert(&alert("a2", "BTCUSDT", on_drawing("h")))
+        .unwrap();
     for (drawing_id, want) in [
         ("none", "drawing \"none\" does not exist"),
         ("e", "drawing \"e\" is on another pair"),
@@ -889,10 +902,15 @@ fn a_drawing_that_stops_being_a_line_or_moves_pair_loses_its_alerts() {
         store.upsert_drawing(&drawing(d, "BTCUSDT", 0)).unwrap();
     }
     for (a, d) in [("a1", "d1"), ("a2", "d2"), ("a3", "d3")] {
-        store.upsert_alert(&alert(a, "BTCUSDT", on_drawing(d))).unwrap();
+        store
+            .upsert_alert(&alert(a, "BTCUSDT", on_drawing(d)))
+            .unwrap();
     }
     // Moved or turned into an hline: still a line on the pair, the alerts stay.
-    assert_eq!(store.upsert_drawing(&drawing("d1", "BTCUSDT", 4)).unwrap(), 0);
+    assert_eq!(
+        store.upsert_drawing(&drawing("d1", "BTCUSDT", 4)).unwrap(),
+        0
+    );
     let hline = with_body(drawing("d1", "BTCUSDT", 0), DrawingBody::Hline { p: 7 });
     assert_eq!(store.upsert_drawing(&hline).unwrap(), 0);
     // A rectangle now, and on another pair: their alerts go in the same write.
@@ -902,7 +920,10 @@ fn a_drawing_that_stops_being_a_line_or_moves_pair_loses_its_alerts() {
             .unwrap(),
         1
     );
-    assert_eq!(store.upsert_drawing(&drawing("d3", "ETHUSDT", 0)).unwrap(), 1);
+    assert_eq!(
+        store.upsert_drawing(&drawing("d3", "ETHUSDT", 0)).unwrap(),
+        1
+    );
     assert_eq!(alert_ids(&store), ["a1"]);
 }
 
@@ -937,6 +958,9 @@ fn two_processes_racing_on_a_drawing_and_its_alert_leave_no_orphan() {
         let _ = agent.join().unwrap();
         app.join().unwrap();
         let store = Store::open(&path).unwrap();
-        assert!(alert_ids(&store).is_empty(), "round {round}: an orphan alert");
+        assert!(
+            alert_ids(&store).is_empty(),
+            "round {round}: an orphan alert"
+        );
     }
 }
