@@ -35,11 +35,15 @@ export function NoteEditor({ edit, hostWidth, hostHeight, onSave, onCancel, onDe
     setTop(below + h <= hostHeight - 8 ? below : Math.max(8, edit.y - GAP - h));
   }, [edit.y, hostHeight]);
 
+  // On the next frame: the press that placed the note would otherwise move focus back to the page.
   useEffect(() => {
-    const el = area.current;
-    if (!el) return;
-    el.focus();
-    el.setSelectionRange(el.value.length, el.value.length);
+    const id = requestAnimationFrame(() => {
+      const el = area.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    });
+    return () => cancelAnimationFrame(id);
   }, []);
 
   // A press outside closes it without saving.
