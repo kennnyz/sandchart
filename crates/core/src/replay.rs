@@ -1,9 +1,11 @@
 //! Replay: paper trades over historical candles, their results and the `.replay` file.
 //!
-//! A session is candles (context before `start`, then the bars revealed one by one up to
-//! `current`) and the trade commands the user gave. [`simulate`] turns them into trades and
-//! [`Stats`]; nothing else computes results, so a file gives the same numbers everywhere.
-//! See ADR 0005.
+//! A session is base candles (context before the start, then the candles revealed one by
+//! one up to the cut, maybe more after it) and the trade commands the user gave. The cut
+//! is a time: the close time of the last revealed base candle. Commands carry the cut they
+//! were given at, so results depend on the base candles only, never on the timeframe the
+//! chart shows. [`simulate`] turns them into trades and [`Stats`]; nothing else computes
+//! results, so a file gives the same numbers everywhere. See ADR 0005 and ADR 0008.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -14,8 +16,8 @@ use crate::model::{Candle, Instrument, InstrumentId};
 use crate::position::{Side, Status, resolve_iter};
 use crate::timeframe::Timeframe;
 
-/// The file version this code reads and writes.
-pub const VERSION: u32 = 1;
+/// The file version this code writes. Version 1 files are read too.
+pub const VERSION: u32 = 2;
 pub const MAX_CANDLES: usize = 200_000;
 pub const MAX_COMMANDS: usize = 10_000;
 pub const MAX_FILE_BYTES: usize = 32 * 1024 * 1024;
@@ -25,8 +27,9 @@ pub const MAX_SCALE: u8 = 18;
 /// Longest source, symbol, base or quote of a file's instrument.
 pub const MAX_NAME_BYTES: usize = 64;
 
-/// What the user did at a bar. `bar` indexes the session's candles. JSON is
-/// `{ "kind": "open", ... }` with camelCase fields.
+/// What the user did at a cut. `time` is that cut: the close time of the last revealed
+/// base candle when the command was given. JSON is `{ "kind": "open", ... }` with camelCase
+/// fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
     tag = "kind",
@@ -35,29 +38,31 @@ pub const MAX_NAME_BYTES: usize = 64;
     deny_unknown_fields
 )]
 pub enum Command {
-    /// A market trade, filled at the close of `bar`.
+    /// A market trade, filled at the close of the base candle that closes at `time`.
     Open {
-        bar: u32,
+        time: i64,
         side: Side,
         stop: i64,
         take: i64,
     },
-    /// New stop and/or take, in force from the bar after `bar`.
+    /// New stop and/or take, in force from the base candle after `time`.
     Edit {
-        bar: u32,
+        time: i64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         stop: Option<i64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         take: Option<i64>,
     },
-    /// Closes the open trade at the close of `bar`.
-    Close { bar: u32 },
+    /// Closes the open trade at the close of the base candle that closes at `time`.
+    Close { time: i64 },
 }
 
 impl Command {
-    pub fn bar(&self) -> u32 {
+    pub fn time(&self) -> i64 {
         match *self {
-            Command::Open { bar, .. } | Command::Edit { bar, .. } | Command::Close { bar } => bar,
+            Command::Open { time, .. } | Command::Edit { time, .. } | Command::Close { time } => {
+                time
+            }
         }
     }
 }
@@ -68,17 +73,17 @@ pub enum ExitReason {
     Take,
     Stop,
     Manual,
-    /// Still open at the current bar.
+    /// Still open at the cut.
     Open,
 }
 
-/// One trade. Prices are ticks. An open trade has no exit and its `r` is marked to the
-/// close of the current bar.
+/// One trade. Prices are ticks; times are the open times of the base candles it filled on,
+/// so a chart of any timeframe puts them in the bar that contains them. An open trade has
+/// no exit and its `r` is marked to the close of the base candle at the cut.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Trade {
     pub side: Side,
-    pub entry_bar: u32,
     pub entry_time: i64,
     pub entry_price: i64,
     /// The stop at entry; R is measured against it.
@@ -86,11 +91,10 @@ pub struct Trade {
     /// The levels in force at the exit (or now, while open).
     pub stop: i64,
     pub take: i64,
-    pub exit_bar: Option<u32>,
     pub exit_time: Option<i64>,
     pub exit_price: Option<i64>,
     pub reason: ExitReason,
-    /// The exit bar touched both stop and take; it counts as a stop.
+    /// The exit candle touched both stop and take; it counts as a stop.
     pub ambiguous: bool,
     /// (exit - entry) / (entry - initial stop); the same formula holds for shorts.
     pub r: f64,
@@ -123,14 +127,29 @@ pub struct Simulation {
     pub stats: Stats,
 }
 
+/// The base candles revealed at `cut`: those that close at or before it.
+pub fn revealed(base: Timeframe, candles: &[Candle], cut: i64) -> &[Candle] {
+    &candles[..candles.partition_point(|c| base.close_time(c.open_time) <= cut)]
+}
+
+/// Index of the base candle that closes exactly at `t`.
+fn closing_at(base: Timeframe, candles: &[Candle], t: i64) -> Option<usize> {
+    let i = candles.partition_point(|c| base.close_time(c.open_time) < t);
+    candles
+        .get(i)
+        .filter(|c| base.close_time(c.open_time) == t)
+        .map(|_| i)
+}
+
 struct Running {
     side: Side,
-    entry_bar: u32,
+    /// Index of the candle the trade was filled on.
+    entry: usize,
     entry_price: i64,
     initial_stop: i64,
     stop: i64,
     take: i64,
-    /// The first bar not yet checked for a hit.
+    /// The first candle not yet checked for a hit.
     next: usize,
 }
 
@@ -144,32 +163,38 @@ impl Running {
         (x - e) as f64 / (e - s) as f64
     }
 
+    fn trade(&self, candles: &[Candle], exit: Option<(usize, i64)>, reason: ExitReason) -> Trade {
+        Trade {
+            side: self.side,
+            entry_time: candles[self.entry].open_time,
+            entry_price: self.entry_price,
+            initial_stop: self.initial_stop,
+            stop: self.stop,
+            take: self.take,
+            exit_time: exit.map(|(i, _)| candles[i].open_time),
+            exit_price: exit.map(|(_, p)| p),
+            reason,
+            ambiguous: false,
+            r: 0.0,
+        }
+    }
+
     fn finish(
         &self,
         candles: &[Candle],
-        exit_bar: usize,
+        exit: usize,
         exit_price: i64,
         reason: ExitReason,
         ambiguous: bool,
     ) -> Trade {
         Trade {
-            side: self.side,
-            entry_bar: self.entry_bar,
-            entry_time: candles[self.entry_bar as usize].open_time,
-            entry_price: self.entry_price,
-            initial_stop: self.initial_stop,
-            stop: self.stop,
-            take: self.take,
-            exit_bar: Some(exit_bar as u32),
-            exit_time: Some(candles[exit_bar].open_time),
-            exit_price: Some(exit_price),
-            reason,
             ambiguous,
             r: self.r_at(exit_price),
+            ..self.trade(candles, Some((exit, exit_price)), reason)
         }
     }
 
-    /// Checks bars `next..=to` for a hit with [`resolve_iter`]; returns the closed trade.
+    /// Checks candles `next..=to` for a hit with [`resolve_iter`]; returns the closed trade.
     fn advance(&mut self, candles: &[Candle], to: usize) -> Option<Trade> {
         if self.next > to {
             return None;
@@ -190,9 +215,9 @@ impl Running {
             candles[from..=to].iter().copied(),
         );
         let exit_time = out.exit_time?;
-        let bar = from + candles[from..=to].partition_point(|c| c.open_time < exit_time);
-        // A bar that opens beyond the level (a gap) fills at its open, not at the level.
-        let open = candles[bar].open;
+        let at = from + candles[from..=to].partition_point(|c| c.open_time < exit_time);
+        // A candle that opens beyond the level (a gap) fills at its open, not at the level.
+        let open = candles[at].open;
         let long = self.side == Side::Long;
         let (price, reason) = match out.status {
             Status::Stop if long => (self.stop.min(open), ExitReason::Stop),
@@ -201,7 +226,7 @@ impl Running {
             Status::Take => (self.take.min(open), ExitReason::Take),
             Status::Open => return None,
         };
-        Some(self.finish(candles, bar, price, reason, out.ambiguous))
+        Some(self.finish(candles, at, price, reason, out.ambiguous))
     }
 }
 
@@ -223,27 +248,36 @@ fn check_levels(side: Side, price: i64, stop: i64, take: i64) -> Result<(), Stri
     }
 }
 
-/// Plays `commands` over `candles` (ascending by `open_time`) from bar `start` to bar
-/// `current`. Commands must be in bar order, inside `start..=current`, and valid at the
-/// close of their bar; the first one that is not is reported (numbered from 1).
+/// Plays `commands` over the `base` candles (ascending by `open_time`) from the cut
+/// `start` (when the replay began) to the cut `cut`; candles after the cut are not read.
+/// Both cuts and every command time must be the close time of a candle
+/// ([`Timeframe::close_time`]). Commands must be in time order, inside `start..=cut`, and
+/// valid at the close of their candle; the first one that is not is reported (numbered
+/// from 1).
 ///
-/// Rules (ADR 0005): one trade at a time; open and close fill at the close of their bar;
-/// stop and take are checked from the next bar on, like a position drawing, and fill at
-/// their level, or at the bar's open when it opens beyond the level; an edit applies from
-/// the next bar. Commands at a bar come after that bar's hit check.
+/// Rules (ADR 0005, ADR 0008): one trade at a time; open and close fill at the close of
+/// the candle ending at their time; stop and take are checked on the candles after it,
+/// like a position drawing, and fill at their level, or at the candle's open when it opens
+/// beyond the level; an edit applies from the next candle. Commands at a time come after
+/// that candle's hit check.
 pub fn simulate(
+    base: Timeframe,
     candles: &[Candle],
-    start: u32,
-    current: u32,
+    start: i64,
+    cut: i64,
     commands: &[Command],
 ) -> Result<Simulation, String> {
-    let current_i = current as usize;
-    if start > current || current_i >= candles.len() {
+    if start > cut {
+        return Err(format!("the start {start} is after the cut {cut}"));
+    }
+    if closing_at(base, candles, start).is_none() {
         return Err(format!(
-            "start {start} and current {current} must satisfy start <= current < {} candles",
-            candles.len()
+            "the start {start} is not the close time of a candle"
         ));
     }
+    let Some(cut_i) = closing_at(base, candles, cut) else {
+        return Err(format!("the cut {cut} is not the close time of a candle"));
+    };
     if commands.len() > MAX_COMMANDS {
         return Err(format!(
             "at most {MAX_COMMANDS} commands, not {}",
@@ -252,24 +286,28 @@ pub fn simulate(
     }
     let mut trades = Vec::new();
     let mut open: Option<Running> = None;
-    let mut last_bar = start;
+    let mut last = start;
     for (i, cmd) in commands.iter().enumerate() {
         let n = i + 1;
-        let bar = cmd.bar();
-        if bar < start || bar > current {
+        let t = cmd.time();
+        if t < start || t > cut {
             return Err(format!(
-                "command {n}: bar {bar} is outside the replay ({start}..={current})"
+                "command {n}: time {t} is outside the replay ({start}..={cut})"
             ));
         }
-        if bar < last_bar {
+        if t < last {
             return Err(format!(
-                "command {n}: bar {bar} comes before bar {last_bar} of the previous command"
+                "command {n}: time {t} comes before time {last} of the previous command"
             ));
         }
-        last_bar = bar;
-        let b = bar as usize;
-        if let Some(t) = open.as_mut()
-            && let Some(done) = t.advance(candles, b)
+        last = t;
+        let Some(b) = closing_at(base, candles, t) else {
+            return Err(format!(
+                "command {n}: time {t} is not the close time of a candle"
+            ));
+        };
+        if let Some(r) = open.as_mut()
+            && let Some(done) = r.advance(candles, b)
         {
             trades.push(done);
             open = None;
@@ -285,7 +323,7 @@ pub fn simulate(
                 check_levels(side, close, stop, take).map_err(|e| format!("command {n}: {e}"))?;
                 open = Some(Running {
                     side,
-                    entry_bar: bar,
+                    entry: b,
                     entry_price: close,
                     initial_stop: stop,
                     stop,
@@ -294,7 +332,7 @@ pub fn simulate(
                 });
             }
             Command::Edit { stop, take, .. } => {
-                let Some(t) = open.as_mut() else {
+                let Some(r) = open.as_mut() else {
                     return Err(format!("command {n}: no open trade to edit"));
                 };
                 if stop.is_none() && take.is_none() {
@@ -302,36 +340,25 @@ pub fn simulate(
                         "command {n}: an edit must set the stop or the take"
                     ));
                 }
-                let (s, k) = (stop.unwrap_or(t.stop), take.unwrap_or(t.take));
-                check_levels(t.side, close, s, k).map_err(|e| format!("command {n}: {e}"))?;
-                t.stop = s;
-                t.take = k;
+                let (s, k) = (stop.unwrap_or(r.stop), take.unwrap_or(r.take));
+                check_levels(r.side, close, s, k).map_err(|e| format!("command {n}: {e}"))?;
+                r.stop = s;
+                r.take = k;
             }
             Command::Close { .. } => {
-                let Some(t) = open.take() else {
+                let Some(r) = open.take() else {
                     return Err(format!("command {n}: no open trade to close"));
                 };
-                trades.push(t.finish(candles, b, close, ExitReason::Manual, false));
+                trades.push(r.finish(candles, b, close, ExitReason::Manual, false));
             }
         }
     }
-    if let Some(mut t) = open {
-        match t.advance(candles, current_i) {
+    if let Some(mut r) = open {
+        match r.advance(candles, cut_i) {
             Some(done) => trades.push(done),
             None => trades.push(Trade {
-                side: t.side,
-                entry_bar: t.entry_bar,
-                entry_time: candles[t.entry_bar as usize].open_time,
-                entry_price: t.entry_price,
-                initial_stop: t.initial_stop,
-                stop: t.stop,
-                take: t.take,
-                exit_bar: None,
-                exit_time: None,
-                exit_price: None,
-                reason: ExitReason::Open,
-                ambiguous: false,
-                r: t.r_at(candles[current_i].close),
+                r: r.r_at(candles[cut_i].close),
+                ..r.trade(candles, None, ExitReason::Open)
             }),
         }
     }
@@ -393,13 +420,14 @@ pub fn candle_hash(candles: &[Candle]) -> String {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReplayFile {
     pub instrument: Instrument,
-    pub timeframe: Timeframe,
-    /// Context before `start`, then the bars up to `current`.
+    /// The step resolution: the timeframe of `candles`.
+    pub base: Timeframe,
+    /// Context before the start, the candles up to the cut, and maybe later ones.
     pub candles: Vec<Candle>,
-    /// Index of the first replayed bar.
-    pub start: u32,
-    /// Index of the last revealed bar.
-    pub current: u32,
+    /// The cut when the replay began.
+    pub start: i64,
+    /// The close time of the last revealed candle.
+    pub cut: i64,
     pub commands: Vec<Command>,
 }
 
@@ -426,14 +454,116 @@ struct Body {
     #[allow(dead_code)]
     version: u32,
     instrument: FileInstrument,
-    timeframe: String,
-    start: u32,
-    current: u32,
+    base: String,
+    start: i64,
+    cut: i64,
     sha256: String,
     #[serde(deserialize_with = "capped_commands")]
     commands: Vec<Command>,
     #[serde(deserialize_with = "capped_candles")]
     candles: Vec<[i64; 6]>,
+}
+
+/// A version 1 file: indices into the candles of the chart's timeframe.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BodyV1 {
+    #[allow(dead_code)]
+    version: u32,
+    instrument: FileInstrument,
+    timeframe: String,
+    start: u32,
+    current: u32,
+    sha256: String,
+    #[serde(deserialize_with = "capped_commands_v1")]
+    commands: Vec<CommandV1>,
+    #[serde(deserialize_with = "capped_candles")]
+    candles: Vec<[i64; 6]>,
+}
+
+/// A version 1 command: `bar` indexes the file's candles.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+enum CommandV1 {
+    Open {
+        bar: u32,
+        side: Side,
+        stop: i64,
+        take: i64,
+    },
+    Edit {
+        bar: u32,
+        #[serde(default)]
+        stop: Option<i64>,
+        #[serde(default)]
+        take: Option<i64>,
+    },
+    Close {
+        bar: u32,
+    },
+}
+
+impl CommandV1 {
+    fn bar(&self) -> u32 {
+        match *self {
+            CommandV1::Open { bar, .. }
+            | CommandV1::Edit { bar, .. }
+            | CommandV1::Close { bar } => bar,
+        }
+    }
+
+    fn at(self, time: i64) -> Command {
+        match self {
+            CommandV1::Open {
+                side, stop, take, ..
+            } => Command::Open {
+                time,
+                side,
+                stop,
+                take,
+            },
+            CommandV1::Edit { stop, take, .. } => Command::Edit { time, stop, take },
+            CommandV1::Close { .. } => Command::Close { time },
+        }
+    }
+}
+
+/// A version 1 session in times: each bar index becomes that bar's close time on the
+/// file's timeframe, which is the base. Indices must satisfy the version 1 rules.
+fn from_v1(
+    tf: Timeframe,
+    candles: &[Candle],
+    start: u32,
+    current: u32,
+    commands: &[CommandV1],
+) -> Result<(i64, i64, Vec<Command>), String> {
+    if start > current || current as usize >= candles.len() {
+        return Err(format!(
+            "start {start} and current {current} must satisfy start <= current < {} candles",
+            candles.len()
+        ));
+    }
+    let close = |bar: u32| tf.close_time(candles[bar as usize].open_time);
+    let commands = commands
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let bar = c.bar();
+            if bar < start || bar > current {
+                return Err(format!(
+                    "command {}: bar {bar} is outside the replay ({start}..={current})",
+                    i + 1
+                ));
+            }
+            Ok(c.at(close(bar)))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok((close(start), close(current), commands))
 }
 
 /// A JSON array read into a `Vec` of at most `max` elements: the element after the cap
@@ -480,8 +610,52 @@ fn capped_commands<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Command
     d.deserialize_seq(Capped::new(MAX_COMMANDS, "commands"))
 }
 
+fn capped_commands_v1<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<CommandV1>, D::Error> {
+    d.deserialize_seq(Capped::new(MAX_COMMANDS, "commands"))
+}
+
 fn capped_candles<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<[i64; 6]>, D::Error> {
     d.deserialize_seq(Capped::new(MAX_CANDLES, "candles"))
+}
+
+/// The parts every file version has, checked: instrument, candles and their hash.
+fn checked(
+    instrument: FileInstrument,
+    rows: &[[i64; 6]],
+    sha256: &str,
+) -> Result<(Instrument, Vec<Candle>), String> {
+    check_instrument(&instrument)?;
+    let candles: Vec<Candle> = rows
+        .iter()
+        .map(|&[open_time, open, high, low, close, volume]| Candle {
+            open_time,
+            open,
+            high,
+            low,
+            close,
+            volume,
+        })
+        .collect();
+    check_candles(&candles)?;
+    if candle_hash(&candles) != sha256 {
+        return Err("the candles do not match the file's sha256".into());
+    }
+    let i = instrument;
+    let instrument = Instrument {
+        id: InstrumentId {
+            source: i.source,
+            symbol: i.symbol,
+        },
+        base: i.base,
+        quote: i.quote,
+        price_scale: i.price_scale,
+        qty_scale: i.qty_scale,
+    };
+    Ok((instrument, candles))
+}
+
+fn timeframe(code: &str) -> Result<Timeframe, String> {
+    Timeframe::from_code(code).ok_or_else(|| format!("unknown timeframe {code:?}"))
 }
 
 impl ReplayFile {
@@ -516,22 +690,22 @@ impl ReplayFile {
             .map(|c| {
                 Some(match *c {
                     Command::Open {
-                        bar,
+                        time,
                         side,
                         stop,
                         take,
                     } => Command::Open {
-                        bar,
+                        time,
                         side,
                         stop: px(stop)?,
                         take: px(take)?,
                     },
-                    Command::Edit { bar, stop, take } => Command::Edit {
-                        bar,
+                    Command::Edit { time, stop, take } => Command::Edit {
+                        time,
                         stop: level(stop)?,
                         take: level(take)?,
                     },
-                    Command::Close { bar } => Command::Close { bar },
+                    Command::Close { time } => Command::Close { time },
                 })
             })
             .collect::<Option<Vec<_>>>()?;
@@ -546,8 +720,19 @@ impl ReplayFile {
         })
     }
 
-    /// The file text: JSON with one command and one candle (`[time, open, high, low,
-    /// close, volume]`) per line, so two files diff well.
+    /// [`simulate`] over this file's session.
+    pub fn simulate(&self) -> Result<Simulation, String> {
+        simulate(
+            self.base,
+            &self.candles,
+            self.start,
+            self.cut,
+            &self.commands,
+        )
+    }
+
+    /// The file text, always the current [`VERSION`]: JSON with one command and one candle
+    /// (`[time, open, high, low, close, volume]`) per line, so two files diff well.
     pub fn to_json(&self) -> String {
         let i = &self.instrument;
         let instrument = FileInstrument {
@@ -578,17 +763,19 @@ impl ReplayFile {
                 .collect(),
         );
         format!(
-            "{{\n  \"version\": {VERSION},\n  \"instrument\": {},\n  \"timeframe\": {},\n  \"start\": {},\n  \"current\": {},\n  \"sha256\": \"{}\",\n  \"commands\": {commands},\n  \"candles\": {candles}\n}}\n",
+            "{{\n  \"version\": {VERSION},\n  \"instrument\": {},\n  \"base\": {},\n  \"start\": {},\n  \"cut\": {},\n  \"sha256\": \"{}\",\n  \"commands\": {commands},\n  \"candles\": {candles}\n}}\n",
             line(&instrument),
-            line(&self.timeframe.code()),
+            line(&self.base.code()),
             self.start,
-            self.current,
+            self.cut,
             candle_hash(&self.candles),
         )
     }
 
-    /// Reads a file and checks everything: size, version, limits, candle order and range,
-    /// the hash, and that the commands simulate. Returns the file and its simulation.
+    /// Reads a file of version 1 or 2 and checks everything: size, version, limits, candle
+    /// order and range, the hash, and that the commands simulate. A version 1 file comes
+    /// back in times ([`from_v1`]), so saving it again writes version 2. Returns the file
+    /// and its simulation.
     pub fn from_json(bytes: &[u8]) -> Result<(ReplayFile, Simulation), String> {
         if bytes.len() > MAX_FILE_BYTES {
             return Err(format!(
@@ -601,52 +788,43 @@ impl ReplayFile {
         // refused for its version rather than for a field this version does not know.
         let head: Head =
             serde_json::from_slice(bytes).map_err(|e| format!("not a replay file: {e}"))?;
-        if head.version != VERSION {
-            return Err(format!(
-                "replay file version {} is not supported (this app reads version {VERSION})",
-                head.version
-            ));
-        }
-        let body: Body =
-            serde_json::from_slice(bytes).map_err(|e| format!("not a replay file: {e}"))?;
-        let timeframe = Timeframe::from_code(&body.timeframe)
-            .ok_or_else(|| format!("unknown timeframe {:?}", body.timeframe))?;
-        check_instrument(&body.instrument)?;
-        let candles: Vec<Candle> = body
-            .candles
-            .iter()
-            .map(|&[open_time, open, high, low, close, volume]| Candle {
-                open_time,
-                open,
-                high,
-                low,
-                close,
-                volume,
-            })
-            .collect();
-        check_candles(&candles)?;
-        if candle_hash(&candles) != body.sha256 {
-            return Err("the candles do not match the file's sha256".into());
-        }
-        let sim = simulate(&candles, body.start, body.current, &body.commands)?;
-        let i = body.instrument;
-        let file = ReplayFile {
-            instrument: Instrument {
-                id: InstrumentId {
-                    source: i.source,
-                    symbol: i.symbol,
-                },
-                base: i.base,
-                quote: i.quote,
-                price_scale: i.price_scale,
-                qty_scale: i.qty_scale,
-            },
-            timeframe,
-            candles,
-            start: body.start,
-            current: body.current,
-            commands: body.commands,
+        let not_a_file = |e: serde_json::Error| format!("not a replay file: {e}");
+        let file = match head.version {
+            1 => {
+                let body: BodyV1 = serde_json::from_slice(bytes).map_err(not_a_file)?;
+                let base = timeframe(&body.timeframe)?;
+                let (instrument, candles) = checked(body.instrument, &body.candles, &body.sha256)?;
+                let (start, cut, commands) =
+                    from_v1(base, &candles, body.start, body.current, &body.commands)?;
+                ReplayFile {
+                    instrument,
+                    base,
+                    candles,
+                    start,
+                    cut,
+                    commands,
+                }
+            }
+            VERSION => {
+                let body: Body = serde_json::from_slice(bytes).map_err(not_a_file)?;
+                let base = timeframe(&body.base)?;
+                let (instrument, candles) = checked(body.instrument, &body.candles, &body.sha256)?;
+                ReplayFile {
+                    instrument,
+                    base,
+                    candles,
+                    start: body.start,
+                    cut: body.cut,
+                    commands: body.commands,
+                }
+            }
+            v => {
+                return Err(format!(
+                    "replay file version {v} is not supported (this app reads versions 1 and {VERSION})"
+                ));
+            }
         };
+        let sim = file.simulate()?;
         Ok((file, sim))
     }
 }

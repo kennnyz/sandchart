@@ -1,11 +1,16 @@
 //! The replay session: one at a time, over cached candles held in memory. Only bars up to
 //! the current one ever leave the engine (ADR 0005).
+//!
+//! For now the base timeframe of the session (ADR 0008) is the chart's timeframe: the
+//! session counts bars by index and gives core the cut as a time, the close time of the
+//! current bar.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, MutexGuard, PoisonError};
 
 use sandchart_core::replay::{
-    Command, ExitReason, MAX_CANDLES, ReplayFile, Simulation, Stats, Trade, check_candles, simulate,
+    Command, ExitReason, MAX_CANDLES, ReplayFile, Simulation, Stats, Trade, check_candles,
+    revealed, simulate,
 };
 use sandchart_core::{Candle, Instrument, InstrumentId, Timeframe};
 
@@ -38,6 +43,8 @@ pub struct ReplayState {
     pub tf: Timeframe,
     pub start: u32,
     pub current: u32,
+    /// The cut: the close time of the current bar. Commands carry it as their time.
+    pub cut: i64,
     /// No bar is left to reveal.
     pub at_end: bool,
     /// Index of `bars[0]`.
@@ -76,8 +83,14 @@ fn no_session() -> EngineError {
 }
 
 impl Session {
+    /// The close time of bar `i`: the cut once it is revealed.
+    fn cut_at(&self, i: u32) -> i64 {
+        self.tf.close_time(self.candles[i as usize].open_time)
+    }
+
     fn simulate(&self, commands: &[Command]) -> Result<Simulation, EngineError> {
-        simulate(&self.candles, self.start, self.current, commands).map_err(EngineError::Replay)
+        let (start, cut) = (self.cut_at(self.start), self.cut_at(self.current));
+        simulate(self.tf, &self.candles, start, cut, commands).map_err(EngineError::Replay)
     }
 
     fn state(&mut self, cursor: u32, trades_from: u32) -> Result<ReplayState, EngineError> {
@@ -97,6 +110,7 @@ impl Session {
             tf: self.tf,
             start: self.start,
             current: self.current,
+            cut: self.cut_at(self.current),
             at_end: self.current as usize + 1 >= self.candles.len(),
             from,
             bars: self.candles[from as usize..=self.current as usize].to_vec(),
@@ -208,8 +222,8 @@ impl Engine {
         })
     }
 
-    /// Appends a trade command if the session stays valid with it (bar order, revealed
-    /// bars only, one trade at a time, levels around the close).
+    /// Appends a trade command if the session stays valid with it (time order, the time
+    /// of a revealed bar's close, one trade at a time, levels around the close).
     pub fn replay_command(&self, cmd: Command) -> Result<(), EngineError> {
         self.with_session(|s| {
             let mut next = s.commands.clone();
@@ -239,17 +253,18 @@ impl Engine {
         self.with_session(|s| {
             let file = ReplayFile {
                 instrument: s.instrument.clone(),
-                timeframe: s.tf,
+                base: s.tf,
                 candles: s.candles[..=s.current as usize].to_vec(),
-                start: s.start,
-                current: s.current,
+                start: s.cut_at(s.start),
+                cut: s.cut_at(s.current),
                 commands: s.commands.clone(),
             };
             Ok(file.to_json().into_bytes())
         })
     }
 
-    /// Checks a `.replay` file and opens it as the session, revealed up to its current bar.
+    /// Checks a `.replay` file and opens it as the session, revealed up to its cut; candles
+    /// the file has after the cut can be stepped to.
     /// When the pair is stored, the session takes the stored instrument, and a file at
     /// another tick or lot size is rescaled to it, so drawings and outcomes of the pair
     /// stay at one scale; a file that no longer fits or simulates after rounding is refused.
@@ -264,17 +279,19 @@ impl Engine {
                     .rescaled(ps, qs)
                     .ok_or_else(|| at("a value does not fit".into()))?;
                 check_candles(&file.candles).map_err(at)?;
-                simulate(&file.candles, file.start, file.current, &file.commands).map_err(at)?;
+                file.simulate().map_err(at)?;
             }
             file.instrument = inst;
         }
+        // The file simulated, so both cuts are close times of its candles.
+        let index = |cut: i64| revealed(file.base, &file.candles, cut).len() as u32 - 1;
         let mut session = Session {
             id: next_session_id(),
             instrument: file.instrument,
-            tf: file.timeframe,
+            tf: file.base,
+            start: index(file.start),
+            current: index(file.cut),
             candles: file.candles.into(),
-            start: file.start,
-            current: file.current,
             commands: file.commands,
             sim: None,
         };

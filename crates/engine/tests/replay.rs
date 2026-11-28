@@ -133,16 +133,17 @@ async fn commands_are_checked_against_the_revealed_bars() {
         .replay_start(&id(), Timeframe::H1, T0 + 550 * H)
         .await
         .unwrap();
-    let s = st.start;
-    // The start bar closes at 10 550; the next bars rise by 1 a bar with a ±50 range.
+    // The start bar (550) closes at 10 550; the next bars rise by 1 a bar with a ±50 range.
+    // Commands carry the cut, the close time of the current bar.
+    assert_eq!(st.cut, T0 + 551 * H);
     let open = Command::Open {
-        bar: s,
+        time: st.cut,
         side: Side::Long,
         stop: 10_400,
         take: 10_610,
     };
     let ahead = Command::Open {
-        bar: s + 1,
+        time: st.cut + H,
         side: Side::Long,
         stop: 10_400,
         take: 10_610,
@@ -150,7 +151,12 @@ async fn commands_are_checked_against_the_revealed_bars() {
     let msg = replay_err(engine.replay_command(ahead));
     assert_eq!(
         msg,
-        format!("command 1: bar {} is outside the replay ({s}..={s})", s + 1)
+        format!(
+            "command 1: time {} is outside the replay ({}..={})",
+            st.cut + H,
+            st.cut,
+            st.cut
+        )
     );
     engine.replay_command(open).unwrap();
     let msg = replay_err(engine.replay_command(open));
@@ -159,15 +165,20 @@ async fn commands_are_checked_against_the_revealed_bars() {
     engine.replay_step(5).unwrap();
     let st = engine.replay_state(u32::MAX, 0).unwrap();
     let t = st.trades[0];
-    // Bar s+5 closes at 10 555 with a high of 10 605: still open, marked to the close.
+    // Bar 555 closes at 10 555 with a high of 10 605: still open, marked to the close.
     assert_eq!((t.reason, t.entry_price), (ExitReason::Open, 10_550));
     assert!((t.r - 5.0 / 150.0).abs() < 1e-12);
 
     engine.replay_step(5).unwrap();
-    // Bar s+10 reaches 10 610: the take.
+    // Bar 560 reaches 10 610: the take.
     let t = engine.replay_state(u32::MAX, 0).unwrap().trades[0];
-    assert_eq!((t.reason, t.exit_bar), (ExitReason::Take, Some(s + 10)));
-    let msg = replay_err(engine.replay_command(Command::Close { bar: s + 10 }));
+    assert_eq!(
+        (t.reason, t.exit_time),
+        (ExitReason::Take, Some(bar(560).open_time))
+    );
+    let msg = replay_err(engine.replay_command(Command::Close {
+        time: bar(560).open_time + H,
+    }));
     assert_eq!(msg, "command 2: no open trade to close");
     assert_eq!(engine.replay_state(0, 0).unwrap().stats.count, 1);
 }
@@ -181,7 +192,7 @@ async fn export_holds_no_future_bar_and_opens_to_the_same_state() {
         .unwrap();
     engine
         .replay_command(Command::Open {
-            bar: st.start,
+            time: st.cut,
             side: Side::Short,
             stop: 10_700,
             take: 10_300,
@@ -189,7 +200,9 @@ async fn export_holds_no_future_bar_and_opens_to_the_same_state() {
         .unwrap();
     engine.replay_step(7).unwrap();
     engine
-        .replay_command(Command::Close { bar: st.start + 7 })
+        .replay_command(Command::Close {
+            time: st.cut + 7 * H,
+        })
         .unwrap();
     let before = engine.replay_state(0, 0).unwrap();
     assert_eq!(engine.replay_file_name().unwrap(), "BTCUSDT-1h.replay");
@@ -197,7 +210,7 @@ async fn export_holds_no_future_bar_and_opens_to_the_same_state() {
     let text = String::from_utf8(bytes.clone()).unwrap();
     // Bar 557 is the current one; 558 and later stay in the engine.
     assert!(text.contains(&format!("[{}, ", bar(557).open_time)));
-    assert!(!text.contains(&bar(558).open_time.to_string()));
+    assert!(!text.contains(&format!("[{}, ", bar(558).open_time)));
 
     engine.replay_exit();
     assert!(engine.replay_export().is_err());
@@ -252,12 +265,12 @@ fn file_at(price_scale: u8, n: i64) -> sandchart_core::replay::ReplayFile {
             price_scale,
             qty_scale: 6,
         },
-        timeframe: Timeframe::H1,
+        base: Timeframe::H1,
         candles,
-        start: 0,
-        current: n as u32 - 1,
+        start: T0 + 551 * H,
+        cut: T0 + (550 + n) * H,
         commands: vec![Command::Open {
-            bar: 0,
+            time: T0 + 551 * H,
             side: Side::Long,
             stop: 10_400 * k,
             take: 10_610 * k,
@@ -312,19 +325,18 @@ async fn state_sends_closed_trades_from_the_index_given_and_always_the_open_one(
         .replay_start(&id(), Timeframe::H1, T0 + 550 * H)
         .await
         .unwrap();
-    let s = st.start;
-    let open = |bar| Command::Open {
-        bar,
+    let open = |time| Command::Open {
+        time,
         side: Side::Long,
         stop: 10_000,
         take: 11_000,
     };
-    engine.replay_command(open(s)).unwrap();
+    engine.replay_command(open(st.cut)).unwrap();
     engine.replay_step(1).unwrap();
     engine
-        .replay_command(Command::Close { bar: s + 1 })
+        .replay_command(Command::Close { time: st.cut + H })
         .unwrap();
-    engine.replay_command(open(s + 1)).unwrap();
+    engine.replay_command(open(st.cut + H)).unwrap();
     let all = engine.replay_state(0, 0).unwrap();
     assert_eq!((all.trades_from, all.trades.len()), (0, 2));
     // The UI has the closed trade: only the open one comes.

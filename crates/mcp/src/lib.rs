@@ -596,15 +596,12 @@ impl Sandchart {
         .await
         .map_err(err)??;
         let scale = file.instrument.price_scale;
-        let time = |i: u32| file.candles.get(i as usize).map(|c| c.open_time);
         ok(json!({
             "instrument": wire::instrument(&file.instrument),
-            "timeframe": file.timeframe.code(),
+            "base": file.base.code(),
             "candles": file.candles.len(),
             "start": file.start,
-            "startTime": time(file.start),
-            "current": file.current,
-            "currentTime": time(file.current),
+            "cut": file.cut,
             "trades": sim.trades.iter().map(|t| wire::trade(t, scale)).collect::<Vec<_>>(),
             "stats": sim.stats,
         }))

@@ -1,9 +1,10 @@
 //! `simulate` and the replay file against the hand-written cases in `fixtures/replay.json`,
 //! which the UI mock's TEST-ONLY copy is checked against too.
 
+use sandchart_core::aggregate::aggregate;
 use sandchart_core::replay::{
     Command, MAX_CANDLES, MAX_COMMANDS, MAX_FILE_BYTES, ReplayFile, Simulation, Stats, Trade,
-    candle_hash, simulate,
+    candle_hash, revealed, simulate,
 };
 use sandchart_core::{Candle, Instrument, InstrumentId, Side, Timeframe};
 use serde::Deserialize;
@@ -11,9 +12,10 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 struct Case {
     name: String,
+    base: String,
     candles: Vec<[i64; 5]>,
-    start: u32,
-    current: u32,
+    start: i64,
+    cut: i64,
     commands: Vec<Command>,
     expect: Option<Simulation>,
     error: Option<String>,
@@ -28,9 +30,29 @@ struct FileCase {
 }
 
 #[derive(Deserialize)]
+struct Chart {
+    cut: i64,
+    candles: Vec<[i64; 6]>,
+}
+
+#[derive(Deserialize)]
+struct View {
+    name: String,
+    base: String,
+    tf: String,
+    candles: Vec<[i64; 6]>,
+    start: i64,
+    cut: i64,
+    commands: Vec<Command>,
+    charts: Vec<Chart>,
+    expect: Simulation,
+}
+
+#[derive(Deserialize)]
 struct Fixture {
     cases: Vec<Case>,
     files: Vec<FileCase>,
+    views: Vec<View>,
 }
 
 fn fixture() -> Fixture {
@@ -48,6 +70,23 @@ fn candles(rows: &[[i64; 5]]) -> Vec<Candle> {
             volume: 0,
         })
         .collect()
+}
+
+fn rows6(rows: &[[i64; 6]]) -> Vec<Candle> {
+    rows.iter()
+        .map(|&[open_time, open, high, low, close, volume]| Candle {
+            open_time,
+            open,
+            high,
+            low,
+            close,
+            volume,
+        })
+        .collect()
+}
+
+fn tf(code: &str) -> Timeframe {
+    Timeframe::from_code(code).unwrap()
 }
 
 fn close(a: f64, b: f64) -> bool {
@@ -102,7 +141,13 @@ fn simulate_matches_the_fixture() {
     let cases = fixture().cases;
     assert!(cases.len() >= 15);
     for c in &cases {
-        let got = simulate(&candles(&c.candles), c.start, c.current, &c.commands);
+        let got = simulate(
+            tf(&c.base),
+            &candles(&c.candles),
+            c.start,
+            c.cut,
+            &c.commands,
+        );
         match (&c.expect, &c.error) {
             (Some(want), None) => assert_sim(&got.unwrap(), want, &c.name),
             (None, Some(msg)) => assert_eq!(got.unwrap_err(), *msg, "{}", c.name),
@@ -128,10 +173,52 @@ fn files_match_the_fixture() {
     }
 }
 
+/// A command is a time, so the chart's timeframe cannot change a result; the chart at each
+/// cut is the revealed base candles aggregated, its last bar the forming one.
+#[test]
+fn views_aggregate_the_revealed_candles_and_leave_results_alone() {
+    for v in &fixture().views {
+        let (base, candles) = (tf(&v.base), rows6(&v.candles));
+        for c in &v.charts {
+            let shown = aggregate(revealed(base, &candles, c.cut), base, tf(&v.tf)).unwrap();
+            assert_eq!(shown, rows6(&c.candles), "{}: chart at {}", v.name, c.cut);
+        }
+        let got = simulate(base, &candles, v.start, v.cut, &v.commands).unwrap();
+        assert_sim(&got, &v.expect, &v.name);
+        // The entry is the close of the forming bar shown when the command was given.
+        let entry_cut = v.commands[0].time();
+        let chart = v.charts.iter().find(|c| c.cut == entry_cut).unwrap();
+        assert_eq!(chart.candles.last().unwrap()[4], got.trades[0].entry_price);
+    }
+}
+
+#[test]
+fn revealed_candles_close_at_or_before_the_cut() {
+    let candles: Vec<Candle> = (0..4i64)
+        .map(|i| Candle {
+            open_time: i * 3_600_000,
+            open: 1,
+            high: 1,
+            low: 1,
+            close: 1,
+            volume: 0,
+        })
+        .collect();
+    let h = Timeframe::H1;
+    assert_eq!(revealed(h, &candles, 0).len(), 0);
+    assert_eq!(revealed(h, &candles, 3_599_999).len(), 0);
+    assert_eq!(revealed(h, &candles, 3_600_000).len(), 1);
+    assert_eq!(revealed(h, &candles, 7_200_001).len(), 2);
+    assert_eq!(revealed(h, &candles, i64::MAX).len(), 4);
+}
+
+const H: i64 = 3_600_000;
+const T0: i64 = 1_700_000_000_000 - 1_700_000_000_000 % H;
+
 fn session(n: usize) -> ReplayFile {
     let candles = (0..n as i64)
         .map(|i| Candle {
-            open_time: 1_700_000_000_000 + i * 3_600_000,
+            open_time: T0 + i * H,
             open: 10_000 + i,
             high: 10_050 + i,
             low: 9_950 + i,
@@ -150,19 +237,19 @@ fn session(n: usize) -> ReplayFile {
             price_scale: 2,
             qty_scale: 5,
         },
-        timeframe: Timeframe::H4,
+        base: Timeframe::H1,
         candles,
-        start: 2,
-        current: n as u32 - 1,
+        start: T0 + 3 * H,
+        cut: T0 + n as i64 * H,
         commands: vec![
             Command::Open {
-                bar: 2,
+                time: T0 + 3 * H,
                 side: Side::Long,
                 stop: 9_900,
                 take: 10_300,
             },
             Command::Edit {
-                bar: 3,
+                time: T0 + 4 * H,
                 stop: Some(9_950),
                 take: None,
             },
@@ -177,9 +264,18 @@ fn a_file_round_trips_with_one_candle_per_line() {
     let (back, sim) = ReplayFile::from_json(text.as_bytes()).unwrap();
     assert_eq!(back, file);
     assert_eq!(sim.trades.len(), 1);
-    assert!(text.contains("\"timeframe\": \"4h\""), "{text}");
-    assert!(text.contains("\n    [1700000000000, 10000, 10050, 9950, 10001, 7],\n"));
-    assert!(text.contains("\n    {\"kind\":\"edit\",\"bar\":3,\"stop\":9950}\n  ],\n"));
+    assert!(text.starts_with("{\n  \"version\": 2,\n"), "{text}");
+    assert!(text.contains("\n  \"base\": \"1h\",\n"), "{text}");
+    assert!(
+        text.contains(&format!("\n  \"cut\": {},\n", T0 + 5 * H)),
+        "{text}"
+    );
+    assert!(text.contains(&format!("\n    [{T0}, 10000, 10050, 9950, 10001, 7],\n")));
+    let edit = format!(
+        "{{\"kind\":\"edit\",\"time\":{},\"stop\":9950}}",
+        T0 + 4 * H
+    );
+    assert!(text.contains(&format!("\n    {edit}\n  ],\n")), "{text}");
     // Seven header lines, the commands and the candles with their brackets, the closing brace.
     assert_eq!(text.lines().count(), 7 + (2 + 2) + (5 + 2) + 1);
 }
@@ -214,7 +310,7 @@ fn files_over_the_limits_are_refused() {
     );
 
     let mut many = session(3);
-    many.commands = vec![Command::Close { bar: 2 }; MAX_COMMANDS + 1];
+    many.commands = vec![Command::Close { time: T0 + 3 * H }; MAX_COMMANDS + 1];
     let err = ReplayFile::from_json(many.to_json().as_bytes()).unwrap_err();
     let want = format!("not a replay file: at most {MAX_COMMANDS} commands");
     assert!(err.starts_with(&want), "{err}");
@@ -229,18 +325,21 @@ fn files_over_the_limits_are_refused() {
 fn broken_files_are_refused_with_a_reason() {
     let text = session(4).to_json();
     let cases = [
-        (text.replace("\"4h\"", "\"7h\""), "unknown timeframe \"7h\""),
+        (text.replace("\"1h\"", "\"7h\""), "unknown timeframe \"7h\""),
         (
-            text.replace("\"current\": 3", "\"current\": 4"),
-            "start 2 and current 4 must satisfy start <= current < 4 candles",
+            text.replace(
+                &format!("\"cut\": {}", T0 + 4 * H),
+                &format!("\"cut\": {}", T0 + 5 * H),
+            ),
+            &format!("the cut {} is not the close time of a candle", T0 + 5 * H),
         ),
         (
-            text.replace("\"version\": 1,", "\"version\": 1, \"extra\": 0,"),
+            text.replace("\"version\": 2,", "\"version\": 2, \"extra\": 0,"),
             "not a replay file: unknown field `extra`",
         ),
         ("\"x\"".into(), "not a replay file: invalid type"),
     ];
-    for (bad, want) in cases {
+    for (bad, want) in &cases {
         let err = ReplayFile::from_json(bad.as_bytes()).unwrap_err();
         assert!(
             err.starts_with(want),
@@ -263,7 +362,7 @@ fn broken_files_are_refused_with_a_reason() {
 }
 
 #[test]
-fn rescaled_moves_prices_volumes_and_levels_but_no_time_or_bar() {
+fn rescaled_moves_prices_volumes_and_levels_but_no_time() {
     let file = session(4);
     let down = file.rescaled(1, 4).unwrap();
     assert_eq!(
@@ -278,13 +377,13 @@ fn rescaled_moves_prices_volumes_and_levels_but_no_time_or_bar() {
         down.commands,
         vec![
             Command::Open {
-                bar: 2,
+                time: T0 + 3 * H,
                 side: Side::Long,
                 stop: 990,
                 take: 1_030,
             },
             Command::Edit {
-                bar: 3,
+                time: T0 + 4 * H,
                 stop: Some(995),
                 take: None,
             },
@@ -292,4 +391,84 @@ fn rescaled_moves_prices_volumes_and_levels_but_no_time_or_bar() {
     );
     assert_eq!(file.rescaled(2, 5).unwrap(), file);
     assert_eq!(file.rescaled(19, 5), None);
+}
+
+/// A version 1 file opens in times on its timeframe and saves as version 2 with the same
+/// trades; the version 2 text opens to the same session.
+#[test]
+fn a_version_1_file_saves_as_version_2_with_the_same_trades() {
+    let rows: Vec<String> = (0..5i64)
+        .map(|i| {
+            format!(
+                "[{}, {}, {}, {}, {}, 7]",
+                T0 + i * H,
+                100,
+                102 + 5 * i,
+                98,
+                100 + i
+            )
+        })
+        .collect();
+    let candles: Vec<[i64; 6]> = (0..5i64)
+        .map(|i| [T0 + i * H, 100, 102 + 5 * i, 98, 100 + i, 7])
+        .collect();
+    let sha = candle_hash(&rows6(&candles));
+    let v1 = format!(
+        "{{\"version\": 1, \"instrument\": {{\"source\": \"binance\", \"symbol\": \"BTCUSDT\", \"base\": \"BTC\", \"quote\": \"USDT\", \"priceScale\": 2, \"qtyScale\": 5}}, \"timeframe\": \"1h\", \"start\": 1, \"current\": 4, \"sha256\": \"{sha}\", \"commands\": [{{\"kind\": \"open\", \"bar\": 1, \"side\": \"long\", \"stop\": 90, \"take\": 115}}, {{\"kind\": \"edit\", \"bar\": 2, \"take\": 112}}], \"candles\": [{}]}}",
+        rows.join(", ")
+    );
+    let (file, sim) = ReplayFile::from_json(v1.as_bytes()).unwrap();
+    assert_eq!(
+        (file.base, file.start, file.cut),
+        (Timeframe::H1, T0 + 2 * H, T0 + 5 * H)
+    );
+    assert_eq!(
+        file.commands[1],
+        Command::Edit {
+            time: T0 + 3 * H,
+            stop: None,
+            take: Some(112)
+        }
+    );
+    // Long at 101 (bar 1); bar 2 reaches 112 but the edit applies from bar 3, which does.
+    assert_eq!(sim.trades.len(), 1);
+    let t = sim.trades[0];
+    assert_eq!(
+        (t.entry_time, t.entry_price, t.exit_time, t.exit_price),
+        (T0 + H, 101, Some(T0 + 3 * H), Some(112))
+    );
+    let text = file.to_json();
+    assert!(text.starts_with("{\n  \"version\": 2,\n"), "{text}");
+    let (again, sim2) = ReplayFile::from_json(text.as_bytes()).unwrap();
+    assert_eq!(again, file);
+    assert_eq!(sim2, sim);
+}
+
+#[test]
+fn version_1_indices_are_checked_with_the_version_1_rules() {
+    let file = session(4);
+    let rows: Vec<[i64; 6]> = file
+        .candles
+        .iter()
+        .map(|c| [c.open_time, c.open, c.high, c.low, c.close, c.volume])
+        .collect();
+    let v1 = |start: u32, current: u32, bar: u32| {
+        serde_json::json!({
+            "version": 1,
+            "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
+            "timeframe": "1h", "start": start, "current": current, "sha256": candle_hash(&file.candles),
+            "commands": [{"kind": "close", "bar": bar}], "candles": rows,
+        })
+        .to_string()
+    };
+    let err = |s: String| ReplayFile::from_json(s.as_bytes()).unwrap_err();
+    assert_eq!(
+        err(v1(1, 4, 1)),
+        "start 1 and current 4 must satisfy start <= current < 4 candles"
+    );
+    assert_eq!(
+        err(v1(1, 2, 3)),
+        "command 1: bar 3 is outside the replay (1..=2)"
+    );
+    assert_eq!(err(v1(1, 2, 2)), "command 1: no open trade to close");
 }

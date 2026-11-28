@@ -635,6 +635,8 @@ pub struct ReplayStateDto {
     pub tf: &'static str,
     pub start: u32,
     pub current: u32,
+    /// The close time of the current bar; commands carry it as their time.
+    pub cut: i64,
     pub at_end: bool,
     pub from: u32,
     pub bars: ColumnsDto,
@@ -644,6 +646,7 @@ pub struct ReplayStateDto {
 }
 
 pub fn to_replay_state_dto(s: ReplayState) -> Result<ReplayStateDto, DtoError> {
+    safe(s.cut)?;
     for t in &s.trades {
         for v in [t.entry_time, t.entry_price, t.initial_stop, t.stop, t.take]
             .into_iter()
@@ -659,6 +662,7 @@ pub fn to_replay_state_dto(s: ReplayState) -> Result<ReplayStateDto, DtoError> {
         tf: s.tf.code(),
         start: s.start,
         current: s.current,
+        cut: s.cut,
         at_end: s.at_end,
         from: s.from,
         trades_from: s.trades_from,
@@ -1095,18 +1099,21 @@ mod tests {
         use sandchart_core::replay::{Command, Simulation, simulate};
         use sandchart_core::{Side, Timeframe};
         let candles: Vec<Candle> = (0..4).map(|i| candle(i, 110 + i)).collect();
+        let close = |i: usize| candles[i].open_time + 60_000;
         let commands = vec![Command::Open {
-            bar: 1,
+            time: close(1),
             side: Side::Long,
             stop: 90,
             take: 140,
         }];
-        let simulation: Simulation = simulate(&candles, 1, 3, &commands).unwrap();
+        let simulation: Simulation =
+            simulate(Timeframe::M1, &candles, close(1), close(3), &commands).unwrap();
         let state = ReplayState {
             instrument: page(vec![]).instrument,
-            tf: Timeframe::H1,
+            tf: Timeframe::M1,
             start: 1,
             current: 3,
+            cut: close(3),
             at_end: false,
             from: 3,
             bars: candles[3..].to_vec(),
@@ -1122,16 +1129,17 @@ mod tests {
                     "id": { "source": "binance", "symbol": "BTCUSDT" },
                     "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5
                 },
-                "tf": "1h", "start": 1, "current": 3, "atEnd": false, "from": 3,
+                "tf": "1m", "start": 1, "current": 3, "cut": 1_700_000_240_000i64,
+                "atEnd": false, "from": 3,
                 "bars": {
                     "time": [1_700_000_180_000i64], "open": [103], "high": [123], "low": [93],
                     "close": [113], "volume": [8]
                 },
                 "tradesFrom": 0,
                 "trades": [{
-                    "side": "long", "entryBar": 1, "entryTime": 1_700_000_060_000i64,
+                    "side": "long", "entryTime": 1_700_000_060_000i64,
                     "entryPrice": 111, "initialStop": 90, "stop": 90, "take": 140,
-                    "exitBar": null, "exitTime": null, "exitPrice": null, "reason": "open",
+                    "exitTime": null, "exitPrice": null, "reason": "open",
                     "ambiguous": false, "r": 2.0 / 21.0
                 }],
                 "stats": {
