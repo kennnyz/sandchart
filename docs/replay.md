@@ -52,7 +52,7 @@ Opening another pair or timeframe ends the replay too.
 
 | Keys | What |
 | --- | --- |
-| → | Step |
+| → | Step; held down, it steps as fast as the bars come |
 | Space | Play or pause |
 | Shift+B | Buy |
 | Shift+S | Sell |

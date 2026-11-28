@@ -353,6 +353,19 @@ describe("replay controller", () => {
     expect(c.view!.trades).toEqual((await state(0, 0)).trades);
   });
 
+  it("a held → queues no step while one is on its way", async () => {
+    const { c, backend } = await started();
+    const sent = vi.spyOn(backend, "replayStep");
+    // A press, then key repeats faster than the engine answers.
+    const presses = [c.step(), ...Array.from({ length: 20 }, () => c.step(true))];
+    await Promise.all(presses);
+    expect(sent).toHaveBeenCalledTimes(1);
+    expect(c.view!.current).toBe(501);
+    // Once it is done, the next repeat steps again.
+    await c.step(true);
+    expect(c.view!.current).toBe(502);
+  });
+
   it("runs calls one after another, in the order given", async () => {
     const { c, shown } = await started();
     await Promise.all([c.step(), c.buy(), c.step(), c.step()]);

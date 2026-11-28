@@ -131,6 +131,8 @@ export class ReplayController {
   private generation = 0;
   /** A start is in flight; another click starts nothing more. */
   private starting = false;
+  /** Steps queued or running. */
+  private steps = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
@@ -201,13 +203,21 @@ export class ReplayController {
     }, () => this.set({ phase: "off" }));
   }
 
-  /** Reveals the next bar. */
-  step(): Promise<void> {
-    if (this.phase !== "on" || this.view?.atEnd) return Promise.resolve();
+  /**
+   * Reveals the next bar. `held` (a key repeat of →) steps only when no step is on its way, so
+   * holding the key runs at the engine's pace instead of queueing steps it cannot keep up with.
+   */
+  step(held = false): Promise<void> {
+    if (this.phase !== "on" || this.view?.atEnd || (held && this.steps > 0)) return Promise.resolve();
+    this.steps++;
     return this.run(async () => {
-      if (this.phase !== "on") return;
-      await this.backend.replayStep(1);
-      await this.sync();
+      try {
+        if (this.phase !== "on") return;
+        await this.backend.replayStep(1);
+        await this.sync();
+      } finally {
+        this.steps--;
+      }
     });
   }
 

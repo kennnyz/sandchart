@@ -39,7 +39,7 @@ export function ReplayBar({ replay: r, range, onDate }: ReplayBarProps) {
       const action = replayKeyAction(e, r.phase);
       if (!action) return;
       e.preventDefault();
-      if (action === "step") void r.step();
+      if (action === "step") void r.step(e.repeat);
       else if (action === "play") r.togglePlay();
       else if (action === "buy") void r.buy();
       else if (action === "sell") void r.sell();
