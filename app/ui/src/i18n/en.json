@@ -175,6 +175,7 @@
   "replay.exit": "Exit replay",
   "replay.shortcut": "{name} ({shortcut})",
   "replay.end": "End of data",
+  "replay.newerFailed": "Newer bars could not be loaded; the next step tries again",
   "replay.error": "Replay: {error}",
   "replay.tooLarge": "The file is larger than {mib} MiB.",
   "replay.stats": "Replay results",

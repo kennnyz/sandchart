@@ -646,6 +646,8 @@ pub struct ReplayStateDto {
     pub caught_up_at: Option<i64>,
     /// The last bar of `tf` is still forming.
     pub partial: bool,
+    /// Why newer candles could not be loaded at the last step, null once a load worked.
+    pub newer_error: Option<String>,
     pub from: u32,
     pub bars: ColumnsDto,
     pub trades_from: u32,
@@ -679,6 +681,7 @@ pub fn to_replay_state_dto(s: ReplayState) -> Result<ReplayStateDto, DtoError> {
         caught_up: s.caught_up,
         caught_up_at: s.caught_up_at,
         partial: s.partial,
+        newer_error: s.newer_error,
         from: s.from,
         trades_from: s.trades_from,
         trades: s.trades,
@@ -1136,6 +1139,7 @@ mod tests {
             caught_up: true,
             caught_up_at: Some(close(3)),
             partial: false,
+            newer_error: Some("the newest 1m candles could not be loaded".into()),
             from: 3,
             bars: candles[3..].to_vec(),
             trades_from: 0,
@@ -1152,7 +1156,8 @@ mod tests {
                 },
                 "base": "1m", "tf": "1m", "start": 1, "current": 3, "cut": 1_700_000_240_000i64,
                 "atEnd": false, "caughtUp": true, "caughtUpAt": 1_700_000_240_000i64,
-                "partial": false, "from": 3,
+                "partial": false,
+                "newerError": "the newest 1m candles could not be loaded", "from": 3,
                 "bars": {
                     "time": [1_700_000_180_000i64], "open": [103], "high": [123], "low": [93],
                     "close": [113], "volume": [8]

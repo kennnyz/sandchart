@@ -888,6 +888,7 @@ export function createMockBackend(opts: MockOptions): MockBackend {
       caughtUp: caughtUpLive(s),
       caughtUpAt: s.caughtUpAt,
       partial: tf !== s.base && last !== undefined && mockCloseTime(tf, last.time) > cut,
+      newerError: null,
       from,
       bars,
       tradesFrom: tfrom,

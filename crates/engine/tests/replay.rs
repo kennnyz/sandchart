@@ -3,7 +3,7 @@
 //! data, export and open, exit.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -652,6 +652,8 @@ struct FakeProvider {
     series: Mutex<HashMap<Timeframe, Vec<Candle>>>,
     history_calls: Mutex<Vec<(Timeframe, Option<i64>)>>,
     streams: Mutex<Vec<(Timeframe, mpsc::UnboundedSender<LiveItem>)>>,
+    /// History requests fail while set.
+    down: AtomicBool,
 }
 
 impl FakeProvider {
@@ -699,6 +701,9 @@ impl Provider for FakeProvider {
         limit: u16,
     ) -> Result<Vec<Candle>, ProviderError> {
         self.history_calls.lock().unwrap().push((tf, end_before));
+        if self.down.load(Ordering::Relaxed) {
+            return Err(ProviderError::Network("connection refused".into()));
+        }
         let series = self.series.lock().unwrap();
         let all = series.get(&tf).cloned().unwrap_or_default();
         let end = end_before.unwrap_or(i64::MAX);
@@ -894,4 +899,45 @@ async fn a_start_at_the_newest_candle_has_caught_up_and_a_re_base_down_stays_fin
     );
     assert_eq!(*st.bars.last().unwrap(), quarters(BARS - 1)[3]);
     assert!(replay_err(f.engine.replay_step(1).await).ends_with("it takes no steps"));
+}
+
+#[tokio::test]
+async fn a_step_stands_when_newer_candles_fail_to_load_and_the_next_step_tries_again() {
+    // Bars up to 597 are cached; the exchange has 598 and 599 but is down at first.
+    let f = live_engine(T0 + BARS * H + 1);
+    let mut store = Store::open(&f.dir.path().join("sandchart.db")).unwrap();
+    store.delete_series(&id(), TF).unwrap();
+    store
+        .upsert_candles(&id(), TF, &(0..598).map(bar).collect::<Vec<_>>())
+        .unwrap();
+    f.provider.set(TF, (0..BARS).map(bar).collect());
+    f.provider.down.store(true, Ordering::Relaxed);
+    let st = f
+        .engine
+        .replay_start(&id(), TF, T0 + 596 * H)
+        .await
+        .unwrap();
+    assert!(st.newer_error.is_none(), "597 is still to come");
+    let cut = f.engine.replay_step(1).await.unwrap();
+    assert_eq!(cut, T0 + 598 * H, "the step happened");
+    let st = f.engine.replay_state(TF, 0, 0).unwrap();
+    assert_eq!(st.cut, cut);
+    assert!(!st.at_end && !st.caught_up);
+    let msg = st.newer_error.expect("the failure is reported");
+    assert!(msg.contains("connection refused"), "{msg}");
+    // Still down: the step reveals nothing more, the notice stays.
+    assert_eq!(f.engine.replay_step(1).await.unwrap(), cut);
+    assert!(
+        f.engine
+            .replay_state(TF, 0, 0)
+            .unwrap()
+            .newer_error
+            .is_some()
+    );
+    // Back up: the next step loads 598 and 599 first and reveals 598; the notice goes.
+    f.provider.down.store(false, Ordering::Relaxed);
+    assert_eq!(f.engine.replay_step(1).await.unwrap(), cut + H);
+    let st = f.engine.replay_state(TF, 0, 0).unwrap();
+    assert!(st.newer_error.is_none());
+    assert_eq!(f.engine.replay_step(1).await.unwrap(), T0 + BARS * H);
 }

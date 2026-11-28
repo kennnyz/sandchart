@@ -429,6 +429,11 @@ export function ReplayBar({ replay: r, range, onDate }: ReplayBarProps) {
         ) : (
           atEnd && <span className="replay-end">{t("replay.end")}</span>
         )}
+        {v?.newerError && (
+          <span className="replay-end" data-testid="replay-newer-error" title={v.newerError}>
+            {t("replay.newerFailed")}
+          </span>
+        )}
         {error}
       </div>
       <button

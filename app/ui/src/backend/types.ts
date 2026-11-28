@@ -299,6 +299,8 @@ export interface ReplayState {
   caughtUpAt: number | null;
   /** The last bar is still forming (a timeframe above the base): ask again from its index. */
   partial: boolean;
+  /** Why newer candles could not be loaded at the last step (a notice: the step happened, the next one tries again); null once a load worked. */
+  newerError: string | null;
   /** Index of `bars.time[0]`. */
   from: number;
   bars: CandleColumns;

@@ -69,7 +69,7 @@ Switch the chart's timeframe at any time:
 
 ### Catching up
 
-Steps do not stop at the bars that were cached when the replay began: when the last of them is revealed, the app loads the bars that have closed since (from the cache, else from the exchange). When no newer closed bar exists, the replay has **caught up with real time**, and the backtest ends there:
+Steps do not stop at the bars that were cached when the replay began: when the last of them is revealed, the app loads the bars that have closed since (from the cache, else from the exchange). If they cannot be loaded (no connection, for instance), a notice says so in the replay bar; the replay stays where it is and the next step tries again. When no newer closed bar exists, the replay has **caught up with real time**, and the backtest ends there:
 
 - the point it reached is kept as the catch-up time and does not move again; trades and results count the bars up to it only;
 - a trade still open then is **not finished at real time**: it stays in the trades list with its R at that moment, and like an open trade it does not count in the results;

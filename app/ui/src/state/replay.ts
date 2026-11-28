@@ -81,6 +81,8 @@ export interface ReplayView {
   caughtUpAt: number | null;
   /** The last bar is still forming (a chart above the base). */
   partial: boolean;
+  /** Newer candles could not be loaded at the last step: a notice, the next step tries again. */
+  newerError: string | null;
   /** Open time and close of the last revealed bar. */
   time: number;
   close: number;
@@ -587,6 +589,7 @@ export class ReplayController {
       caughtUp: st.caughtUp,
       caughtUpAt: st.caughtUpAt,
       partial: st.partial,
+      newerError: st.newerError,
       time: n > 0 ? st.bars.time[n - 1]! : (prev?.time ?? 0),
       close: n > 0 ? st.bars.close[n - 1]! : (prev?.close ?? 0),
       trades,

@@ -53,6 +53,8 @@ pub(crate) struct Session {
     /// The cut at which the session caught up with real time and its backtest ended (for
     /// a file, the one it was saved with). The cut never moves past it.
     caught_up_at: Option<i64>,
+    /// Why the last load of newer candles failed; the next step tries again.
+    newer_error: Option<String>,
 }
 
 /// What the UI gets for one chart timeframe `tf` (the base or one that builds from it):
@@ -83,6 +85,9 @@ pub struct ReplayState {
     pub caught_up_at: Option<i64>,
     /// The last `tf` bar is still forming: more base candles go into it.
     pub partial: bool,
+    /// Why newer candles could not be loaded at the last step (a notice: the step itself
+    /// happened, and the next one tries again); `None` once a load worked.
+    pub newer_error: Option<String>,
     /// Index of `bars[0]`.
     pub from: u32,
     pub bars: Vec<Candle>,
@@ -259,6 +264,7 @@ impl Session {
             caught_up: self.caught_up(),
             caught_up_at: self.caught_up_at,
             partial,
+            newer_error: self.newer_error.clone(),
             from: from as u32,
             bars: bars[from..].to_vec(),
             trades_from: tfrom as u32,
@@ -404,23 +410,28 @@ impl Engine {
             commands: Vec::new(),
             sim: None,
             caught_up_at: None,
+            newer_error: None,
         };
         *self.shared.session() = Some(session);
-        // The newest data could not be asked for: a later step asks again.
-        if let Err(e) = self.load_newer().await {
-            eprintln!("the replay could not load newer candles: {e}");
-        }
+        self.load_newer().await;
         self.replay_state(base, 0, 0)
     }
 
     /// Reveals up to `n` more base candles; returns the cut. Once every loaded candle is
     /// revealed it loads newer ones; with none left the replay has caught up. Refused once
-    /// caught up (or for a file saved after catching up). A failure to load newer candles is returned after the step: stepping
-    /// again tries again.
+    /// caught up (or for a file saved after catching up). The step stands when newer
+    /// candles cannot be loaded: the state reports why (`newer_error`) and the next step
+    /// tries again.
     pub async fn replay_step(&self, n: u32) -> Result<i64, EngineError> {
+        self.with_session(|s| match s.caught_up_at {
+            Some(_) => Err(caught_up_error("steps")),
+            None => Ok(()),
+        })?;
+        // A load that failed at the last step is tried again first, so this step can reveal.
+        self.load_newer().await;
         let cut = self.with_session(|s| {
             if s.caught_up_at.is_some() {
-                return Err(caught_up_error("steps"));
+                return Ok(s.cut); // that load found nothing newer: caught up
             }
             let shown = s.revealed_len();
             let next = shown.saturating_add(n as usize).min(s.candles.len());
@@ -430,15 +441,16 @@ impl Engine {
             }
             Ok(s.cut)
         })?;
-        self.load_newer().await?;
+        self.load_newer().await;
         Ok(cut)
     }
 
     /// When a session from the cache has revealed every loaded candle: loads the newer
-    /// closed base candles, or, when there are none, marks it caught up at its cut.
-    async fn load_newer(&self) -> Result<(), EngineError> {
-        let Some((sid, inst, base, last, room)) = self.with_session(|s| {
-            Ok(s.wants_more().then(|| {
+    /// closed base candles, or, when there are none, marks it caught up at its cut. A
+    /// failure is kept in the session (`newer_error`) for the UI to show.
+    async fn load_newer(&self) {
+        let Some((sid, inst, base, last, room)) = self.shared.session().as_ref().and_then(|s| {
+            s.wants_more().then(|| {
                 let last = s.candles.last().map_or(i64::MIN, |c| c.open_time);
                 (
                     s.id,
@@ -447,23 +459,27 @@ impl Engine {
                     last,
                     MAX_CANDLES - s.candles.len(),
                 )
-            }))
-        })?
-        else {
-            return Ok(());
+            })
+        }) else {
+            return;
         };
-        let newer = self.newer_candles(&inst, base, last, room).await?;
+        let newer = self.newer_candles(&inst, base, last, room).await;
         let mut guard = self.shared.session();
         let Some(s) = guard.as_mut().filter(|s| s.id == sid && s.wants_more()) else {
-            return Ok(()); // replaced or changed meanwhile
+            return; // replaced or changed meanwhile
         };
-        if newer.is_empty() {
-            s.caught_up_at = Some(s.cut);
-            s.sim = None;
-        } else {
-            s.append(&newer);
+        match newer {
+            Ok(newer) if newer.is_empty() => {
+                s.caught_up_at = Some(s.cut);
+                s.sim = None;
+                s.newer_error = None;
+            }
+            Ok(newer) => {
+                s.append(&newer);
+                s.newer_error = None;
+            }
+            Err(e) => s.newer_error = Some(e.to_string()),
         }
-        Ok(())
     }
 
     /// Closed base candles after the one opening at `last`, at most `room`: the cached
@@ -570,9 +586,7 @@ impl Engine {
                 sim
             });
         }
-        if let Err(e) = self.load_newer().await {
-            eprintln!("the replay could not load newer candles: {e}");
-        }
+        self.load_newer().await;
         self.replay_state(base, 0, 0)
     }
 
@@ -733,6 +747,7 @@ impl Engine {
             sim: None,
             live: false,
             caught_up_at: file.caught_up_at,
+            newer_error: None,
         };
         // The whole state is built and checked before the open session is replaced, so a
         // file the UI could not show leaves the session as it was.

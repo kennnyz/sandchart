@@ -175,6 +175,7 @@
   "replay.exit": "Выйти из реплея",
   "replay.shortcut": "{name} ({shortcut})",
   "replay.end": "Конец данных",
+  "replay.newerFailed": "Не удалось загрузить новые бары; следующий шаг попробует снова",
   "replay.error": "Реплей: {error}",
   "replay.tooLarge": "Файл больше {mib} МиБ.",
   "replay.stats": "Итоги реплея",

@@ -183,6 +183,24 @@ describe("replay controller", () => {
     expect(c.view!.close).toBe(page.close[page.time.length - 98]);
   });
 
+  it("keeps a failed load of newer bars as a notice, not an error, and keeps playing", async () => {
+    const { c, backend } = await started();
+    const real = backend.replayState.bind(backend);
+    const state = vi.spyOn(backend, "replayState").mockImplementation(async (...args) => ({
+      ...(await real(...args)),
+      newerError: "the newest 1h candles could not be loaded: network error",
+    }));
+    c.play();
+    await c.step();
+    expect(c.view!.newerError).toBe("the newest 1h candles could not be loaded: network error");
+    expect(c.error).toBeNull();
+    expect(c.playing).toBe(true);
+    c.pause();
+    state.mockRestore();
+    await c.step();
+    expect(c.view!.newerError).toBeNull();
+  });
+
   it("plays at the chosen speed with one timer and stops at the end", async () => {
     vi.useFakeTimers();
     const { c } = await started(560); // 99 bars after the start bar
