@@ -458,3 +458,22 @@ describe("a drawing the engine stored differently", () => {
     expect(commits.at(-1)).toEqual({ before: later, after: saved });
   });
 });
+
+describe("DrawingState with many drawings", () => {
+  it("keeps selection checks constant-time with 2000 selected", () => {
+    const { s } = setup();
+    const list = Array.from({ length: 2000 }, (_, i) => stored(`d${i}`, i, i));
+    s.reset(list);
+    const t0 = performance.now();
+    s.setSelection(list.map((d) => d.id));
+    // A hit test asks every drawing whether it is selected, on every pointer move.
+    let n = 0;
+    for (let move = 0; move < 50; move++) for (const d of list) if (s.isSelected(d.id)) n++;
+    expect(s.selectedDrawings()).toHaveLength(2000);
+    for (const d of list) s.byId(d.id);
+    const ms = performance.now() - t0;
+    expect(n).toBe(100_000);
+    // Linear scans take hundreds of ms here; a set and a map take a few.
+    expect(ms).toBeLessThan(40);
+  });
+});

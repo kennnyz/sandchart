@@ -477,3 +477,21 @@ describe("⌘ snapping and handles", () => {
     expect(body.points).toEqual([{ t: c.t(100), p: c.p(540) }, { t: c.t(200), p: c.p(540) }]);
   });
 });
+
+describe("many selected drawings", () => {
+  it("hit-tests 2000 selected drawings in about linear time", () => {
+    const l = layer();
+    const list = Array.from({ length: 2000 }, (_, i) => drawing({ kind: "hline", p: 1_000 + i * 4 }));
+    l.setDrawings(list);
+    l.state.setSelection(list.map((d) => d.id));
+    const c = coords();
+    l.paintBase(ctx, c, 1, dark, () => {});
+    const t0 = performance.now();
+    // Pointer moves over the plot: each one checks every drawing's selection twice.
+    for (let i = 0; i < 200; i++) l.pointerMove(5 + (i % 100), 5, false);
+    const ms = performance.now() - t0;
+    expect(l.state.selection).toHaveLength(2000);
+    // A scan of the selection per drawing takes seconds here.
+    expect(ms).toBeLessThan(300);
+  });
+});

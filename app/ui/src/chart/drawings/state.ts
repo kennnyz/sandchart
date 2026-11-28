@@ -47,10 +47,14 @@ const sameBody = (a: DrawingBody, b: DrawingBody) => JSON.stringify(a) === JSON.
  * logic without the DOM; every stored change goes to `listener.commit`.
  */
 export class DrawingState {
-  /** Paint order: z ascending, then id; the last one is on top. */
+  /** Paint order: z ascending, then id; the last one is on top. Replaced, never changed in place. */
   drawings: Drawing[] = [];
+  /** `drawings` by id. */
+  private index = new Map<string, Drawing>();
   /** Selected drawing ids, in the order they were picked; never a hidden one. */
-  selection: string[] = [];
+  private picked: readonly string[] = [];
+  /** `picked` as a set: hit tests ask on every pointer move. */
+  private pickedSet = new Set<string>();
   hover: { id: string; part: Part } | null = null;
   tool: ToolId | null = null;
   /** Points placed so far with the active tool. */
@@ -72,8 +76,8 @@ export class DrawingState {
 
   /** A new list (another instrument, or reloaded): selection, placement and history start over. */
   reset(list: Drawing[]): void {
-    this.drawings = [...list].sort(byZ);
-    this.selection = [];
+    this.setList([...list].sort(byZ));
+    this.pick([]);
     this.hover = null;
     this.points = [];
     this.draft = null;
@@ -82,21 +86,26 @@ export class DrawingState {
   }
 
   byId(id: string): Drawing | undefined {
-    return this.drawings.find((d) => d.id === id);
+    return this.index.get(id);
+  }
+
+  /** Selected drawing ids, in the order they were picked; never a hidden one. */
+  get selection(): readonly string[] {
+    return this.picked;
   }
 
   /** The one selected drawing; null when none or several are selected. */
   get selected(): string | null {
-    return this.selection.length === 1 ? this.selection[0]! : null;
+    return this.picked.length === 1 ? this.picked[0]! : null;
   }
 
   isSelected(id: string): boolean {
-    return this.selection.includes(id);
+    return this.pickedSet.has(id);
   }
 
   /** The selected drawings in paint order. */
   selectedDrawings(): Drawing[] {
-    return this.drawings.filter((d) => this.selection.includes(d.id));
+    return this.drawings.filter((d) => this.pickedSet.has(d.id));
   }
 
   /** Drawings the user hid one by one (`hidden`), not painted until shown again. */
@@ -106,7 +115,7 @@ export class DrawingState {
 
   setTool(id: ToolId | null): void {
     this.points = [];
-    if (id !== null) this.selection = [];
+    if (id !== null) this.pick([]);
     if (id === this.tool) return;
     this.tool = id;
     this.listener.tool(id);
@@ -119,15 +128,17 @@ export class DrawingState {
 
   /** Selects exactly these drawings; unknown and hidden ones are left out. */
   setSelection(ids: readonly string[]): void {
-    this.selection = [...new Set(ids)].filter((id) => {
-      const d = this.byId(id);
-      return d !== undefined && !d.hidden;
-    });
+    this.pick(
+      [...new Set(ids)].filter((id) => {
+        const d = this.byId(id);
+        return d !== undefined && !d.hidden;
+      }),
+    );
   }
 
   /** ⌘-click: adds `id` to the selection, or takes it out when it is in. */
   toggle(id: string): void {
-    this.setSelection(this.isSelected(id) ? this.selection.filter((s) => s !== id) : [...this.selection, id]);
+    this.setSelection(this.isSelected(id) ? this.picked.filter((s) => s !== id) : [...this.picked, id]);
   }
 
   /** The placed points plus `mouse` as the next one, for the preview. */
@@ -185,15 +196,15 @@ export class DrawingState {
     this.points = [];
     if (tool.text) {
       this.draft = d;
-      this.selection = [];
+      this.pick([]);
       this.setTool(null);
       return d;
     }
     this.record([{ before: null, after: d }]);
     if (tool.sticky) {
-      this.selection = [];
+      this.pick([]);
     } else {
-      this.selection = [d.id];
+      this.pick([d.id]);
       this.setTool(null);
     }
     return d;
@@ -300,17 +311,31 @@ export class DrawingState {
     }
     const i = this.drawings.indexOf(sent);
     if (i < 0) return false;
-    this.drawings[i] = saved;
+    const list = [...this.drawings];
+    list[i] = saved;
+    this.setList(list);
     return true;
   }
 
   /** Esc: drops the placed points, the draft, the tool and the selection; false when there was none. */
   cancel(): boolean {
-    const any = this.points.length > 0 || this.tool !== null || this.selection.length > 0 || this.draft !== null;
+    const any = this.points.length > 0 || this.tool !== null || this.picked.length > 0 || this.draft !== null;
     this.draft = null;
-    this.selection = [];
+    this.pick([]);
     this.setTool(null);
     return any;
+  }
+
+  /** The list in paint order, and its index by id. */
+  private setList(list: Drawing[]): void {
+    this.drawings = list;
+    this.index = new Map(list.map((d) => [d.id, d]));
+  }
+
+  /** Sets the selection to ids already checked (known, shown, no repeats). */
+  private pick(ids: readonly string[]): void {
+    this.picked = ids;
+    this.pickedSet = new Set(ids);
   }
 
   private nextPoint(a: Anchor, horizontal: boolean): Anchor {
@@ -340,17 +365,19 @@ export class DrawingState {
   private apply(step: Step): void {
     const ids = new Set(step.map((c) => (c.after ?? c.before)!.id));
     const rest = this.drawings.filter((d) => !ids.has(d.id));
-    const after: Drawing[] = [];
-    for (const c of step) if (c.after) after.push(c.after);
+    const after = new Set<Drawing>();
+    for (const c of step) if (c.after) after.add(c.after);
     rest.push(...after);
     rest.sort(byZ);
-    this.drawings = rest;
-    const shown = rest.filter((d) => !d.hidden && after.includes(d)).map((d) => d.id);
-    const kept = this.selection.filter((id) => !ids.has(id) || shown.includes(id));
+    this.setList(rest);
+    const shown = rest.filter((d) => !d.hidden && after.has(d)).map((d) => d.id);
+    const shownSet = new Set(shown);
+    const kept = this.picked.filter((id) => !ids.has(id) || shownSet.has(id));
+    const keptSet = new Set(kept);
     // A change inside the selection keeps it; any other selects what it changed.
-    this.selection = shown.every((id) => kept.includes(id)) ? kept : shown;
+    this.pick(shown.every((id) => keptSet.has(id)) ? kept : shown);
     const h = this.hover;
-    if (h && ids.has(h.id) && !after.some((d) => d.id === h.id && !d.hidden)) this.hover = null;
+    if (h && ids.has(h.id) && !shownSet.has(h.id)) this.hover = null;
     this.listener.commit([...step]);
   }
 }

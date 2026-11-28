@@ -132,6 +132,8 @@ interface Edit {
   x0: number;
   y0: number;
   items: Dragged[];
+  /** The ids of `items`: painting asks per drawing on every frame of the drag. */
+  ids: Set<string>;
   moved: boolean;
 }
 
@@ -442,8 +444,8 @@ export class DrawingLayer {
       const m = HANDLE_RADIUS + HIT_TOLERANCE;
       this.span = [c.addBars(c.t(-m), -1), c.addBars(c.t(c.plotW + m), 1)];
       if (this.cache.size > this.state.drawings.length + 32) this.pruneCache();
-      const dragged = this.edit?.moved ? this.edit.items : NONE;
-      const isDragged = (id: string) => dragged.some((i) => i.id === id);
+      const dragged = this.edit?.moved ? this.edit.ids : null;
+      const isDragged = (id: string) => dragged?.has(id) === true;
       begin(ctx, c, dpr);
       for (const d of this.state.drawings) {
         const tool = this.visibleTool(d);
@@ -478,7 +480,7 @@ export class DrawingLayer {
     const tags: [number, string][] = [];
     begin(ctx, c, dpr);
 
-    const dragging = (id: string) => e !== null && e.items.some((i) => i.id === id);
+    const dragging = (id: string) => e?.ids.has(id) === true;
     const hovered = s.hover && !dragging(s.hover.id) ? s.byId(s.hover.id) : undefined;
     const hoverTool = hovered && this.visibleTool(hovered);
     if (hovered && hoverTool) paintOne(ctx, hoverTool, this.geom(hoverTool, hovered), hovered.style, dpr, theme, true);
@@ -609,7 +611,7 @@ export class DrawingLayer {
     const items = (part === "body" ? s.selectedDrawings() : [d])
       .filter((o) => !o.locked)
       .map((o) => ({ id: o.id, body0: o.body, body: o.body }));
-    this.edit = { id: d.id, part, x0: x, y0: y, items, moved: false };
+    this.edit = { id: d.id, part, x0: x, y0: y, items, ids: new Set(items.map((i) => i.id)), moved: false };
     this.host.invalidateOverlay();
     return true;
   }
