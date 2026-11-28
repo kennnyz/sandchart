@@ -9,7 +9,8 @@ repository.workspace = true
 
 [dependencies]
 serde.workspace = true
-thiserror.workspace = true
-
-[dev-dependencies]
+# Already in the tree through crates/indicators; the replay file hash.
+sha2 = "0.10"
+# Already in the tree; reads and writes replay files.
 serde_json = "1"
+thiserror.workspace = true
