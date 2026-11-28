@@ -10,7 +10,7 @@ use std::time::Duration;
 use sandchart_core::alert::{Alert, AlertKind, Level, Update, fires, validate};
 use sandchart_core::drawing::validate_id;
 use sandchart_core::{Candle, InstrumentId, Timeframe};
-use sandchart_store::{MAX_ALERT_PAIRS, Store, StoreError};
+use sandchart_store::{MAX_ACTIVE_ALERTS, MAX_ALERT_PAIRS, Store, StoreError};
 use tokio::sync::{Notify, broadcast};
 use tokio::task::JoinHandle;
 
@@ -29,7 +29,10 @@ const ALERT_TF: Timeframe = Timeframe::M1;
 /// tries again a stream that could not be opened.
 const CHECK: Duration = Duration::from_secs(2);
 
-const EVENT_BUFFER: usize = 64;
+/// Alert events a receiver may fall behind by. A lagging receiver loses the oldest ones,
+/// so the buffer holds a firing of every active alert at once, each with a `Changed`, twice
+/// over: a burst never drops a notification.
+const EVENT_BUFFER: usize = 4 * MAX_ACTIVE_ALERTS;
 
 /// What the alert service reports.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -812,3 +812,43 @@ async fn a_closed_candle_that_cannot_be_stored_still_counts_for_the_alerts() {
         Some(10_002)
     );
 }
+
+#[tokio::test]
+async fn every_alert_of_a_burst_is_reported_to_a_receiver_that_reads_late() {
+    let f = fixture(&["BTCUSDT"]).await;
+    for i in 0..sandchart_store::MAX_ACTIVE_ALERTS {
+        f.engine
+            .set_alert(price_alert(
+                &format!("a{i}"),
+                "BTCUSDT",
+                10_000,
+                Direction::Above,
+            ))
+            .await
+            .unwrap();
+    }
+    until("the alert stream opens", || {
+        !f.provider.open("BTCUSDT").is_empty()
+    })
+    .await;
+    let mut late = f.engine.alert_events();
+    let p = &f.provider;
+    p.send("BTCUSDT", Timeframe::M1, bar(0, 9_980, 9_990, 9_990));
+    p.send("BTCUSDT", Timeframe::M1, bar(0, 9_980, 10_005, 10_002));
+    for _ in 0..500 {
+        if f.engine.alerts().await.unwrap().iter().all(|a| !a.active) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let mut fired = 0;
+    loop {
+        match late.try_recv() {
+            Ok(AlertEvent::Fired(_)) => fired += 1,
+            Ok(AlertEvent::Changed) => {}
+            Err(broadcast::error::TryRecvError::Empty) => break,
+            Err(e) => panic!("{e}"),
+        }
+    }
+    assert_eq!(fired, sandchart_store::MAX_ACTIVE_ALERTS);
+}
