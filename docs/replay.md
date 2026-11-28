@@ -22,9 +22,9 @@ Replay walks through history bar by bar, as if it were live: you see a bar, deci
 
    Esc or **Cancel** puts it away without starting.
 
-The chart then shows the bars up to the one you picked, with up to 500 bars of context before it, and nothing after it. A dashed line labelled **Replay** marks where the revealed bars end. Live updates for the pair stop while the replay is open.
+The chart then shows the bars up to the one you picked, with up to 500 bars of context before it, and nothing after it. A dashed line labelled **Replay** marks where the revealed bars end. Live updates for the pair stop while the replay is open, until it catches up with them (see [Catching up](#catching-up)).
 
-Only bars already in the local cache can be replayed. A pair you just opened has its newest 1000 bars cached; older ones are cached as you scroll back to them.
+The replay starts at a bar already in the local cache. A pair you just opened has its newest 1000 bars cached; older ones are cached as you scroll back to them. A bar that is still forming cannot be picked: a replay only ever shows closed bars.
 
 No bar after the current one ever reaches the screen. The price scale, the crosshair, the indicators and the outcomes of your position drawings all see only the revealed bars: an SMA ends at the current bar, and a position drawn earlier shows as open until a revealed bar decides it. A drawing whose first point is after the current bar is hidden (neither drawn nor clickable) until a step reveals that bar; a horizontal line, which has no time, always shows. The watchlist shows a dash and **Replay** instead of the pair's live price and 24 h change.
 
@@ -44,9 +44,20 @@ The controls bar is under the chart:
 | Open | Opens a `.replay` file. |
 | Exit replay | Ends the replay and goes back to the live chart. |
 
-Play stops by itself at the last cached bar ("End of data"), when an action fails, and when the window is hidden or minimised. There is no step back: to try again, start a new replay at the same bar.
+Play stops by itself at the newest bar ("End of data"), when an action fails, and when the window is hidden or minimised. There is no step back: to try again, start a new replay at the same bar.
 
 Opening another pair or timeframe ends the replay too.
+
+### Catching up
+
+Steps do not stop at the bars that were cached when the replay began: when the last of them is revealed, the app loads the bars that have closed since (from the cache, else from the exchange). When no newer closed bar exists, the replay has **caught up** with the live data. From then on:
+
+- it takes no more steps and no trade commands (buy, sell, close, moving a level): live prices after the current bar are on screen, so a command at that bar would know the future;
+- every bar of the pair that closes is added to the replay, so an open trade keeps resolving and the results keep counting;
+- live updates of the pair are no longer held back;
+- **Save** includes the bars added this way; **Exit replay** ends it as usual.
+
+An opened file never loads newer bars: it ends at its last bar.
 
 ## Shortcuts
 
@@ -120,7 +131,7 @@ Send the `.replay` file. Whoever opens it gets the same chart, the same trades a
 
 ## Limits
 
-- A replay steps the chart's own timeframe; there is no aggregation from smaller bars.
+- The controls step the chart's own timeframe. The app's engine can already step a smaller timeframe and build the chart's bars from it (ADR 0008); the controls for it come in a later version.
 - A file holds at most 200 000 candles and 10 000 commands, and is at most 32 MiB.
 - No step back, no fees, no slippage, one open trade at a time.
-- A replay starts only at a cached bar, and plays up to the newest bar that was cached when it started.
+- A replay starts only at a cached, closed bar. It plays up to the newest closed bar, loading the ones that closed after it began, then follows the live bars (see [Catching up](#catching-up)).
