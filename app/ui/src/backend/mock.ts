@@ -650,7 +650,7 @@ export function createMockBackend(opts: MockOptions): MockBackend {
     };
   }
 
-  /** The open replay's revealed bars when it replays `(id, tf)`, as `with_replay_bars` in the engine. */
+  /** The open replay's revealed bars when it replays `(id, tf)`, as `replay_bars` in the engine. */
   function replayBars(id: InstrumentId, tf: TimeframeCode): { scale: number; candles: MockCandle[] } | null {
     const s = session;
     if (!s || s.tf !== tf || s.instrument.id.source !== id.source || s.instrument.id.symbol !== id.symbol) return null;
