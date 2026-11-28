@@ -178,10 +178,18 @@ fn js_safe(st: &ReplayState) -> Result<(), EngineError> {
         .iter()
         .flat_map(|c| [c.open_time, c.open, c.high, c.low, c.close, c.volume]);
     let trades = st.trades.iter().flat_map(|t| {
-        [t.entry_time, t.entry_price, t.initial_stop, t.stop, t.take]
-            .into_iter()
-            .chain(t.exit_time)
-            .chain(t.exit_price)
+        [
+            t.entry_time,
+            t.entry_fill_time,
+            t.entry_price,
+            t.initial_stop,
+            t.stop,
+            t.take,
+        ]
+        .into_iter()
+        .chain(t.exit_time)
+        .chain(t.exit_fill_time)
+        .chain(t.exit_price)
     });
     let mut all = [st.cut]
         .into_iter()

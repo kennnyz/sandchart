@@ -661,10 +661,18 @@ pub fn to_replay_state_dto(s: ReplayState) -> Result<ReplayStateDto, DtoError> {
         safe(t)?;
     }
     for t in &s.trades {
-        for v in [t.entry_time, t.entry_price, t.initial_stop, t.stop, t.take]
-            .into_iter()
-            .chain(t.exit_time)
-            .chain(t.exit_price)
+        for v in [
+            t.entry_time,
+            t.entry_fill_time,
+            t.entry_price,
+            t.initial_stop,
+            t.stop,
+            t.take,
+        ]
+        .into_iter()
+        .chain(t.exit_time)
+        .chain(t.exit_fill_time)
+        .chain(t.exit_price)
         {
             safe(v)?;
         }
@@ -1165,8 +1173,9 @@ mod tests {
                 "tradesFrom": 0,
                 "trades": [{
                     "side": "long", "entryTime": 1_700_000_060_000i64,
+                    "entryFillTime": 1_700_000_120_000i64,
                     "entryPrice": 111, "initialStop": 90, "stop": 90, "take": 140,
-                    "exitTime": null, "exitPrice": null, "reason": "unfinished",
+                    "exitTime": null, "exitFillTime": null, "exitPrice": null, "reason": "unfinished",
                     "ambiguous": false, "r": 2.0 / 21.0
                 }],
                 "stats": {

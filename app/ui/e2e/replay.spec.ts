@@ -439,6 +439,11 @@ test("replay_keeps_its_session_across_timeframes", async ({ page }) => {
   await expect(stat(page, "open-r")).not.toHaveText("—");
   const hour = await lastBar(page);
   expect(hour).toBeGreaterThanOrEqual(start);
+  // The entry shows when it filled: the close of the hour bar, in one format on every timeframe.
+  const entry = page.getByTestId("replay-trade-entry");
+  await expect(entry).toHaveAttribute("data-time", String(hour + H));
+  const entryText = (await entry.textContent())!;
+  expect(entryText).toMatch(/^\d{1,2} \w{3} \d{4} \d{2}:\d{2}$/);
 
   // 4h: built from the revealed hours, no reset; the forming bar grows with each step.
   await tfButton(page, "4h").click();
@@ -446,6 +451,7 @@ test("replay_keeps_its_session_across_timeframes", async ({ page }) => {
   await expect(page.getByTestId("chart")).toHaveAttribute("data-replay", "on");
   await expect(page.getByTestId("replay-interval")).toHaveText("1h");
   await expect(stat(page, "open-r")).not.toHaveText("—");
+  await expect(entry).toHaveText(entryText);
   await page.keyboard.press("ArrowRight");
   await expect.poll(() => cutOf(page)).toBe(hour + 2 * H);
   await expect.poll(() => lastBar(page)).toBe(hour + H);
@@ -459,6 +465,8 @@ test("replay_keeps_its_session_across_timeframes", async ({ page }) => {
   await expect.poll(() => lastBar(page)).toBe(hour + 3 * H - H / 4);
   expect(await cutOf(page)).toBe(hour + 3 * H);
   await expect(page.getByTestId("replay-trade")).toHaveCount(1);
+  await expect(entry).toHaveText(entryText);
+  await expect(entry).toHaveAttribute("data-time", String(hour + H));
   await page.keyboard.press("ArrowRight");
   await expect.poll(() => cutOf(page)).toBe(hour + 3 * H + H / 4);
 

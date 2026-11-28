@@ -88,14 +88,18 @@ impl ExitReason {
     }
 }
 
-/// One trade. Prices are ticks; times are the open times of the base candles it filled on,
-/// so a chart of any timeframe puts them in the bar that contains them. An open trade has
-/// no exit and its `r` is marked to the close of the base candle at the cut.
+/// One trade. Prices are ticks; `entry_time` and `exit_time` are the open times of the base
+/// candles it filled on, so a chart of any timeframe puts them in the bar that contains them;
+/// `entry_fill_time` and `exit_fill_time` are the close times of those candles, the time the
+/// fill is known (an open or a close is given at that time). An open trade has no exit and
+/// its `r` is marked to the close of the base candle at the cut.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Trade {
     pub side: Side,
     pub entry_time: i64,
+    /// Close time of the entry candle.
+    pub entry_fill_time: i64,
     pub entry_price: i64,
     /// The stop at entry; R is measured against it.
     pub initial_stop: i64,
@@ -103,6 +107,8 @@ pub struct Trade {
     pub stop: i64,
     pub take: i64,
     pub exit_time: Option<i64>,
+    /// Close time of the exit candle.
+    pub exit_fill_time: Option<i64>,
     pub exit_price: Option<i64>,
     pub reason: ExitReason,
     /// The exit candle touched both stop and take; it counts as a stop.
@@ -166,6 +172,7 @@ fn closing_at(base: Timeframe, candles: &[Candle], t: i64) -> Option<usize> {
 }
 
 struct Running {
+    base: Timeframe,
     side: Side,
     /// Index of the candle the trade was filled on.
     entry: usize,
@@ -191,11 +198,13 @@ impl Running {
         Trade {
             side: self.side,
             entry_time: candles[self.entry].open_time,
+            entry_fill_time: self.base.close_time(candles[self.entry].open_time),
             entry_price: self.entry_price,
             initial_stop: self.initial_stop,
             stop: self.stop,
             take: self.take,
             exit_time: exit.map(|(i, _)| candles[i].open_time),
+            exit_fill_time: exit.map(|(i, _)| self.base.close_time(candles[i].open_time)),
             exit_price: exit.map(|(_, p)| p),
             reason,
             ambiguous: false,
@@ -346,6 +355,7 @@ pub fn simulate(
                 }
                 check_levels(side, close, stop, take).map_err(|e| format!("command {n}: {e}"))?;
                 open = Some(Running {
+                    base,
                     side,
                     entry: b,
                     entry_price: close,

@@ -117,7 +117,7 @@ Closed trades stay on the chart as an entry dot and an exit dot joined by a dash
 
 ## Results
 
-The panel under the replay bar shows a row of numbers over the closed trades and, below it, every trade, newest first: its side, the entry and exit times, how it ended (take, stop, closed, still open, not finished at real time) and its R. The list scrolls; the arrow on **Results** folds the panel to its row, and the app remembers that. The numbers:
+The panel under the replay bar shows a row of numbers over the closed trades and, below it, every trade, newest first: its side, when it was entered and exited, how it ended (take, stop, closed, still open, not finished at real time) and its R. The times are when the fills happened, the close time of the bar each one filled on (a stop or take inside a bar shows that bar's close), in UTC to the minute; they read the same on every timeframe and update interval, though an exit can move when a finer interval shows the stop or take was hit earlier. The list scrolls; the arrow on **Results** folds the panel to its row, and the app remembers that. The numbers:
 
 | | |
 | --- | --- |

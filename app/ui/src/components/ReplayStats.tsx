@@ -1,6 +1,6 @@
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { memo } from "react";
-import type { ReplayTrade, TimeframeCode } from "../backend/types";
+import type { ReplayTrade } from "../backend/types";
 import { formatCrosshairTime } from "../chart/format";
 import { formatR } from "../chart/replay";
 import { t, useLanguage, type Language } from "../i18n";
@@ -25,6 +25,12 @@ function Stat({ id, label, value, tone }: { id: string; label: string; value: st
   );
 }
 
+/**
+ * When a fill happened: the close time of the candle it filled on, to the minute in UTC, the
+ * same on every chart timeframe and update interval.
+ */
+export const fillTime = (ms: number) => formatCrosshairTime(ms, "1m");
+
 /** Why a trade ended, or that it has not. */
 const EXIT_LABEL: Record<ReplayTrade["reason"], string> = {
   take: "replay.trades.take",
@@ -36,17 +42,20 @@ const EXIT_LABEL: Record<ReplayTrade["reason"], string> = {
 
 /**
  * One row of the trades table. The controller keeps a closed trade's object as it is, so a step
- * renders only the open trade's row again, however long the list (`lang` and `base` change the text).
+ * renders only the open trade's row again, however long the list (`lang` changes the text).
  */
-const TradeRow = memo(function TradeRow({ tr, n, base }: { tr: ReplayTrade; n: number; base: TimeframeCode; lang: Language }) {
-  const when = (ms: number) => formatCrosshairTime(ms, base);
+const TradeRow = memo(function TradeRow({ tr, n }: { tr: ReplayTrade; n: number; lang: Language }) {
   return (
     <tr data-testid="replay-trade" data-reason={tr.reason}>
       <td className="mono">{n}</td>
       <td>{t(tr.side === "long" ? "replay.trades.long" : "replay.trades.short")}</td>
-      <td className="mono">{when(tr.entryTime)}</td>
-      <td className={tr.exitTime === null ? "muted" : "mono"}>
-        {tr.exitTime === null ? t(EXIT_LABEL[tr.reason]) : `${when(tr.exitTime)} · ${t(EXIT_LABEL[tr.reason])}${tr.ambiguous ? " ?" : ""}`}
+      <td className="mono" data-testid="replay-trade-entry" data-time={tr.entryFillTime}>
+        {fillTime(tr.entryFillTime)}
+      </td>
+      <td className={tr.exitFillTime === null ? "muted" : "mono"} data-testid="replay-trade-exit" data-time={tr.exitFillTime ?? ""}>
+        {tr.exitFillTime === null
+          ? t(EXIT_LABEL[tr.reason])
+          : `${fillTime(tr.exitFillTime)} · ${t(EXIT_LABEL[tr.reason])}${tr.ambiguous ? " ?" : ""}`}
       </td>
       <td className={`num mono ${signClass(tr.r) ?? ""}`}>{formatR(tr.r)}</td>
     </tr>
@@ -125,7 +134,7 @@ export function ReplayStats({ replay: r }: { replay: ReplayController }) {
               </thead>
               <tbody>
                 {trades.map(({ tr, n }) => (
-                  <TradeRow key={n} tr={tr} n={n} base={view.base} lang={lang} />
+                  <TradeRow key={n} tr={tr} n={n} lang={lang} />
                 ))}
               </tbody>
             </table>

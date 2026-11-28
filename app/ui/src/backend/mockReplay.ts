@@ -97,6 +97,7 @@ function closingAt(base: TimeframeCode, candles: MockCandle[], t: number): numbe
 }
 
 interface Running {
+  base: TimeframeCode;
   side: Side;
   /** Index of the candle the trade was filled on. */
   entry: number;
@@ -114,11 +115,13 @@ function finish(t: Running, candles: MockCandle[], bar: number, price: number, r
   return {
     side: t.side,
     entryTime: candles[t.entry]!.time,
+    entryFillTime: mockCloseTime(t.base, candles[t.entry]!.time),
     entryPrice: t.entryPrice,
     initialStop: t.initialStop,
     stop: t.stop,
     take: t.take,
     exitTime: candles[bar]!.time,
+    exitFillTime: mockCloseTime(t.base, candles[bar]!.time),
     exitPrice: price,
     reason,
     ambiguous,
@@ -196,7 +199,7 @@ export function mockSimulate(
       if (open) throw new Error(`command ${n}: a trade is already open`);
       const bad = checkLevels(cmd.side, close, cmd.stop, cmd.take);
       if (bad) throw new Error(`command ${n}: ${bad}`);
-      open = { side: cmd.side, entry: bar, entryPrice: close, initialStop: cmd.stop, stop: cmd.stop, take: cmd.take, next: bar + 1 };
+      open = { base, side: cmd.side, entry: bar, entryPrice: close, initialStop: cmd.stop, stop: cmd.stop, take: cmd.take, next: bar + 1 };
     } else if (cmd.kind === "edit") {
       const t: Running | null = open;
       if (!t) throw new Error(`command ${n}: no open trade to edit`);
@@ -221,11 +224,13 @@ export function mockSimulate(
       done ?? {
         side: last.side,
         entryTime: candles[last.entry]!.time,
+        entryFillTime: mockCloseTime(base, candles[last.entry]!.time),
         entryPrice: last.entryPrice,
         initialStop: last.initialStop,
         stop: last.stop,
         take: last.take,
         exitTime: null,
+        exitFillTime: null,
         exitPrice: null,
         reason: "open",
         ambiguous: false,

@@ -247,9 +247,15 @@ export type ReplayCommand =
 /** `unfinished`: still open when the replay caught up with real time, where its backtest ended. */
 export type ExitReason = "take" | "stop" | "manual" | "open" | "unfinished";
 /** One trade; its times are the open times of the bars it filled on. An open trade has no exit; its `r` is marked to the close of the current bar. */
+/**
+ * One replay trade. `entryTime` / `exitTime` are the open times of the base candles it filled on
+ * (they place it on a chart of any timeframe); `entryFillTime` / `exitFillTime` are their close
+ * times, when the fill is known (the time an open or close command was given).
+ */
 export interface ReplayTrade {
   side: Side;
   entryTime: number;
+  entryFillTime: number;
   entryPrice: number;
   /** The stop at entry; R is measured against it. */
   initialStop: number;
@@ -257,6 +263,7 @@ export interface ReplayTrade {
   stop: number;
   take: number;
   exitTime: number | null;
+  exitFillTime: number | null;
   exitPrice: number | null;
   reason: ExitReason;
   /** The exit bar touched both stop and take; it counts as a stop. */

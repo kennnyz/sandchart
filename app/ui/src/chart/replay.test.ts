@@ -5,11 +5,13 @@ import { clampLevel, drawingCut, formatR, ReplayLayer, snapStart, type ReplayMar
 const trade = (entryBar: number, reason: ReplayTrade["reason"] = "open"): ReplayTrade => ({
   side: "long",
   entryTime: entryBar * 1000,
+  entryFillTime: (entryBar + 1) * 1000,
   entryPrice: 100,
   initialStop: 90,
   stop: 90,
   take: 120,
   exitTime: reason === "open" ? null : (entryBar + 2) * 1000,
+  exitFillTime: reason === "open" ? null : (entryBar + 3) * 1000,
   exitPrice: reason === "open" ? null : 90,
   reason,
   ambiguous: false,
