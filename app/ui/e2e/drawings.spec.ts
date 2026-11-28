@@ -4,6 +4,8 @@ const PRICE_AXIS = 72;
 const TIME_AXIS = 26;
 /** Palette slot 0 of the dark theme, the default drawing colour. */
 const BLUE = [0x6e, 0x9f, 0xd8];
+/** Palette slot 3 of the dark theme (violet). */
+const VIOLET = [0xa5, 0x8b, 0xd6];
 
 interface Plot {
   left: number;
@@ -14,6 +16,8 @@ interface Plot {
 
 interface Stored {
   id: string;
+  style: { color: number; width: number; dash: boolean };
+  locked: boolean;
   body: {
     kind: string;
     p?: number;
@@ -43,8 +47,8 @@ interface Debug {
   outcomes: Record<string, string>;
 }
 
-async function openChart(page: Page): Promise<Plot> {
-  await page.goto("/");
+async function openChart(page: Page, query = ""): Promise<Plot> {
+  await page.goto(`/${query}`);
   await expect(page.getByTestId("legend")).toHaveAttribute("data-time", /^\d+$/);
   const box = await page.getByTestId("chart").boundingBox();
   if (!box) throw new Error("chart has no box");
@@ -105,8 +109,12 @@ async function basePixel(page: Page, x: number, y: number): Promise<number[]> {
   );
 }
 
+function isColor(rgba: number[], rgb: number[]): boolean {
+  return rgb.every((v, i) => Math.abs(v - rgba[i]!) <= 12);
+}
+
 function isBlue(rgba: number[]): boolean {
-  return BLUE.every((v, i) => Math.abs(v - rgba[i]!) <= 12);
+  return isColor(rgba, BLUE);
 }
 
 async function drag(page: Page, from: [number, number], to: [number, number]): Promise<void> {
@@ -551,6 +559,157 @@ test("writes_edits_and_deletes_a_note", async ({ page }) => {
   await expect(page.getByTestId("note-editor")).toBeVisible();
   await page.getByTestId("note-delete").click();
   await storedCount(page, 0);
+});
+
+test("style_popover_changes_a_fib_and_the_change_survives_a_reload", async ({ page }) => {
+  const plot = await openChart(page);
+  const cx = Math.round(plot.left + plot.width / 2);
+  const yA = Math.round(plot.top + plot.height * 0.7);
+  const yB = Math.round(plot.top + plot.height * 0.3);
+  await page.keyboard.press("Alt+KeyF");
+  await page.mouse.click(cx - 150, yA);
+  await page.mouse.click(cx + 150, yB);
+  const [fib] = await storedCount(page, 1);
+
+  // A double-click on a level opens the popover with the drawing's style.
+  const mid = Math.round((yA + yB) / 2);
+  await page.mouse.dblclick(cx, mid);
+  const pop = page.getByTestId("drawing-style");
+  await expect(pop).toBeVisible();
+  await expect(page.getByTestId("drawing-color-0")).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByTestId("drawing-color-0")).toBeFocused();
+
+  // Each change is applied and stored at once, one save each.
+  await page.getByTestId("drawing-color-3").click();
+  await expect.poll(async () => (await stored(page))[0]!.style.color).toBe(3);
+  await page.getByTestId("drawing-width-4").click();
+  await expect.poll(async () => (await stored(page))[0]!.style.width).toBe(4);
+  await pop.getByLabel("Dashed").check();
+  await expect.poll(async () => (await stored(page))[0]!.style.dash).toBe(true);
+  // A level off; the last one left cannot be turned off.
+  await pop.getByTestId("drawing-style-levels").getByLabel("0.5", { exact: true }).uncheck();
+  await expect.poll(async () => (await stored(page))[0]!.body.levels).toEqual(fib!.body.levels!.filter((l) => l !== 0.5));
+  await expect(page.getByTestId("drawing-color-3")).toHaveAttribute("aria-checked", "true");
+
+  // Esc closes it; the level at 0.5 is gone from the chart, the others are violet.
+  await page.keyboard.press("Escape");
+  await expect(pop).toBeHidden();
+  await page.mouse.move(cx, plot.top + 20);
+  await nextFrame(page);
+  expect(isColor(await basePixel(page, cx, mid), VIOLET)).toBe(false);
+
+  await page.reload();
+  await expect(page.getByTestId("legend")).toHaveAttribute("data-time", /^\d+$/);
+  await expect.poll(async () => (await debug(page)).drawingsPainted).toBe(1);
+  const [after] = await stored(page);
+  expect(after!.style).toEqual({ color: 3, width: 4, dash: true });
+  expect(after!.body.levels).toHaveLength(fib!.body.levels!.length - 1);
+  // The 0 level runs through b at full width: a violet pixel on it, away from the label and the dash gaps.
+  let violet = false;
+  for (let x = cx - 40; x <= cx + 40 && !violet; x += 2) violet = isColor(await basePixel(page, x, yB), VIOLET);
+  expect(violet).toBe(true);
+});
+
+test("enter_opens_the_style_popover_and_undo_reverts_a_style_change", async ({ page }) => {
+  const plot = await openChart(page);
+  const cx = Math.round(plot.left + plot.width / 2);
+  await page.keyboard.press("Alt+KeyT");
+  await page.mouse.click(cx - 150, plot.top + plot.height * 0.6);
+  await page.mouse.click(cx + 150, plot.top + plot.height * 0.4);
+  await storedCount(page, 1);
+
+  // The new line is selected: Enter opens its popover.
+  await page.keyboard.press("Enter");
+  const pop = page.getByTestId("drawing-style");
+  await expect(pop).toBeVisible();
+  await page.getByTestId("drawing-color-5").click();
+  await expect.poll(async () => (await stored(page))[0]!.style.color).toBe(5);
+  await pop.getByLabel("Extend right").check();
+  await expect.poll(async () => (await stored(page))[0]!.body.extendRight).toBe(true);
+
+  // ⌘Z inside the popover undoes the last change, and the popover follows.
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect.poll(async () => (await stored(page))[0]!.body.extendRight).toBe(false);
+  await expect(pop.getByLabel("Extend right")).not.toBeChecked();
+  await page.keyboard.press("Escape");
+  await expect(pop).toBeHidden();
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect.poll(async () => (await stored(page))[0]!.style.color).toBe(0);
+
+  // Delete in the popover removes the drawing and closes it.
+  await page.keyboard.press("Enter");
+  await pop.getByTestId("drawing-style-delete").click();
+  await storedCount(page, 0);
+  await expect(pop).toBeHidden();
+});
+
+test("a_locked_drawing_does_not_move", async ({ page }) => {
+  const plot = await openChart(page);
+  const cx = Math.round(plot.left + plot.width / 2);
+  const y = Math.round(plot.top + plot.height * 0.4);
+  await page.keyboard.press("Alt+KeyH");
+  await page.mouse.click(cx, y);
+  const [line] = await storedCount(page, 1);
+
+  await page.mouse.dblclick(cx - 100, y);
+  await page.getByTestId("drawing-style").getByLabel("Locked").check();
+  await expect.poll(async () => (await stored(page))[0]!.locked).toBe(true);
+  await page.keyboard.press("Escape");
+
+  await drag(page, [cx - 100, y], [cx - 60, y + 80]);
+  await page.waitForTimeout(300);
+  const [after] = await stored(page);
+  expect(after!.body.p).toBe(line!.body.p);
+  expect((await debug(page)).selectedDrawing).toBe(line!.id);
+  expect(isBlue(await basePixel(page, plot.left + 80, y))).toBe(true);
+});
+
+test("hide_all_hides_drawings_from_painting_and_hit_testing", async ({ page }) => {
+  const plot = await openChart(page);
+  const cx = Math.round(plot.left + plot.width / 2);
+  const y = Math.round(plot.top + plot.height * 0.4);
+  await page.keyboard.press("Alt+KeyH");
+  await page.mouse.click(cx, y);
+  const [line] = await storedCount(page, 1);
+  expect((await debug(page)).selectedDrawing).toBe(line!.id);
+
+  const toggle = page.getByTestId("tool-hide-all");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await expect.poll(async () => (await debug(page)).drawingsPainted).toBe(0);
+  expect((await debug(page)).selectedDrawing).toBeNull();
+  expect(isBlue(await basePixel(page, plot.left + 80, y))).toBe(false);
+  // A click where the line is selects nothing, a drag pans instead of moving it, Delete does nothing.
+  await page.mouse.click(cx - 100, y);
+  expect((await debug(page)).selectedDrawing).toBeNull();
+  await page.keyboard.press("Delete");
+  await page.waitForTimeout(300);
+  expect(await stored(page)).toEqual([line]);
+
+  // Shown again, as stored: hiding changed nothing in storage.
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await expect.poll(async () => (await debug(page)).drawingsPainted).toBe(1);
+  expect(isBlue(await basePixel(page, plot.left + 80, y))).toBe(true);
+
+  // Picking a tool shows hidden drawings.
+  await toggle.click();
+  await page.keyboard.press("Alt+KeyT");
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+});
+
+test("a_failed_save_shows_an_error_and_the_chart_shows_what_is_stored", async ({ page }) => {
+  const plot = await openChart(page, "?mockDrawingSaveError=1");
+  await expect(page.getByTestId("drawing-error")).toHaveCount(0);
+  await page.keyboard.press("Alt+KeyH");
+  await page.mouse.click(plot.left + plot.width / 2, plot.top + plot.height * 0.4);
+  const banner = page.getByTestId("drawing-error");
+  await expect(banner).toBeVisible();
+  await expect(banner).toContainText("could not be saved");
+  await expect(banner).toHaveAttribute("title", "mock: cannot save the drawing");
+  // The controller reloads the list: the unsaved level disappears.
+  await expect.poll(async () => (await debug(page)).drawingsPainted).toBe(0);
+  expect(await stored(page)).toEqual([]);
 });
 
 test("base_frame_with_500_drawings_under_budget @perf", async ({ page }) => {
