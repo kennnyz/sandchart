@@ -329,7 +329,7 @@ The server and the app may run at the same time. Both use the same SQLite file i
 
 ## Privacy
 
-The server adds no host. It talks only to the market-data hosts in [Privacy and network](../README.md#privacy-and-network) (`data-api.binance.vision` for the instrument list and candles), through the same client as the app, and only when a tool needs data that is not cached. It opens no port and listens on no network; it only reads stdin and writes stdout. It reads files only through `run_replay`, and only the `.replay` file you name. Your agent sees what the tools return; what the agent does with it is up to the agent and its provider.
+The server adds no host. It talks only to the market-data hosts in [Privacy and network](../README.md#privacy-and-network) (`data-api.binance.vision` for the instrument list and candles), through the same client as the app: the instrument list once per process, the newest candles on each candle call, older ones only when they are not cached. It opens no port and listens on no network; it only reads stdin and writes stdout. Outside Sandchart's own folders (its database, installed indicators and compiled-module cache) it reads only the `.replay` file you name through `run_replay`. Your agent sees what the tools return; what the agent does with it is up to the agent and its provider.
 
 ## Troubleshooting
 

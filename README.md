@@ -248,7 +248,7 @@ The update requests are plain downloads of public files. Nothing about you or yo
 
 Alerts add no host: their live prices come from `data-stream.binance.vision` like the chart's, and their notifications are shown by your operating system, with no push service in between.
 
-The MCP server (`sandchart-mcp`) adds no host either: it fetches instruments and candles from `data-api.binance.vision` like the app, only when they are not cached, opens no port and reads no file except a `.replay` file you name. What your agent does with the answers is between you and the agent.
+The MCP server (`sandchart-mcp`) adds no host either: it fetches candles from `data-api.binance.vision` like the app (the newest page on each call, older ones only when they are not cached) and refreshes the instrument list from there once per process. It opens no port and reads no file outside Sandchart's own folders except a `.replay` file you name. What your agent does with the answers is between you and the agent.
 
 Your watchlist, drawings, alerts and cached candles stay in a local SQLite file in your user data folder.
 
