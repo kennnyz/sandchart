@@ -905,7 +905,7 @@ test("right_click_shows_our_menu_and_never_the_native_one", async ({ page }) => 
   await expect(menu).toBeVisible();
   expect((await prevented()).at(-1)).toBe(true);
   expect((await debug(page)).selectedDrawing).toBe(line!.id);
-  await expect(menu.getByRole("menuitem")).toHaveText([/Lock/, /Hide/, /Remove/, /Settings/]);
+  await expect(menu.getByRole("menuitem")).toHaveText([/Lock/, /Hide/, /Add alert/, /Remove/, /Settings/]);
   await expect(page.getByTestId("drawing-menu-lock")).toBeFocused();
   await page.keyboard.press("ArrowDown");
   await expect(page.getByTestId("drawing-menu-hide")).toBeFocused();
