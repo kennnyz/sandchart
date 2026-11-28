@@ -63,6 +63,14 @@ export interface LayerHost {
 /** Draws a price tag on the axis of the given canvas: price in ticks, background colour. */
 export type TagFn = (price: number, color: string) => void;
 
+interface CacheEntry {
+  drawing: Drawing;
+  coords: Coords;
+  geom: unknown;
+  handles: Point[] | null;
+  live: boolean;
+}
+
 /** A press on a drawing: what is dragged, from where, and the body it would get. */
 interface Edit {
   id: string;
@@ -86,8 +94,12 @@ export class DrawingLayer {
   private coords: Coords | null = null;
   /** Times a drawing must reach into to be painted and hit: the plot's, with a margin. */
   private span: [number, number] = [0, 0];
-  /** Screen geometry and handles per drawing id, valid for that drawing object and that frame. */
-  private readonly cache = new Map<string, { drawing: Drawing; coords: Coords; geom: unknown; handles: Point[] | null }>();
+  /**
+   * Screen geometry and handles per drawing id, for that drawing object, kept while frames
+   * map anchors alike (`Coords.sameLayout`): a live tick does not lay everything out again.
+   * `live`: the layout read the last bar's prices, so it is redone when they change.
+   */
+  private readonly cache = new Map<string, CacheEntry>();
   private edit: Edit | null = null;
   /** Where the press that placed a point started (a press, drag and release places two). */
   private press: Point | null = null;
@@ -623,11 +635,19 @@ export class DrawingLayer {
     return e.handles;
   }
 
-  private entry(tool: ToolDef, d: Drawing) {
+  private entry(tool: ToolDef, d: Drawing): CacheEntry {
     const c = this.coords!;
     const hit = this.cache.get(d.id);
-    if (hit && hit.drawing === d && hit.coords === c) return hit;
-    const e = { drawing: d, coords: c, geom: tool.layout(d.body, c, this.outcomes.get(d.id)), handles: null };
+    if (hit && hit.drawing === d) {
+      if (hit.coords === c) return hit;
+      if (hit.coords.sameLayout(c) && (!hit.live || hit.coords.sameLastBar(c))) {
+        hit.coords = c;
+        return hit;
+      }
+    }
+    c.lastBarRead = false;
+    const geom = tool.layout(d.body, c, this.outcomes.get(d.id));
+    const e: CacheEntry = { drawing: d, coords: c, geom, handles: null, live: c.lastBarRead };
     this.cache.set(d.id, e);
     return e;
   }

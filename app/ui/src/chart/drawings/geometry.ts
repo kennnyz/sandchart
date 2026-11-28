@@ -52,10 +52,18 @@ export interface Ohlc {
 }
 
 /**
- * Anchor space to CSS px of the price plot for one base frame. A new object every frame,
- * so it also serves as the key of every per-frame cache.
+ * Anchor space to CSS px of the price plot for one base frame. A new object every frame;
+ * `sameLayout` tells whether two frames map anchors alike, so geometry can be kept.
  */
 export class Coords {
+  /** Open, high, low and close of the last bar when this frame was made. */
+  private readonly last: readonly number[] | null;
+  /**
+   * Set when `prices` hands out the last bar. The layer clears it before a layout to learn
+   * whether that geometry depends on the live bar.
+   */
+  lastBarRead = false;
+
   constructor(
     private readonly time: Float64Array,
     readonly count: number,
@@ -68,7 +76,40 @@ export class Coords {
     /** Price decimals of the instrument, for labels. */
     readonly decimals = 0,
     private readonly ohlc: Ohlc | null = null,
-  ) {}
+  ) {
+    const i = count - 1;
+    this.last = ohlc && count > 0 ? [ohlc.open[i]!, ohlc.high[i]!, ohlc.low[i]!, ohlc.close[i]!] : null;
+  }
+
+  /**
+   * Both frames put every anchor at the same px: the same bar times (the chart grows its
+   * arrays in place, so the same array and count), view, price scale, plot and decimals.
+   */
+  sameLayout(o: Coords): boolean {
+    const a = this.scale;
+    const b = o.scale;
+    return (
+      this.time === o.time &&
+      this.count === o.count &&
+      this.view.barWidth === o.view.barWidth &&
+      this.view.rightIndex === o.view.rightIndex &&
+      a.min === b.min &&
+      a.max === b.max &&
+      a.mode === b.mode &&
+      a.heightPx === b.heightPx &&
+      this.plotW === o.plotW &&
+      this.priceH === o.priceH &&
+      this.step === o.step &&
+      this.decimals === o.decimals
+    );
+  }
+
+  /** The last bar has the same prices in both frames. */
+  sameLastBar(o: Coords): boolean {
+    const a = this.last;
+    const b = o.last;
+    return a === b || (a !== null && b !== null && a.every((v, k) => v === b[k]));
+  }
 
   /** Fractional bar index of time `t` (see `timeToIndex`). */
   index(t: number): number {
@@ -91,6 +132,7 @@ export class Coords {
   prices(i: number): [number, number, number, number] | null {
     const o = this.ohlc;
     if (!o || !(i >= 0 && i < this.count)) return null;
+    if (i === this.count - 1) this.lastBarRead = true;
     return [o.open[i]!, o.high[i]!, o.low[i]!, o.close[i]!];
   }
 

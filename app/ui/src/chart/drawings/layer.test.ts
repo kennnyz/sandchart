@@ -137,3 +137,56 @@ describe("hit-testing", () => {
     expect(handles).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("geometry cache", () => {
+  /** Paints one frame per Coords and counts the layouts of each tool. */
+  function frames(list: Drawing[]) {
+    const l = layer();
+    l.setDrawings(list);
+    const trend = vi.spyOn(toolFor("trend")!, "layout");
+    const note = vi.spyOn(toolFor("note")!, "layout");
+    return { paint: (c: Coords) => l.paintBase(ctx, c, 1, dark, () => {}), trend, note };
+  }
+  const trendBody: DrawingBody = { kind: "trend", a: { t: 50 * STEP, p: 4_000 }, b: { t: 60 * STEP, p: 6_000 }, extendLeft: false, extendRight: false };
+
+  it("keeps the layout over a live tick that changes nothing it depends on", () => {
+    const data = structuredClone(ohlc);
+    const f = frames([drawing(trendBody), drawing({ kind: "note", t: 10 * STEP, text: "old bar" })]);
+    f.paint(coords(undefined, scale, data));
+    // The last bar's close moves: a new Coords object, the same geometry.
+    data.close[N - 1] = 5_100;
+    f.paint(coords(undefined, scale, data));
+    expect(f.trend).toHaveBeenCalledTimes(1);
+    expect(f.note).toHaveBeenCalledTimes(1);
+  });
+
+  it("lays out again when the view, the price scale or the bars change", () => {
+    const f = frames([drawing(trendBody)]);
+    f.paint(coords());
+    f.paint(coords({ barWidth: 10, rightIndex: 98 }));
+    expect(f.trend).toHaveBeenCalledTimes(2);
+    f.paint(coords({ barWidth: 10, rightIndex: 98 }, new PriceScale(0, 12_000, 1000, "linear")));
+    expect(f.trend).toHaveBeenCalledTimes(3);
+    f.paint(coords({ barWidth: 10, rightIndex: 98 }, new PriceScale(1, 12_000, 1000, "log")));
+    expect(f.trend).toHaveBeenCalledTimes(4);
+    // A new bar.
+    const more = new Float64Array(Array.from({ length: N + 1 }, (_, i) => i * STEP));
+    const scaleLog = new PriceScale(1, 12_000, 1000, "log");
+    f.paint(new Coords(more, N + 1, { barWidth: 10, rightIndex: 98 }, scaleLog, 1000, 1000, STEP, 2, ohlc));
+    expect(f.trend).toHaveBeenCalledTimes(5);
+    // Another plot size.
+    f.paint(new Coords(more, N + 1, { barWidth: 10, rightIndex: 98 }, scaleLog, 900, 1000, STEP, 2, ohlc));
+    expect(f.trend).toHaveBeenCalledTimes(6);
+  });
+
+  it("moves a note on the last bar when that bar's high changes", () => {
+    const data = structuredClone(ohlc);
+    const f = frames([drawing({ kind: "note", t: (N - 1) * STEP, text: "now" })]);
+    f.paint(coords(undefined, scale, data));
+    f.paint(coords(undefined, scale, data));
+    expect(f.note).toHaveBeenCalledTimes(1);
+    data.high[N - 1] = 6_500;
+    f.paint(coords(undefined, scale, data));
+    expect(f.note).toHaveBeenCalledTimes(2);
+  });
+});
