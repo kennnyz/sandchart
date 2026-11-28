@@ -1,4 +1,4 @@
-import { Brush } from "lucide-react";
+import { PencilLine } from "lucide-react";
 import type { DrawingBody } from "../../../backend/types";
 import { boxesOverlap, distToSegment, lineTouchesBox, simplifyToLimit } from "../geometry";
 import type { ToolDef } from "../registry";
@@ -25,7 +25,7 @@ export const brushTool: ToolDef<BrushBody, BrushGeom> = {
   id: "brush",
   kind: "brush",
   labelKey: "tools.brush",
-  icon: Brush,
+  icon: PencilLine,
   code: "KeyP",
   placement: { clicks: 2, stroke: true },
   sticky: true,

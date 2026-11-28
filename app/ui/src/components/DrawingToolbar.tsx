@@ -1,6 +1,6 @@
-import { Eye, EyeOff, Magnet } from "lucide-react";
+import { Eye, EyeOff, Magnet, Ruler } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { drawingKeyAction, MAGNET_CODE } from "../chart/drawings/keys";
+import { drawingKeyAction, MAGNET_CODE, RULER_CODE } from "../chart/drawings/keys";
 import { TOOLS } from "../chart/drawings/registry";
 import { t } from "../i18n";
 import { altShortcutLabel } from "../labels";
@@ -56,6 +56,15 @@ export function DrawingToolbar({ store }: { store: DrawingStore }) {
         );
       })}
       <div className="tools-sep" aria-hidden="true" />
+      <button
+        className="tool-button"
+        data-testid="tool-ruler"
+        aria-label={t("tools.ruler")}
+        title={t("tools.title", { name: t("tools.ruler"), shortcut: altShortcutLabel(keyName(RULER_CODE)) })}
+        onClick={() => s.command("ruler")}
+      >
+        <Ruler size={18} strokeWidth={1.75} />
+      </button>
       <button
         className="tool-button"
         data-testid="tool-magnet"

@@ -1,4 +1,4 @@
-import { Slash } from "lucide-react";
+import { TrendLineIcon } from "../../../icons";
 import type { DrawingBody } from "../../../backend/types";
 import { clipLine, distToLine, lineTouchesBox } from "../geometry";
 import type { ToolDef } from "../registry";
@@ -31,7 +31,7 @@ export const trendTool: ToolDef<Trend, TrendGeom> = {
   id: "trend",
   kind: "trend",
   labelKey: "tools.trend",
-  icon: Slash,
+  icon: TrendLineIcon,
   code: "KeyT",
   placement: { clicks: 2 },
 

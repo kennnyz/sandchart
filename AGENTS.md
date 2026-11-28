@@ -110,7 +110,7 @@ Read ADR 0004 and `docs/drawings.md` first. The chart core has no per-tool code:
 
 1. Add a `DrawingBody` variant in `crates/core/src/drawing.rs` (serde `kind` in snake_case) and its rules in `validate`. Add a case per rule, with the whole message, to `crates/core/tests/fixtures/drawings_invalid.json`, and a valid one to `drawings_valid.json`. Prices are `i64` ticks inside `±(2^53 - 1)`; points are `Anchor { t, p }`, never bar indices.
 2. Mirror the type in `app/ui/src/backend/types.ts` (`DrawingBody`) and the same rules in `mockValidateDrawing` in `app/ui/src/backend/mock.ts`, so the browser mock rejects what Rust rejects. `crates/core/tests/drawing.rs` and `mock.test.ts` both run the fixtures, so the two cannot drift.
-3. Write `app/ui/src/chart/drawings/tools/<name>.ts` implementing `ToolDef` (placement, `create`, `timeSpan`, `layout`, `paint`, `hitTest`, `touches` for the ⌘-drag selection box, `handles`, `moveBy`, `moveHandle`; optional `grip`, a handle that moves the whole drawing, and `markers`, points shown on a selected drawing that are not handles). Cache a `Path2D` in the geometry; put any text on a `pill` (`label.ts`). Icons come from Lucide.
+3. Write `app/ui/src/chart/drawings/tools/<name>.ts` implementing `ToolDef` (placement, `create`, `timeSpan`, `layout`, `paint`, `hitTest`, `touches` for the ⌘-drag selection box, `handles`, `moveBy`, `moveHandle`; optional `grip`, a handle that moves the whole drawing, and `markers`, points shown on a selected drawing that are not handles). Cache a `Path2D` in the geometry; put any text on a `pill` (`label.ts`). Take the icon from Lucide, or draw it in `app/ui/src/icons.tsx` when Lucide has no fitting glyph.
 4. Add it to `TOOLS` in `registry.ts`. Pick a free Alt shortcut (`code`, not R or M, which are the ruler and the magnet); `tools.test.ts` checks the shortcuts do not clash. If it has options, add them to `BodyOptions` in `app/ui/src/components/DrawingStyle.tsx`.
 5. Add `tools.<name>` (and any other strings) to `en.json` and `ru.json`.
 6. Tests: geometry and editing in `app/ui/src/chart/drawings/tools.test.ts`, an end-to-end placement and reload in `app/ui/e2e/drawings.spec.ts`, and a line for the tool in `docs/drawings.md`.
@@ -132,7 +132,7 @@ Read ADR 0006 and `docs/mcp.md` first. A tool is a thin wrapper: the work is in 
 - Every new crate inherits `publish.workspace = true` (and the other `.workspace = true` package fields). `cargo deny` accepts path dependencies without versions (`allow-wildcard-paths`) only for unpublished crates.
 - UI strings go through `t(key)`. Add every key to both `en.json` and `ru.json`; the i18n test checks parity.
 - Allowed dependency licences: MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, Zlib, Unicode-3.0. A new exception in `deny.toml` needs a reason in a comment.
-- Candles stay monochrome; colour only in numbers and in indicator series (8-slot palette). Icons come from Lucide only.
+- Candles stay monochrome; colour only in numbers and in indicator series (8-slot palette). Interface icons come from Lucide. Chart-tool icons that Lucide lacks are drawn in `app/ui/src/icons.tsx` on Lucide's 24 px grid with the same stroke, never copied from other products.
 - No exchange API keys, no accounts, no telemetry. The only outgoing hosts are the ones in `README.md`. The update check is the only non-market request; its hosts are in the same list.
 - GitHub Actions are pinned to a full commit SHA with the version in a comment.
 - Do not copy code, icons or texts from other chart products.

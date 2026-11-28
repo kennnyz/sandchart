@@ -1,4 +1,4 @@
-import { CircleX, FolderOpen, History, LogOut, Pause, Play, Save, StepForward, TrendingDown, TrendingUp, X } from "lucide-react";
+import { ChevronsDown, ChevronsUp, CircleX, FastForward, FolderOpen, LogOut, Pause, Play, Save, StepForward, X } from "lucide-react";
 import { useEffect, useRef, useState, type ChangeEvent, type MouseEvent } from "react";
 import { t } from "../i18n";
 import { MAX_REPLAY_FILE_MIB, replayKeyAction, SPEEDS, type ReplayController } from "../state/replay";
@@ -95,7 +95,7 @@ export function ReplayBar({ replay: r, range, onDate }: ReplayBarProps) {
   if (r.phase === "picking") {
     return (
       <div className="replay-bar" role="toolbar" aria-label={t("replay.controls")} data-testid="replay-bar" onMouseDown={keepFocus}>
-        <History size={14} className="replay-icon" />
+        <FastForward size={14} className="replay-icon" />
         <span className="replay-hint" data-testid="replay-hint">
           {t("replay.hint")}
         </span>
@@ -171,7 +171,7 @@ export function ReplayBar({ replay: r, range, onDate }: ReplayBarProps) {
         disabled={hasOpen}
         onClick={() => void r.buy()}
       >
-        <TrendingUp size={14} />
+        <ChevronsUp size={14} />
         {t("replay.buy")}
       </button>
       <button
@@ -181,7 +181,7 @@ export function ReplayBar({ replay: r, range, onDate }: ReplayBarProps) {
         disabled={hasOpen}
         onClick={() => void r.sell()}
       >
-        <TrendingDown size={14} />
+        <ChevronsDown size={14} />
         {t("replay.sell")}
       </button>
       <button

@@ -1,10 +1,10 @@
-import type { LucideIcon } from "lucide-react";
+import type { Icon } from "../icons";
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 
 export interface MenuItem {
   id: string;
   label: string;
-  icon: LucideIcon;
+  icon: Icon;
   /** Shown on the right, e.g. "⌫". */
   shortcut?: string;
   /** `KeyboardEvent.key` values that pick it while the menu has focus. */

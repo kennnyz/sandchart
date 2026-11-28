@@ -259,7 +259,7 @@ Rust dependencies under the MPL-2.0 (file-level copyleft, used unmodified, allow
 
 The WebAssembly runtime (wasmtime, cranelift and the WASI crates) is Apache-2.0 WITH LLVM-exception, which `deny.toml` allows for every crate.
 
-Every other dependency must be MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, Zlib or Unicode-3.0; `cargo deny check` enforces this in CI. Icons are from [Lucide](https://lucide.dev) (ISC).
+Every other dependency must be MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, Zlib or Unicode-3.0; `cargo deny check` enforces this in CI. Interface icons are from [Lucide](https://lucide.dev) (ISC); the chart-tool icons in `app/ui/src/icons.tsx` are the project's own.
 
 ## Licence
 

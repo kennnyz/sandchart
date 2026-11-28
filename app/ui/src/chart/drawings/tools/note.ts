@@ -1,4 +1,4 @@
-import { StickyNote } from "lucide-react";
+import { BarNoteIcon } from "../../../icons";
 import type { DrawingBody } from "../../../backend/types";
 import { SANS_FAMILY } from "../../theme";
 import { boxesOverlap } from "../geometry";
@@ -56,7 +56,7 @@ export const noteTool: ToolDef<Note, NoteGeom> = {
   id: "note",
   kind: "note",
   labelKey: "tools.note",
-  icon: StickyNote,
+  icon: BarNoteIcon,
   code: "KeyN",
   placement: { clicks: 1 },
 

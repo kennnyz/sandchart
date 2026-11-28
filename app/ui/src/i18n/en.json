@@ -108,6 +108,7 @@
   "ruler.d": "{n}d",
   "ruler.h": "{n}h",
   "ruler.m": "{n}m",
+  "tools.ruler": "Ruler",
   "tools.magnet": "Magnet",
   "tools.long": "Long position",
   "tools.short": "Short position",

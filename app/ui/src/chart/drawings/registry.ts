@@ -1,4 +1,4 @@
-import type { LucideIcon } from "lucide-react";
+import type { Icon } from "../../icons";
 import type { Anchor, DrawingBody, DrawingKind, PositionOutcome } from "../../backend/types";
 import type { ChartTheme } from "../theme";
 import type { Coords } from "./geometry";
@@ -65,7 +65,7 @@ export interface ToolDef<B extends DrawingBody = DrawingBody, G = unknown> {
   kind: B["kind"];
   /** i18n key of the tool's name. */
   labelKey: string;
-  icon: LucideIcon;
+  icon: Icon;
   /** `KeyboardEvent.code` of its shortcut with Alt (⌥ on macOS). */
   code: string;
   placement: Placement;

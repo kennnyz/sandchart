@@ -1,4 +1,4 @@
-import { Activity, ChevronDown, History, Moon, PanelRightOpen, Sun } from "lucide-react";
+import { ChevronDown, FastForward, Moon, PanelRightOpen, SquareFunction, Sun } from "lucide-react";
 import type { ConnectionState, InstrumentId, TimeframeCode } from "../backend/types";
 import { getLanguage, setLanguage, t } from "../i18n";
 import type { ReplayPhase } from "../state/replay";
@@ -73,7 +73,7 @@ export function TopBar(p: TopBarProps) {
         aria-haspopup="dialog"
         onClick={p.onIndicators}
       >
-        <Activity size={14} />
+        <SquareFunction size={14} />
         {t("indicators.button")}
       </button>
       <button
@@ -84,7 +84,7 @@ export function TopBar(p: TopBarProps) {
         disabled={!p.current}
         onClick={p.onReplay}
       >
-        <History size={14} />
+        <FastForward size={14} />
         {t("replay.button")}
       </button>
       <div className="spacer" />
