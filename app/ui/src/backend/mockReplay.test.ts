@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import fixture from "../../../../crates/core/tests/fixtures/replay.json";
 import { createMockBackend } from "./mock";
-import { mockCandleHash, mockReadReplay, mockSimulate } from "./mockReplay";
-import type { LiveEvent, ReplayCommand, ReplayStats, ReplayTrade } from "./types";
+import { type MockCandle, mockAggregate, mockBucketStart, mockCandleHash, mockReadReplay, mockRevealed, mockSimulate } from "./mockReplay";
+import type { LiveEvent, ReplayCommand, ReplayStats, ReplayTrade, TimeframeCode } from "./types";
 
 const id = { source: "mock", symbol: "BTCUSDT" };
+const H = 3_600_000;
 
 interface Sim {
   trades: ReplayTrade[];
@@ -29,12 +30,14 @@ function expectSim(got: Sim, want: Sim, name: string) {
 }
 
 const rows = (c: number[][]) => c.map(([time, open, high, low, close]) => ({ time: time!, open: open!, high: high!, low: low!, close: close!, volume: 0 }));
+const rows6 = (c: number[][]): MockCandle[] =>
+  c.map(([time, open, high, low, close, volume]) => ({ time: time!, open: open!, high: high!, low: low!, close: close!, volume: volume! }));
 const bytes = (v: unknown) => new TextEncoder().encode(JSON.stringify(v));
 
 describe("mock replay (TEST-ONLY copy of sandchart_core::replay)", () => {
   it("simulates every fixture case like Rust", () => {
     for (const c of fixture.cases) {
-      const run = () => mockSimulate(rows(c.candles), c.start, c.current, c.commands as ReplayCommand[]);
+      const run = () => mockSimulate(c.base as TimeframeCode, rows(c.candles), c.start, c.cut, c.commands as ReplayCommand[]);
       if ("error" in c) expect(run, c.name).toThrow(c.error);
       else expectSim(run(), c.expect as Sim, c.name);
     }
@@ -47,9 +50,36 @@ describe("mock replay (TEST-ONLY copy of sandchart_core::replay)", () => {
         await expect(read, c.name).rejects.toThrow(c.error);
       } else {
         const f = await read;
-        expectSim(mockSimulate(f.candles, f.start, f.current, f.commands), c.expect as Sim, c.name);
+        expectSim(mockSimulate(f.base, f.candles, f.start, f.cut, f.commands), c.expect as Sim, c.name);
       }
     }
+  });
+
+  it("aggregates every fixture case like Rust", () => {
+    for (const c of fixture.aggregates) {
+      const run = () => mockAggregate(rows6(c.candles), c.base as TimeframeCode, c.tf as TimeframeCode);
+      if ("error" in c) expect(run, c.name).toThrow(c.error);
+      else expect(run(), c.name).toEqual(rows6(c.expect!));
+    }
+  });
+
+  it("shows every fixture view like Rust: the chart grows, the trade does not depend on it", () => {
+    for (const v of fixture.views) {
+      const base = v.base as TimeframeCode;
+      const candles = rows6(v.candles);
+      for (const ch of v.charts) {
+        expect(mockAggregate(mockRevealed(base, candles, ch.cut), base, v.tf as TimeframeCode), `${v.name} at ${ch.cut}`).toEqual(rows6(ch.candles));
+      }
+      expectSim(mockSimulate(base, candles, v.start, v.cut, v.commands as ReplayCommand[]), v.expect as Sim, v.name);
+    }
+  });
+
+  it("lays buckets out like Binance", () => {
+    // Expected times worked out with Python's datetime.
+    expect(mockBucketStart("1w", 1_795_651_200_000)).toBe(1_795_392_000_000); // Thu 2026-11-26 -> Mon 2026-11-23
+    expect(mockBucketStart("1M", 1_709_164_800_000)).toBe(1_706_745_600_000); // 2024-02-29 -> 2024-02-01
+    expect(mockBucketStart("3d", 1_732_883_640_000)).toBe(1_732_752_000_000);
+    expect(mockBucketStart("15m", -1)).toBe(-900_000);
   });
 
   it("hashes six little-endian int64 per candle", async () => {
@@ -88,18 +118,19 @@ describe("mock replay session", () => {
   });
 
   it("checks commands like Rust and keeps the trades", async () => {
-    const { b, st } = await started();
+    const { b, st, startTime } = await started();
     const close = st.bars.close.at(-1)!;
-    const open: ReplayCommand = { kind: "open", bar: st.current, side: "long", stop: close - 1_000, take: close + 1_000 };
-    await expect(b.replayCommand({ ...open, bar: st.current + 1 })).rejects.toMatchObject({
-      message: `command 1: bar ${st.current + 1} is outside the replay (500..=500)`,
+    expect(st.cut).toBe(startTime + H);
+    const open: ReplayCommand = { kind: "open", time: st.cut, side: "long", stop: close - 1_000, take: close + 1_000 };
+    await expect(b.replayCommand({ ...open, time: st.cut + H })).rejects.toMatchObject({
+      message: `command 1: time ${st.cut + H} is outside the replay (${st.cut}..=${st.cut})`,
     });
     await b.replayCommand(open);
     await expect(b.replayCommand(open)).rejects.toMatchObject({ message: "command 2: a trade is already open" });
     await b.replayStep(1);
-    await b.replayCommand({ kind: "close", bar: st.current + 1 });
+    await b.replayCommand({ kind: "close", time: st.cut + H });
     const s = await b.replayState(0, 0);
-    expect(s.trades[0]).toMatchObject({ reason: "manual", entryPrice: close, exitBar: st.current + 1 });
+    expect(s.trades[0]).toMatchObject({ reason: "manual", entryPrice: close, entryTime: startTime, exitTime: startTime + H });
     expect(s.stats.count).toBe(1);
   });
 
@@ -107,11 +138,11 @@ describe("mock replay session", () => {
     const { b, st } = await started();
     const close = st.bars.close.at(-1)!;
     // Far levels: no mock bar reaches them, so the first trade is still open to close by hand.
-    const open = (bar: number): ReplayCommand => ({ kind: "open", bar, side: "long", stop: Math.round(close / 2), take: close * 2 });
-    await b.replayCommand(open(st.current));
+    const open = (time: number): ReplayCommand => ({ kind: "open", time, side: "long", stop: Math.round(close / 2), take: close * 2 });
+    await b.replayCommand(open(st.cut));
     await b.replayStep(1);
-    await b.replayCommand({ kind: "close", bar: st.current + 1 });
-    await b.replayCommand(open(st.current + 1));
+    await b.replayCommand({ kind: "close", time: st.cut + H });
+    await b.replayCommand(open(st.cut + H));
     const all = await b.replayState(0, 0);
     expect([all.tradesFrom, all.trades.length]).toEqual([0, 2]);
     expect(all).not.toHaveProperty("commands");
@@ -125,7 +156,7 @@ describe("mock replay session", () => {
   it("saves only revealed bars and opens the file to the same state", async () => {
     const { b, st } = await started();
     const close = st.bars.close.at(-1)!;
-    await b.replayCommand({ kind: "open", bar: st.current, side: "short", stop: close + 1_000, take: close - 1_000 });
+    await b.replayCommand({ kind: "open", time: st.cut, side: "short", stop: close + 1_000, take: close - 1_000 });
     await b.replayStep(3);
     const before = await b.replayState(0, 0);
     expect(await b.replaySave()).toBe("BTCUSDT-1h.replay");
@@ -136,8 +167,9 @@ describe("mock replay session", () => {
     await expect(b.replayState(0, 0)).rejects.toMatchObject({ message: "no replay is open" });
     const opened = await b.replayOpen(new TextEncoder().encode(text));
     expect(opened).toEqual({ ...before, atEnd: true });
-    await expect(b.replayOpen(new TextEncoder().encode(text.replace('"version": 1', '"version": 2')))).rejects.toMatchObject({
-      message: "replay file version 2 is not supported (this app reads version 1)",
+    expect(text).toContain(`\n  "base": "1h",\n  "start": ${before.cut - 3 * H},\n  "cut": ${before.cut},\n`);
+    await expect(b.replayOpen(new TextEncoder().encode(text.replace('"version": 2', '"version": 3')))).rejects.toMatchObject({
+      message: "replay file version 3 is not supported (this app reads versions 1 and 2)",
     });
   });
 

@@ -235,18 +235,18 @@ export interface PositionOutcome {
   r: number;
 }
 
-// Replay (dto.rs, sandchart_core::replay). `bar` indexes the session's candles: context
-// before `start`, then the revealed bars up to `current`.
-/** Open fills at the close of `bar`; an edit is in force from the next bar; close fills at the close of `bar`. */
+// Replay (dto.rs, sandchart_core::replay; ADR 0008). Bar indices count the session's candles:
+// context before `start`, then the revealed bars up to `current`. Commands carry a time instead:
+// the cut (`ReplayState.cut`, the close time of the current bar) when they were given.
+/** Open fills at the close of the bar ending at `time`; an edit is in force from the next bar; close fills at the close of that bar. */
 export type ReplayCommand =
-  | { kind: "open"; bar: number; side: Side; stop: number; take: number }
-  | { kind: "edit"; bar: number; stop?: number; take?: number }
-  | { kind: "close"; bar: number };
+  | { kind: "open"; time: number; side: Side; stop: number; take: number }
+  | { kind: "edit"; time: number; stop?: number; take?: number }
+  | { kind: "close"; time: number };
 export type ExitReason = "take" | "stop" | "manual" | "open";
-/** One trade. An open trade has no exit; its `r` is marked to the close of the current bar. */
+/** One trade; its times are the open times of the bars it filled on. An open trade has no exit; its `r` is marked to the close of the current bar. */
 export interface ReplayTrade {
   side: Side;
-  entryBar: number;
   entryTime: number;
   entryPrice: number;
   /** The stop at entry; R is measured against it. */
@@ -254,7 +254,6 @@ export interface ReplayTrade {
   /** The levels in force at the exit (or now, while open). */
   stop: number;
   take: number;
-  exitBar: number | null;
   exitTime: number | null;
   exitPrice: number | null;
   reason: ExitReason;
@@ -285,6 +284,8 @@ export interface ReplayState {
   start: number;
   /** Index of the last revealed bar. */
   current: number;
+  /** The close time of the current bar: the time a command given now carries. */
+  cut: number;
   /** No bar is left to reveal. */
   atEnd: boolean;
   /** Index of `bars.time[0]`. */

@@ -47,6 +47,8 @@ export interface ReplayView {
   start: number;
   /** Index of the last revealed bar. */
   current: number;
+  /** The close time of the current bar; commands carry it. */
+  cut: number;
   atEnd: boolean;
   /** Open time and close of the last revealed bar. */
   time: number;
@@ -264,7 +266,7 @@ export class ReplayController {
   /** Closes the open trade at the close of the current bar. */
   closeTrade(): Promise<void> {
     if (!this.view?.open) return Promise.resolve();
-    return this.command(() => (this.view!.open ? { kind: "close", bar: this.view!.current } : null));
+    return this.command(() => (this.view!.open ? { kind: "close", time: this.view!.cut } : null));
   }
 
   /**
@@ -273,14 +275,14 @@ export class ReplayController {
    * whose trade closed in the meantime, or whose levels no longer hold, is dropped without a word.
    */
   edit(stop: number, take: number): Promise<void> {
-    const entryBar = this.view?.open?.entryBar;
-    if (entryBar === undefined) return Promise.resolve();
+    const entryTime = this.view?.open?.entryTime;
+    if (entryTime === undefined) return Promise.resolve();
     return this.command(() => {
       const v = this.view!;
       const t = v.open;
-      if (!t || t.entryBar !== entryBar || !validLevels(t.side, v.close, stop, take)) return null;
+      if (!t || t.entryTime !== entryTime || !validLevels(t.side, v.close, stop, take)) return null;
       if (stop === t.stop && take === t.take) return null;
-      const cmd: ReplayCommand = { kind: "edit", bar: v.current };
+      const cmd: ReplayCommand = { kind: "edit", time: v.cut };
       if (stop !== t.stop) cmd.stop = stop;
       if (take !== t.take) cmd.take = take;
       return cmd;
@@ -351,7 +353,7 @@ export class ReplayController {
       // A second click while the first trade was on its way opens nothing.
       if (this.view!.open) return null;
       const { stop, take } = defaultLevels(side, this.view!.close);
-      return { kind: "open", bar: this.view!.current, side, stop, take };
+      return { kind: "open", time: this.view!.cut, side, stop, take };
     });
   }
 
@@ -400,6 +402,7 @@ export class ReplayController {
       tf: st.tf,
       start: st.start,
       current: st.current,
+      cut: st.cut,
       atEnd: st.atEnd,
       time: n > 0 ? st.bars.time[n - 1]! : (prev?.time ?? 0),
       close: n > 0 ? st.bars.close[n - 1]! : (prev?.close ?? 0),

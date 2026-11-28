@@ -167,7 +167,7 @@ test("replay_start_step_play_trade_save_open_exit", async ({ page }) => {
   await page.getByTestId("replay-file").setInputFiles({
     name: "bad.replay",
     mimeType: "application/json",
-    buffer: Buffer.from(text.replace('"version": 1', '"version": 9')),
+    buffer: Buffer.from(text.replace('"version": 2', '"version": 9')),
   });
   await expect(page.getByTestId("replay-error")).toContainText("replay file version 9 is not supported");
   expect(await lastBar(page)).toBe(revealed);

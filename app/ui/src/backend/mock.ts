@@ -26,7 +26,7 @@ import {
   type UpdateInfo,
 } from "./types";
 import { type MockUpdate, mockFires, mockLevelOf, mockValidateAlert } from "./mockAlerts";
-import { MOCK_MAX_REPLAY_CANDLES, type MockCandle, mockReadReplay, mockSimulate, mockWriteReplay } from "./mockReplay";
+import { MOCK_MAX_REPLAY_CANDLES, type MockCandle, mockCloseTime, mockReadReplay, mockRevealed, mockSimulate, mockWriteReplay } from "./mockReplay";
 
 const PAGE = 1000;
 /** Bars of context before a replay's start, as `REPLAY_CONTEXT` in the engine. */
@@ -540,7 +540,8 @@ export interface MockBackend extends Backend {
   replayFile(): string | null;
 }
 
-/** A replay session over the mock's candles (made as they are revealed) or a file's. */
+/** A replay session over the mock's candles (made as they are revealed) or a file's. Its base
+ * timeframe is the chart's, as in the engine for now (ADR 0008). */
 interface MockSession {
   instrument: Instrument;
   tf: TimeframeCode;
@@ -800,10 +801,15 @@ export function createMockBackend(opts: MockOptions): MockBackend {
     while (s.make && s.candles.length <= s.current) s.candles.push(s.make(s.candles.length));
   }
 
+  /** The close time of bar `i`: the cut once it is revealed. */
+  function cutAt(s: MockSession, i: number): number {
+    return mockCloseTime(s.tf, s.candles[i]!.time);
+  }
+
   function simulateOrThrow(s: MockSession, commands: ReplayCommand[]) {
     reveal(s);
     try {
-      return mockSimulate(s.candles, s.start, s.current, commands);
+      return mockSimulate(s.tf, s.candles, cutAt(s, s.start), cutAt(s, s.current), commands);
     } catch (e) {
       throw problem(e instanceof Error ? e.message : String(e));
     }
@@ -828,6 +834,7 @@ export function createMockBackend(opts: MockOptions): MockBackend {
       tf: s.tf,
       start: s.start,
       current: s.current,
+      cut: cutAt(s, s.current),
       atEnd: s.current + 1 >= s.total,
       from,
       bars,
@@ -965,7 +972,14 @@ export function createMockBackend(opts: MockOptions): MockBackend {
       await delay();
       const s = openSession();
       reveal(s);
-      savedReplay = await mockWriteReplay({ ...s, candles: s.candles.slice(0, s.current + 1) });
+      savedReplay = await mockWriteReplay({
+        instrument: s.instrument,
+        base: s.tf,
+        candles: s.candles.slice(0, s.current + 1),
+        start: cutAt(s, s.start),
+        cut: cutAt(s, s.current),
+        commands: s.commands,
+      });
       return `${s.instrument.id.symbol}-${s.tf}.replay`;
     },
 
@@ -977,7 +991,18 @@ export function createMockBackend(opts: MockOptions): MockBackend {
       } catch (e) {
         throw problem(e instanceof Error ? e.message : String(e));
       }
-      session = { ...f, total: f.candles.length, make: null };
+      // The file simulated, so both cuts are close times of its candles.
+      const index = (cut: number) => mockRevealed(f.base, f.candles, cut).length - 1;
+      session = {
+        instrument: f.instrument,
+        tf: f.base,
+        candles: f.candles,
+        total: f.candles.length,
+        make: null,
+        start: index(f.start),
+        current: index(f.cut),
+        commands: f.commands,
+      };
       return replayStateOf(session, 0, 0);
     },
 

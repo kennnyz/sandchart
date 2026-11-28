@@ -81,8 +81,8 @@ function tag(ctx: CanvasRenderingContext2D, text: string, color: string, x: numb
 export class ReplayLayer {
   private marks: ReplayMarks | null = null;
   private coords: Coords | null = null;
-  /** A stop or take being dragged, of the open trade entered at `entryBar`. */
-  private drag: { level: Level; stop: number; take: number; entryBar: number } | null = null;
+  /** A stop or take being dragged, of the open trade entered at `entryTime`. */
+  private drag: { level: Level; stop: number; take: number; entryTime: number } | null = null;
 
   /**
    * New marks (a step, a command). A drag goes on while its trade is still the open one, its
@@ -93,7 +93,7 @@ export class ReplayLayer {
     const d = this.drag;
     if (!d) return;
     const t = this.open();
-    if (!m || t?.entryBar !== d.entryBar) this.drag = null;
+    if (!m || t?.entryTime !== d.entryTime) this.drag = null;
     else d[d.level] = clampLevel(t.side, d.level, m.close, d[d.level]);
   }
 
@@ -129,7 +129,7 @@ export class ReplayLayer {
 
   startDrag(level: Level): void {
     const t = this.open();
-    if (t) this.drag = { level, stop: t.stop, take: t.take, entryBar: t.entryBar };
+    if (t) this.drag = { level, stop: t.stop, take: t.take, entryTime: t.entryTime };
   }
 
   /** Moves the dragged level to `y`, kept on its side of the close (as the engine checks an edit). */

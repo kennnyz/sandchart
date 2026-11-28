@@ -206,7 +206,8 @@ describe("replay controller", () => {
   });
 
   it("edits only changed levels, refuses invalid ones, and closes manually", async () => {
-    const { c, backend } = await started();
+    const { c, backend, startTime } = await started();
+    const H = 3_600_000;
     const sent: ReplayCommand[] = [];
     const send = backend.replayCommand.bind(backend);
     vi.spyOn(backend, "replayCommand").mockImplementation((cmd) => {
@@ -222,14 +223,15 @@ describe("replay controller", () => {
     await c.edit(t.stop + 2_000, t.take);
     await c.edit(t.stop + 2_000, t.take - 2_000);
     expect(sent.slice(1)).toEqual([
-      { kind: "edit", bar: 500, stop: t.stop + 2_000 },
-      { kind: "edit", bar: 500, take: t.take - 2_000 },
+      // Commands carry the cut: the close time of the current bar.
+      { kind: "edit", time: startTime + H, stop: t.stop + 2_000 },
+      { kind: "edit", time: startTime + H, take: t.take - 2_000 },
     ]);
     await c.step();
     await c.closeTrade();
-    expect(sent.at(-1)).toEqual({ kind: "close", bar: 501 });
+    expect(sent.at(-1)).toEqual({ kind: "close", time: startTime + 2 * H });
     expect(c.view!.open).toBeNull();
-    expect(c.view!.trades[0]).toMatchObject({ reason: "manual", exitBar: 501, initialStop: t.stop });
+    expect(c.view!.trades[0]).toMatchObject({ reason: "manual", exitTime: startTime + H, initialStop: t.stop });
     expect(c.view!.stats.count).toBe(1);
   });
 
@@ -286,7 +288,7 @@ describe("replay controller", () => {
     await c.save();
     const before = c.view!;
     const text = backend.replayFile()!;
-    expect(text).toContain('"version": 1');
+    expect(text).toContain('"version": 2');
 
     await c.exit();
     expect(c.phase).toBe("off");
@@ -348,7 +350,7 @@ describe("replay controller", () => {
     await c.step();
     expect(asked).toEqual([0, 0, 1, 1, 1]);
     expect(c.view!.trades).toHaveLength(2);
-    expect(c.view!.trades[0]).toMatchObject({ reason: "manual", exitBar: 500 });
+    expect(c.view!.trades[0]).toMatchObject({ reason: "manual", exitTime: c.view!.trades[0]!.entryTime });
     expect(c.view!.open).toBe(c.view!.trades[1]);
     expect(c.view!.trades).toEqual((await state(0, 0)).trades);
   });
@@ -370,7 +372,7 @@ describe("replay controller", () => {
     const { c, shown } = await started();
     await Promise.all([c.step(), c.buy(), c.step(), c.step()]);
     expect(c.view!.current).toBe(503);
-    expect(c.view!.trades[0]!.entryBar).toBe(501);
+    expect(c.view!.trades[0]!.entryTime).toBe(shown[501]);
     expect(shown).toHaveLength(504);
   });
 });

@@ -132,7 +132,7 @@ describe("tauri backend", () => {
       return Promise.resolve(null);
     }) as never);
     const { tauriBackend } = await import("./tauri");
-    const command = { kind: "open" as const, bar: 3, side: "long" as const, stop: 90, take: 120 };
+    const command = { kind: "open" as const, time: 3_600_000, side: "long" as const, stop: 90, take: 120 };
     const file = new Uint8Array([123, 125]);
     await tauriBackend.replayStart({ source: "binance", symbol: "BTCUSDT" }, "4h", 7);
     await tauriBackend.replayStep(2);
