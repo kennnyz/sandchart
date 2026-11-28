@@ -941,3 +941,33 @@ async fn a_step_stands_when_newer_candles_fail_to_load_and_the_next_step_tries_a
     assert!(st.newer_error.is_none());
     assert_eq!(f.engine.replay_step(1).await.unwrap(), T0 + BARS * H);
 }
+
+#[tokio::test]
+async fn an_empty_answer_while_a_candle_should_have_closed_is_no_catch_up() {
+    // Cached up to 599, the clock two hours later: bar 600 has closed, but the exchange
+    // sends nothing newer (a gap, or a bad answer). That is reported, not a catch-up.
+    let f = live_engine(T0 + (BARS + 2) * H);
+    f.provider.set(TF, (0..BARS).map(bar).collect());
+    f.engine
+        .replay_start(&id(), TF, T0 + (BARS - 2) * H)
+        .await
+        .unwrap();
+    f.engine.replay_step(1).await.unwrap();
+    let st = f.engine.replay_state(TF, 0, 0).unwrap();
+    assert!(!st.caught_up && st.caught_up_at.is_none());
+    let msg = st.newer_error.expect("reported");
+    assert_eq!(
+        msg,
+        format!(
+            "no 1h candle came from {} on, though one has closed since; the next step asks again",
+            T0 + BARS * H
+        )
+    );
+    // Bar 600 comes: it steps, and with 601 still forming the replay has caught up.
+    f.provider.set(TF, (0..=BARS).map(bar).collect());
+    f.clock.store(T0 + (BARS + 1) * H + 1, Ordering::Relaxed);
+    assert_eq!(f.engine.replay_step(1).await.unwrap(), T0 + (BARS + 1) * H);
+    let st = f.engine.replay_state(TF, 0, 0).unwrap();
+    assert_eq!(st.caught_up_at, Some(T0 + (BARS + 1) * H));
+    assert!(st.newer_error.is_none());
+}

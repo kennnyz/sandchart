@@ -484,6 +484,7 @@ impl Engine {
 
     /// Closed base candles after the one opening at `last`, at most `room`: the cached
     /// ones when they follow it without a gap, else the provider's (kept in memory only).
+    /// Empty means caught up: the candle after `last` has not closed yet.
     async fn newer_candles(
         &self,
         inst: &Instrument,
@@ -508,6 +509,15 @@ impl Engine {
             return Ok(cached);
         }
         match fetch_window(provider.as_ref(), inst, base, from, now, room).await {
+            // Caught up only when no newer candle can have closed yet; nothing while one
+            // has is a gap in the exchange's data or a bad answer, not real time.
+            Ok(fetched) if fetched.is_empty() && base.close_time(from) <= now => {
+                self.shared.note_ok();
+                Err(EngineError::Replay(format!(
+                    "no {} candle came from {from} on, though one has closed since; the next step asks again",
+                    base.code()
+                )))
+            }
             Ok(fetched) => {
                 self.shared.note_ok();
                 Ok(fetched)
