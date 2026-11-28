@@ -262,6 +262,11 @@ export class DrawingController {
     this.onChange();
   }
 
+  /** Resolves once every change reported so far was stored (or failed). */
+  settled(): Promise<void> {
+    return this.saving;
+  }
+
   /** Passes a keyboard command to the chart; false when it did nothing. */
   command(cmd: DrawingCommand): boolean {
     return this.surface?.drawingCommand(cmd) ?? false;

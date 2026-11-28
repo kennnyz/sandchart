@@ -1,6 +1,6 @@
 import type { CandleColumns, Candles, Drawing, Instrument, LiveCandle, PositionOutcome, TimeframeCode } from "../backend/types";
 import { chartDebug } from "./debug";
-import { Coords, type Step } from "./drawings/geometry";
+import { Coords, MAX_TICKS, type Step } from "./drawings/geometry";
 import { DrawingLayer, type DrawingCommand, type StyleAction, type StyleEdit, type TextEdit, type TextResult } from "./drawings/layer";
 import type { ToolId } from "./drawings/registry";
 import type { DrawingChange } from "./drawings/state";
@@ -355,6 +355,17 @@ export class Chart {
 
   onCrosshair(cb: (index: number | null) => void): void {
     this.crosshairCb = cb;
+  }
+
+  /** The pair and the price in whole ticks under the mouse on the price plot; null elsewhere. */
+  crosshairPrice(): { instrument: Instrument; price: number } | null {
+    const m = this.mouse;
+    const f = this.lastFrame;
+    if (!m || !f || !this.instrument || this.drag) return null;
+    if (!(m.x >= 0 && m.x < this.plot().plotW && m.y >= 0 && m.y < this.priceH())) return null;
+    const v = Math.round(f.scale.fromY(m.y));
+    const price = Math.min(MAX_TICKS, Math.max(f.scale.mode === "log" ? 1 : -MAX_TICKS, v));
+    return Number.isSafeInteger(price) ? { instrument: this.instrument, price } : null;
   }
 
   /** The drawings of the instrument on the chart; selection and undo history start over. */

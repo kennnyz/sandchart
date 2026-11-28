@@ -1,6 +1,6 @@
-import { X } from "lucide-react";
+import { Bell, BellOff, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
-import type { DrawingBody } from "../backend/types";
+import type { Alert, AlertDirection, DrawingBody } from "../backend/types";
 import type { StyleEdit } from "../chart/drawings/layer";
 import { typing } from "../chart/drawings/keys";
 import { toolFor } from "../chart/drawings/registry";
@@ -8,8 +8,16 @@ import type { DrawingPatch } from "../chart/drawings/state";
 import { FIB_LEVELS } from "../chart/drawings/tools/fib";
 import { t } from "../i18n";
 
+/** The alert of a line drawing (hline, trend); absent for other kinds. */
+export interface LineAlert {
+  current: Alert | undefined;
+  onSet(direction: AlertDirection): void;
+  onRemove(): void;
+}
+
 export interface DrawingStyleProps {
   edit: StyleEdit;
+  alert?: LineAlert;
   palette: readonly string[];
   hostWidth: number;
   hostHeight: number;
@@ -78,12 +86,58 @@ function BodyOptions({ body, onBody }: { body: DrawingBody; onBody(b: DrawingBod
   return null;
 }
 
+const DIRECTIONS: readonly AlertDirection[] = ["cross", "above", "below"];
+
+/** Direction, and set or remove: a changed direction of a set alert arms it again with it. */
+function AlertSection({ alert }: { alert: LineAlert }) {
+  const a = alert.current;
+  const [direction, setDirection] = useState<AlertDirection>(a?.direction ?? "cross");
+  useEffect(() => {
+    if (a) setDirection(a.direction);
+  }, [a?.direction]);
+  return (
+    <div className="ind-field dstyle-alert" data-testid="drawing-alert" data-state={a ? (a.active ? "active" : "fired") : "none"}>
+      <label htmlFor="dstyle-alert-direction">
+        {a && !a.active ? `${t("drawingStyle.alert")} · ${t("drawingStyle.alertFired")}` : t("drawingStyle.alert")}
+      </label>
+      <div className="dstyle-alert-controls">
+        <select
+          id="dstyle-alert-direction"
+          value={direction}
+          onChange={(e) => {
+            const d = e.target.value as AlertDirection;
+            setDirection(d);
+            if (a) alert.onSet(d);
+          }}
+        >
+          {DIRECTIONS.map((d) => (
+            <option key={d} value={d}>
+              {t(`alerts.dir.${d}`)}
+            </option>
+          ))}
+        </select>
+        {a ? (
+          <button className="text-button dstyle-alert-button" data-testid="drawing-alert-remove" onClick={alert.onRemove}>
+            <BellOff size={13} />
+            {t("drawingStyle.alertRemove")}
+          </button>
+        ) : (
+          <button className="text-button dstyle-alert-button" data-testid="drawing-alert-set" onClick={() => alert.onSet(direction)}>
+            <Bell size={13} />
+            {t("drawingStyle.alertCreate")}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /**
  * The look of a drawing in a small dialog next to it: colour slot, width, dash, the
- * options of its kind, lock and delete. Every change applies at once and is one undo step.
+ * options of its kind, its alert (lines only), lock and delete. Every style change applies at once and is one undo step.
  * Esc closes, Tab stays inside.
  */
-export function DrawingStyle({ edit, palette, hostWidth, hostHeight, onChange, onDelete, onClose }: DrawingStyleProps) {
+export function DrawingStyle({ edit, alert, palette, hostWidth, hostHeight, onChange, onDelete, onClose }: DrawingStyleProps) {
   const ref = useRef<HTMLDivElement>(null);
   const d = edit.drawing;
   const tool = toolFor(d.body.kind);
@@ -124,7 +178,7 @@ export function DrawingStyle({ edit, palette, hostWidth, hostHeight, onChange, o
       e.preventDefault();
       onClose();
     } else if (e.key === "Tab") {
-      const items = [...(ref.current?.querySelectorAll<HTMLElement>("button, input:not(:disabled)") ?? [])];
+      const items = [...(ref.current?.querySelectorAll<HTMLElement>("button, input:not(:disabled), select") ?? [])];
       const i = items.indexOf(document.activeElement as HTMLElement);
       const next = e.shiftKey ? (i <= 0 ? items.length - 1 : i - 1) : i === items.length - 1 ? 0 : i + 1;
       e.preventDefault();
@@ -189,6 +243,7 @@ export function DrawingStyle({ edit, palette, hostWidth, hostHeight, onChange, o
       </div>
       <Toggle id="dstyle-dash" label={t("drawingStyle.dash")} checked={d.style.dash} onChange={(on) => style({ dash: on })} />
       <BodyOptions body={d.body} onBody={(body) => onChange({ body })} />
+      {alert && <AlertSection alert={alert} />}
       <Toggle id="dstyle-lock" label={t("drawingStyle.lock")} checked={d.locked} onChange={(on) => onChange({ locked: on })} />
       <div className="note-editor-footer dstyle-footer">
         <button className="text-button" data-testid="drawing-style-delete" onClick={onDelete}>

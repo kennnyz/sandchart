@@ -10,8 +10,10 @@ import { tfLabel } from "./components/TimeframePicker";
 import { SymbolSearch, type SearchMode } from "./components/SymbolSearch";
 import { TopBar } from "./components/TopBar";
 import { Watchlist } from "./components/Watchlist";
+import { AlertsPanel, AlertToast } from "./components/AlertsPanel";
 import { useLanguage } from "./i18n";
 import { sourceName } from "./labels";
+import { alertStore } from "./state/alerts";
 import { drawingStore } from "./state/drawings";
 import { indicatorStore } from "./state/indicators";
 import { replayStore } from "./state/replay";
@@ -44,7 +46,7 @@ function storedWatchlistVisible(): boolean {
 const sameId = (a: InstrumentId, b: InstrumentId) => a.source === b.source && a.symbol === b.symbol;
 
 export function App() {
-  useLanguage(); // re-render everything when the language changes
+  const lang = useLanguage(); // re-render everything when the language changes
   const [themeName, setThemeName] = useState<ThemeName>(storedTheme);
   const [current, setCurrent] = useState<InstrumentId | null>(null);
   const [tf, setTf] = useState<TimeframeCode>("1h");
@@ -62,6 +64,12 @@ export function App() {
   const [drawings] = useState(() => drawingStore(backend));
   const [updates] = useState(() => updateStore(backend));
   const [replay] = useState(() => replayStore(backend));
+  const [alerts] = useState(() => alertStore(backend));
+  useEffect(() => alerts.state.start(), [alerts]);
+  // OS notifications of fired alerts are written in Rust, in the UI's language.
+  useEffect(() => {
+    backend.setLanguage(lang).catch((e: unknown) => console.error("setting the language failed", e));
+  }, [lang]);
   const replayPhase = useSyncExternalStore(replay.subscribe, () => replay.state.phase);
   // The replayed pair as a stable key: the watchlist hides its live quote.
   const replayingKey = useSyncExternalStore(replay.subscribe, () => {
@@ -247,22 +255,27 @@ export function App() {
               indicators={indicators}
               drawings={drawings}
               replay={replay}
+              alerts={alerts}
             />
           )}
         </div>
         {watchlistVisible && (
-        <Watchlist
-          backend={backend}
-          ids={watchlist}
-          savedVersion={savedVersion}
-          current={current}
-          replaying={replaying}
-          onOpen={setCurrent}
-          onChange={saveWatchlist}
-          onAdd={() => setSearchMode("add")}
-          onHide={() => showWatchlist(false)}
-        />
+          <div className="side">
+            <Watchlist
+              backend={backend}
+              ids={watchlist}
+              savedVersion={savedVersion}
+              current={current}
+              replaying={replaying}
+              onOpen={setCurrent}
+              onChange={saveWatchlist}
+              onAdd={() => setSearchMode("add")}
+              onHide={() => showWatchlist(false)}
+            />
+            <AlertsPanel store={alerts} onOpen={setCurrent} />
+          </div>
         )}
+        <AlertToast store={alerts} />
       </div>
       <StatusBar source={sourceName(current?.source ?? "binance")} connection={connection} updates={updates} />
       {indicatorsOpen && (
