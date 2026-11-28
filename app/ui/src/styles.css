@@ -1173,39 +1173,60 @@ button:disabled {
 
 /* ---- Replay ---- */
 
-.chart-row {
-  flex: 1;
-  display: flex;
-  min-height: 0;
-}
 .text-button[aria-pressed="true"] {
   background: var(--fg-8);
   color: var(--fg);
 }
+/* Centred under the chart; X sits at the right end. */
 .replay-bar {
-  height: 36px;
+  position: relative;
+  height: 40px;
   flex: none;
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 0 8px;
+  justify-content: center;
+  padding: 0 44px;
   border-top: 1px solid var(--line);
   background: var(--panel);
   font-size: 12px;
 }
+.replay-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  height: 30px;
+  padding: 0 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+}
 .replay-bar .divider {
   height: 18px;
-  margin: 0 6px;
+  margin: 0 4px;
 }
-.replay-bar .spacer {
-  flex: 1;
+.replay-bar .icon-button {
+  width: 26px;
+  height: 26px;
 }
 .replay-bar .icon-button[aria-pressed="true"] {
   color: var(--fg);
 }
-.replay-bar .icon-button:hover,
-.replay-bar .text-button:hover {
+.replay-bar .icon-button:hover:not(:disabled),
+.replay-bar .text-button:hover:not(:disabled),
+.replay-bar [aria-expanded="true"] {
   color: var(--fg);
+  background: var(--fg-5);
+}
+.replay-bar .text-button.with-icon {
+  gap: 4px;
+  white-space: nowrap;
+}
+.replay-exit {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
 }
 .replay-icon {
   color: var(--muted);
@@ -1228,68 +1249,123 @@ button:disabled {
   color: var(--fg);
   font-size: 12px;
 }
-.replay-speeds {
-  display: flex;
-  gap: 1px;
-  margin-left: 4px;
-  padding: 2px;
-  border-radius: 6px;
-  background: var(--fg-5);
-}
-.replay-speed {
-  height: 22px;
-  min-width: 28px;
-  padding: 0 5px;
-  border-radius: 4px;
-  font-size: 11px;
-  color: var(--muted);
-}
-.replay-speed:hover {
-  color: var(--fg);
-}
-.replay-speed[aria-pressed="true"] {
-  background: var(--bg);
-  color: var(--fg);
-}
 .replay-end,
 .replay-file-error {
-  margin-left: 8px;
+  margin: 0 6px;
   color: var(--muted);
   white-space: nowrap;
 }
-.replay-stats {
-  width: 184px;
+.ctx-menu-blank {
+  width: 14px;
+  height: 14px;
   flex: none;
-  padding: 10px 12px;
-  border-left: 1px solid var(--line);
+}
+.replay-anchor {
+  position: relative;
+}
+.replay-confirm {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 30;
+  width: 280px;
+  padding: 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+.replay-confirm-title {
+  color: var(--fg);
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.replay-confirm-text {
+  color: var(--muted);
+  line-height: 1.4;
+}
+.replay-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 10px;
+}
+/* The results under the replay bar: a row of numbers, then the trades, scrolling. */
+.replay-results {
+  flex: none;
+  border-top: 1px solid var(--line);
   background: var(--panel);
   font-size: 12px;
-  overflow-y: auto;
 }
-.replay-stats-title {
-  margin-bottom: 8px;
-  color: var(--muted);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+.replay-results-head {
+  height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  overflow: hidden;
+}
+.replay-results-toggle {
+  flex: none;
+  color: var(--fg);
+}
+.replay-stats-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 .replay-stat {
   display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  height: 22px;
-  align-items: center;
+  align-items: baseline;
+  gap: 6px;
+  white-space: nowrap;
 }
 .replay-stat .label {
   color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
-.replay-stats-sep {
-  height: 1px;
-  margin: 6px 0;
-  background: var(--line);
+/* A fixed height, so the chart does not jump as trades are added. */
+.replay-trades {
+  height: 120px;
+  overflow-y: auto;
+  border-top: 1px solid var(--line);
+}
+.replay-trades:focus-visible {
+  outline: 1px solid var(--muted);
+  outline-offset: -1px;
+}
+.replay-trades table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.replay-trades th {
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+  color: var(--muted);
+  font-weight: 400;
+  text-align: left;
+}
+.replay-trades th,
+.replay-trades td {
+  height: 24px;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+.replay-trades tbody tr + tr td {
+  border-top: 1px solid var(--fg-5);
+}
+.replay-trades .num {
+  text-align: right;
+}
+.replay-trades .muted,
+.replay-trades-none {
+  color: var(--muted);
+}
+.replay-trades-none {
+  padding: 6px 12px;
 }
 
 /* ---- Alerts: the panel under the watchlist, the toast, the popover section ---- */

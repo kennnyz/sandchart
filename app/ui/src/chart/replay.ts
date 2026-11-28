@@ -206,6 +206,9 @@ export class ReplayLayer {
     for (const t of m.trades) if (t.reason !== "open" && this.paintClosed(ctx, t, c, th) && debug) debug.replayClosed++;
     const open = this.open();
     if (open) this.paintOpen(ctx, open, c, dpr, th);
+    // Left open at real time: its zone and R as it stood there, without handles to drag.
+    const unfinished = m.trades.find((t) => t.reason === "unfinished");
+    if (unfinished) this.paintOpen(ctx, unfinished, c, dpr, th, false);
     ctx.restore();
   }
 
@@ -262,7 +265,7 @@ export class ReplayLayer {
     return true;
   }
 
-  private paintOpen(ctx: CanvasRenderingContext2D, t: ReplayTrade, c: Coords, dpr: number, th: ChartTheme): void {
+  private paintOpen(ctx: CanvasRenderingContext2D, t: ReplayTrade, c: Coords, dpr: number, th: ChartTheme, handles = true): void {
     const tool = toolFor("position");
     if (!tool) return;
     const body = this.body(t, c);
@@ -277,6 +280,7 @@ export class ReplayLayer {
     ctx.textBaseline = "middle";
     // The marked R right of the zone, on the entry line.
     tag(ctx, formatR(t.r), signColor(t.r, th), c.x(body.endT) + GAP, c.y(t.entryPrice), th);
+    if (!handles) return;
     const mid = (c.x(body.entry.t) + c.x(body.endT)) / 2;
     const debug = chartDebug();
     if (debug) debug.replayHandles = { stop: { x: mid, y: c.y(body.stop) }, take: { x: mid, y: c.y(body.take) } };

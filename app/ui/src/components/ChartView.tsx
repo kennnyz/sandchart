@@ -123,16 +123,17 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
 
   useEffect(() => {
     if (!parts) return;
+    // Another timeframe of the replayed pair: the replay shows it (re-basing to a lower one)
+    // and keeps its trades; its bars come through the feed, which drops the old results.
+    if (rp.replays({ source, symbol })) {
+      void rp.setTimeframe(tf);
+      return;
+    }
     // Results of the old chart would align by time on the new one: drop them first.
     ind.clear();
     computedFor.current = null;
     parts.chart.setIndicators(ind.layers(), 0);
-    // Back on the replayed chart (an opened file switched to it): show the replay again.
-    if (rp.matches({ source, symbol }, tf)) {
-      void rp.resync();
-      return;
-    }
-    // Another chart was picked: the replay ends, and this chart loads live.
+    // Another pair was picked: the replay ends, and this chart loads live.
     if (rp.phase !== "off") void rp.exit(false);
     void parts.session.open({ source, symbol }, tf);
   }, [parts, source, symbol, tf, ind, rp]);
@@ -150,9 +151,13 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
       show(st) {
         swapped();
         parts.session.showReplay(st);
+        if (st.caughtUp) void parts.session.followReplay();
       },
       append(bars) {
         parts.session.appendReplay(bars);
+      },
+      follow() {
+        void parts.session.followReplay();
       },
       reload() {
         swapped();
@@ -373,7 +378,6 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
           detail={rp.error}
         />
       )}
-      <div className="chart-row">
       <div
         ref={hostRef}
         data-testid="chart"
@@ -450,9 +454,8 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
         )}
         {loading && <Loading symbol={symbol} tf={tfLabel(tf)} source={sourceLabel} />}
       </div>
-      {replayView && <ReplayStats view={replayView} />}
-      </div>
       {rp.phase !== "off" && <ReplayBar replay={rp} range={range} onDate={pickByDate} />}
+      {replayView && <ReplayStats replay={rp} />}
     </>
   );
 }

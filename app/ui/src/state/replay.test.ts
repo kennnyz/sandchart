@@ -1,38 +1,70 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMockBackend } from "../backend/mock";
-import type { CandleColumns, ReplayCommand, ReplayState } from "../backend/types";
-import { clampLevel, defaultLevels, ReplayController, replayKeyAction, validLevels, type ReplayKey } from "./replay";
+import type { CandleColumns, LiveEvent, ReplayCommand, ReplayState, TimeframeCode } from "../backend/types";
+import { TIMEFRAME_CODES } from "../backend/types";
+import {
+  baseChoices,
+  clampLevel,
+  defaultLevels,
+  RESULTS_COLLAPSED_KEY,
+  ReplayController,
+  replayKeyAction,
+  validLevels,
+  type KeyValue,
+  type ReplayKey,
+} from "./replay";
+
+const H = 3_600_000;
 
 const id = { source: "mock", symbol: "BTCUSDT" };
 
 /** A controller on the mock (no latency) with a feed that keeps what the chart would show. */
-async function setup(candles = 2000) {
+async function setup(candles = 2000, storage?: KeyValue) {
   const backend = createMockBackend({ candles });
   const page = await backend.getCandles(id, "1h");
   const shown: number[] = [];
+  /** The bars as the chart has them: a bar with the last one's time replaces it, as `updateLast` does. */
+  const bars: { time: number; high: number; low: number; close: number }[] = [];
+  const put = (b: CandleColumns, i: number) => {
+    const bar = { time: b.time[i]!, high: b.high[i]!, low: b.low[i]!, close: b.close[i]! };
+    if (bars.at(-1)?.time === bar.time) {
+      bars[bars.length - 1] = bar;
+    } else {
+      bars.push(bar);
+      shown.push(bar.time);
+    }
+  };
   const feed = {
     shows: 0,
     reloads: 0,
+    follows: 0,
+    last: null as ReplayState | null,
     show(st: ReplayState) {
       this.shows++;
+      this.last = st;
       shown.length = 0;
-      shown.push(...st.bars.time);
+      bars.length = 0;
+      for (let i = 0; i < st.bars.time.length; i++) put(st.bars, i);
     },
-    append(bars: CandleColumns) {
-      shown.push(...bars.time);
+    append(b: CandleColumns) {
+      for (let i = 0; i < b.time.length; i++) put(b, i);
+    },
+    follow() {
+      this.follows++;
     },
     reload() {
       this.reloads++;
     },
   };
-  const c = new ReplayController(backend, () => undefined);
+  const c = new ReplayController(backend, () => undefined, storage);
   c.attach(feed);
-  return { backend, page, c, feed, shown };
+  return { backend, page, c, feed, shown, bars };
 }
 
-async function started(candles = 2000) {
+/** A start at the bar `back` bars before the newest one. */
+async function started(candles = 2000, back = 100) {
   const s = await setup(candles);
-  const startTime = s.page.time[s.page.time.length - 100]!;
+  const startTime = s.page.time[s.page.time.length - back]!;
   s.c.pick();
   await s.c.start(id, "1h", startTime);
   return { ...s, startTime };
@@ -60,8 +92,9 @@ describe("replay controller", () => {
     expect(shown).toHaveLength(501);
     expect(shown.at(-1)).toBe(startTime);
     expect(c.view).toMatchObject({ start: 500, current: 500, time: startTime, atEnd: false, open: null });
-    expect(c.matches(id, "1h")).toBe(true);
-    expect(c.matches(id, "4h")).toBe(false);
+    expect(c.view).toMatchObject({ tf: "1h", base: "1h", caughtUp: false, partial: false });
+    expect(c.replays(id)).toBe(true);
+    expect(c.replays({ source: "mock", symbol: "ETHUSDT" })).toBe(false);
   });
 
   it("only starts while picking, and a refused start goes back to off with the message", async () => {
@@ -326,13 +359,6 @@ describe("replay controller", () => {
     expect(feed.reloads).toBe(0);
   });
 
-  it("resyncs every revealed bar when the chart comes back to the replay", async () => {
-    const { c, feed, shown } = await started();
-    await c.step();
-    await c.resync();
-    expect(feed.shows).toBe(2);
-    expect(shown).toHaveLength(502);
-  });
 
   it("asks only for the trades after the closed ones it has, and keeps them all", async () => {
     const { c, backend } = await started();
@@ -374,6 +400,264 @@ describe("replay controller", () => {
     expect(c.view!.current).toBe(503);
     expect(c.view!.trades[0]!.entryTime).toBe(shown[501]);
     expect(shown).toHaveLength(504);
+  });
+});
+
+/** A start on the first 1h bar of a 4h bucket, about 100 bars before the newest one. */
+async function startedOn4h(candles = 2000) {
+  const s = await setup(candles);
+  const times = [...s.page.time];
+  const startTime = times.slice(0, -100).filter((t) => t % (4 * H) === 0).at(-1)!;
+  s.c.pick();
+  await s.c.start(id, "1h", startTime);
+  return { ...s, startTime };
+}
+
+describe("replay across timeframes", () => {
+  it("switches to a higher timeframe without a reset, and the forming bar grows with each step", async () => {
+    const { c, backend, bars, startTime } = await startedOn4h();
+    await c.buy();
+    const trades = c.view!.trades;
+    const base = vi.spyOn(backend, "replaySetBase");
+    await c.setTimeframe("4h");
+    expect(base).not.toHaveBeenCalled();
+    expect(c.phase).toBe("on");
+    expect(c.view).toMatchObject({ tf: "4h", base: "1h", partial: true, cut: startTime + H, trades });
+    expect(bars.at(-1)!.time).toBe(startTime);
+    const close1 = (await backend.replayState("1h", 0, 0)).bars;
+    const highs = [bars.at(-1)!.high];
+    for (let k = 1; k <= 3; k++) {
+      await c.step();
+      expect(bars.at(-1)!.time).toBe(startTime);
+      highs.push(bars.at(-1)!.high);
+    }
+    // Complete now; its close is the close of its last 1h candle.
+    expect(c.view!.partial).toBe(false);
+    const hourly = (await backend.replayState("1h", 0, 0)).bars;
+    expect(bars.at(-1)!.close).toBe(hourly.close.at(-1));
+    expect(highs).toEqual([...highs].sort((a, b) => a - b));
+    expect(close1.time.length + 3).toBe(hourly.time.length);
+    await c.step();
+    expect(bars.at(-1)!.time).toBe(startTime + 4 * H);
+    expect(c.view!.trades).toHaveLength(1);
+    expect(c.view!.trades[0]).toMatchObject({ entryTime: trades[0]!.entryTime, entryPrice: trades[0]!.entryPrice });
+  });
+
+  it("re-bases on a lower timeframe and keeps the trades", async () => {
+    const { c, backend, bars, startTime } = await startedOn4h();
+    await c.step();
+    await c.buy();
+    const before = c.view!.open!;
+    const base = vi.spyOn(backend, "replaySetBase");
+    await c.setTimeframe("15m");
+    expect(base).toHaveBeenCalledWith("15m");
+    expect(c.view).toMatchObject({ tf: "15m", base: "15m", cut: startTime + 2 * H });
+    expect(bars.at(-1)!.time).toBe(startTime + 2 * H - H / 4);
+    expect(c.view!.trades).toHaveLength(1);
+    expect(c.view!.open).toMatchObject({ side: "long", entryPrice: before.entryPrice, stop: before.stop, take: before.take });
+    // Back up to 1h: built from the 15m candles, no re-base.
+    await c.setTimeframe("1h");
+    expect(base).toHaveBeenCalledTimes(1);
+    expect(c.view).toMatchObject({ tf: "1h", base: "15m" });
+    await c.step();
+    expect(c.view).toMatchObject({ partial: true, cut: startTime + 2 * H + H / 4 });
+  });
+
+  it("puts the chart back on its timeframe when the replay cannot show the new one", async () => {
+    const { c } = await started();
+    const switched: string[] = [];
+    c.onSwitch((i, tf) => switched.push(`${i.symbol}/${tf}`));
+    await c.setTimeframe("3d");
+    expect(switched).toEqual(["BTCUSDT/1h"]);
+    expect(c.error).toBe("3d candles cannot be built from 1h candles");
+    expect(c.view).toMatchObject({ tf: "1h", base: "1h" });
+    expect(c.phase).toBe("on");
+  });
+
+  it("follows quick switches in order and ends on the last one", async () => {
+    const { c, bars } = await started();
+    await Promise.all([c.setTimeframe("4h"), c.setTimeframe("1h")]);
+    expect(c.view!.tf).toBe("1h");
+    expect(bars.at(-1)!.time).toBe(c.view!.time);
+  });
+
+  it("changes the update interval, keeps the chart's timeframe, and shows a refusal", async () => {
+    const { c, startTime } = await startedOn4h();
+    await c.setTimeframe("4h");
+    await c.setBase("15m");
+    expect(c.view).toMatchObject({ tf: "4h", base: "15m", cut: startTime + H });
+    await c.step();
+    expect(c.view!.cut).toBe(startTime + H + H / 4);
+    // Back to 1h only on a 1h boundary: the engine says where to step to.
+    await c.setBase("1h");
+    expect(c.error).toMatch(/step to .* first/);
+    expect(c.view!.base).toBe("15m");
+    for (let k = 0; k < 3; k++) await c.step();
+    await c.setBase("1h");
+    expect(c.error).toBeNull();
+    expect(c.view).toMatchObject({ tf: "4h", base: "1h", cut: startTime + 2 * H });
+  });
+
+  it("offers the intervals the chart builds from, and a higher one only on its boundary", () => {
+    const tfs = (choices: ReturnType<typeof baseChoices>) => choices.map((ch) => (ch.stepTo === null ? ch.tf : `${ch.tf}@${ch.stepTo}`));
+    const at = Date.UTC(2026, 0, 5, 10, 15);
+    expect(tfs(baseChoices("1h", "1h", at, TIMEFRAME_CODES))).toEqual(["1m", "3m", "5m", "15m", "30m", "1h"]);
+    // Stepping 15m at 10:15 on a 4h chart: 30m from 10:30, 1h from 11:00, 2h and 4h from 12:00.
+    expect(tfs(baseChoices("4h", "15m", at, TIMEFRAME_CODES))).toEqual([
+      "1m",
+      "3m",
+      "5m",
+      "15m",
+      `30m@${at + 15 * 60_000}`,
+      `1h@${at + 45 * 60_000}`,
+      `2h@${at + 105 * 60_000}`,
+      `4h@${at + 105 * 60_000}`,
+    ]);
+    // 5m and 3m do not line up: a 15m chart stepping 3m cannot step 5m.
+    expect(tfs(baseChoices("15m", "3m", Date.UTC(2026, 0, 5, 10, 0), TIMEFRAME_CODES))).toEqual(["1m", "3m", "15m"]);
+    // 3d builds only from itself; 1w from 1d and lower.
+    expect(tfs(baseChoices("3d", "3d", 0, TIMEFRAME_CODES))).toEqual(["3d"]);
+    const week: TimeframeCode[] = baseChoices("1w", "1d", Date.UTC(2026, 0, 5), TIMEFRAME_CODES).map((ch) => ch.tf);
+    expect(week).toContain("1d");
+    expect(week).not.toContain("3d");
+  });
+});
+
+describe("replay select bar", () => {
+  it("without trades goes straight back to the live chart to pick a new start", async () => {
+    const { c, backend, feed, page } = await started();
+    await c.step();
+    const exit = vi.spyOn(backend, "replayExit");
+    await c.selectBar();
+    expect(c.confirming).toBe(false);
+    expect(c.phase).toBe("picking");
+    expect(c.view).toBeNull();
+    expect(exit).toHaveBeenCalledTimes(1);
+    expect(feed.reloads).toBe(1);
+    await c.start(id, "1h", page.time.at(-30)!);
+    expect(c.phase).toBe("on");
+    expect(c.view!.time).toBe(page.time.at(-30));
+  });
+
+  it("with trades asks first; cancel keeps the session, confirm drops it", async () => {
+    const { c, backend, feed } = await started();
+    await c.buy();
+    const exit = vi.spyOn(backend, "replayExit");
+    await c.selectBar();
+    expect(c.confirming).toBe(true);
+    expect(c.phase).toBe("on");
+    expect(exit).not.toHaveBeenCalled();
+    c.cancelSelectBar();
+    expect(c.confirming).toBe(false);
+    expect(c.view!.trades).toHaveLength(1);
+    await c.selectBar();
+    await c.confirmSelectBar();
+    expect(c.confirming).toBe(false);
+    expect(c.phase).toBe("picking");
+    expect(exit).toHaveBeenCalledTimes(1);
+    expect(feed.reloads).toBe(1);
+  });
+
+  it("forgets a pending question when the replay ends", async () => {
+    const { c } = await started();
+    await c.buy();
+    await c.selectBar();
+    await c.exit(false);
+    expect(c.confirming).toBe(false);
+    expect(c.phase).toBe("off");
+  });
+});
+
+describe("replay caught up", () => {
+  it("jumps to the newest data, then refuses steps and commands without asking the engine", async () => {
+    const { c, backend, feed } = await started(2000, 40);
+    await c.buy();
+    await c.jumpToEnd();
+    expect(c.view).toMatchObject({ caughtUp: true, atEnd: true });
+    expect(feed.last!.caughtUp).toBe(true);
+    const step = vi.spyOn(backend, "replayStep");
+    const cmd = vi.spyOn(backend, "replayCommand");
+    await c.step();
+    await c.jumpToEnd();
+    await c.buy();
+    await c.closeTrade();
+    c.play();
+    expect(c.playing).toBe(false);
+    expect(step).not.toHaveBeenCalled();
+    expect(cmd).not.toHaveBeenCalled();
+    expect(c.error).toBeNull();
+  });
+
+  it("asks the live chart to follow when a step catches up", async () => {
+    const { c, feed } = await started(2000, 2);
+    expect(c.view!.caughtUp).toBe(false);
+    await c.step();
+    expect(c.view!.caughtUp).toBe(true);
+    expect(feed.follows).toBe(1);
+  });
+
+  it("ends the backtest at the catch-up cut: the open trade is unfinished and live candles change nothing", async () => {
+    const { c, backend } = await started(2000, 40);
+    await c.buy();
+    // Far levels: no bar until the newest one reaches either.
+    await c.edit(Math.round(c.view!.close / 2), c.view!.close * 2);
+    await c.jumpToEnd();
+    const v = c.view!;
+    expect(v.caughtUpAt).toBe(v.cut);
+    expect(c.finished).toBe(true);
+    expect(v.open).toBeNull();
+    expect(v.trades).toHaveLength(1);
+    expect(v.trades[0]).toMatchObject({ reason: "unfinished", exitTime: null });
+    expect(v.stats.count).toBe(0);
+    // The chart's live stream of the pair flows again, but the replay stays at its cut.
+    const got: LiveEvent[] = [];
+    await backend.subscribeLive(id, "1h", (e) => got.push(e));
+    const last = v.time;
+    backend.emitLive({ kind: "candle", time: last + H, open: 1, high: 2, low: 1, close: 2, volume: 1, closed: true });
+    expect(got).toHaveLength(1);
+    const st = await backend.replayState("1h", 0, 0);
+    expect(st).toMatchObject({ cut: v.cut, caughtUpAt: v.cut });
+    expect(st.trades[0]!.reason).toBe("unfinished");
+  });
+
+  it("stays finished on another timeframe and another update interval", async () => {
+    const { c } = await started(2000, 40);
+    await c.jumpToEnd();
+    const at = c.view!.cut;
+    await c.setTimeframe("15m");
+    expect(c.view).toMatchObject({ tf: "15m", base: "15m", cut: at, caughtUpAt: at, atEnd: true });
+    await c.step();
+    expect(c.error).toBeNull();
+    expect(c.view!.cut).toBe(at);
+  });
+});
+
+describe("replay results panel", () => {
+  it("remembers whether it is collapsed", async () => {
+    const store = new Map<string, string>();
+    const storage: KeyValue = { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => void store.set(k, v) };
+    const { c } = await setup(2000, storage);
+    expect(c.resultsCollapsed).toBe(false);
+    c.toggleResults();
+    expect(c.resultsCollapsed).toBe(true);
+    expect(store.get(RESULTS_COLLAPSED_KEY)).toBe("1");
+    const again = await setup(2000, storage);
+    expect(again.c.resultsCollapsed).toBe(true);
+  });
+
+  it("works without storage", async () => {
+    const broken: KeyValue = {
+      getItem: () => {
+        throw new Error("denied");
+      },
+      setItem: () => {
+        throw new Error("denied");
+      },
+    };
+    const { c } = await setup(2000, broken);
+    expect(c.resultsCollapsed).toBe(false);
+    c.toggleResults();
+    expect(c.resultsCollapsed).toBe(true);
   });
 });
 

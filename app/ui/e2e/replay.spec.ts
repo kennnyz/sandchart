@@ -26,6 +26,11 @@ interface Debug {
 async function openChart(page: Page, query = "?mockLatency=5"): Promise<Plot> {
   await page.goto(`/${query}`);
   await expect(page.getByTestId("legend")).toHaveAttribute("data-time", /^\d+$/);
+  return plotOf(page);
+}
+
+/** The price plot now: the replay bar and its results take room under the chart. */
+async function plotOf(page: Page): Promise<Plot> {
   const box = await page.getByTestId("chart").boundingBox();
   if (!box) throw new Error("chart has no box");
   return {
@@ -87,7 +92,9 @@ test("replay_start_step_play_trade_save_open_exit", async ({ page }) => {
   await expect.poll(() => lastBar(page)).toBe(start + 2 * H);
 
   // Play at 10 bars a second, pause with Space.
-  await page.getByTestId("replay-speed-10").click();
+  await page.getByTestId("replay-speed").click();
+  await page.getByTestId("replay-speed-menu-10").click();
+  await expect(page.getByTestId("replay-speed")).toHaveText("10x");
   await page.keyboard.press("Space");
   await expect(page.getByTestId("replay-play")).toHaveAttribute("aria-pressed", "true");
   await expect.poll(() => lastBar(page)).toBeGreaterThanOrEqual(start + 6 * H);
@@ -108,11 +115,12 @@ test("replay_start_step_play_trade_save_open_exit", async ({ page }) => {
   // The take is twice as far from the entry as the stop: 2R.
 
   // Drag the stop far down: it is sent as an edit when the button comes up.
-  const sx = plot.left + handles.stop.x;
-  const sy = plot.top + handles.stop.y;
+  const now = await plotOf(page);
+  const sx = now.left + handles.stop.x;
+  const sy = now.top + handles.stop.y;
   await page.mouse.move(sx, sy);
   await page.mouse.down();
-  await page.mouse.move(sx, plot.top + plot.height - 4, { steps: 8 });
+  await page.mouse.move(sx, now.top + now.height - 4, { steps: 8 });
   await page.mouse.up();
   await expect.poll(async () => (await debug(page)).replayHandles!.stop.y).toBeGreaterThan(handles.stop.y + 40);
   expect((await debug(page)).replayHandles!.take.y).toBeCloseTo(handles.take.y, 0);

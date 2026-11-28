@@ -4,7 +4,12 @@ import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from
 export interface MenuItem {
   id: string;
   label: string;
-  icon: Icon;
+  /** None: an empty slot, so labels line up. */
+  icon?: Icon;
+  /** A choice among the items (`menuitemradio`): true for the one in force. */
+  checked?: boolean;
+  /** Shown on hover, e.g. why it is disabled. */
+  title?: string;
   /** Shown on the right, e.g. "⌫". */
   shortcut?: string;
   /** `KeyboardEvent.key` values that pick it while the menu has focus. */
@@ -54,7 +59,7 @@ export function Menu({ items, label, testId, x, y, width, height, fixed, onClose
   // focus goes back to where it was, unless it has moved on outside the menu.
   useEffect(() => {
     const before = document.activeElement;
-    const id = requestAnimationFrame(() => ref.current?.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled)')?.focus());
+    const id = requestAnimationFrame(() => ref.current?.querySelector<HTMLElement>('[role^="menuitem"]:not(:disabled)')?.focus());
     const menu = ref.current;
     return () => {
       cancelAnimationFrame(id);
@@ -76,7 +81,7 @@ export function Menu({ items, label, testId, x, y, width, height, fixed, onClose
     // ⌘Z / ⇧⌘Z still reach the chart's shortcuts.
     if ((e.metaKey || e.ctrlKey) && e.code === "KeyZ") return;
     e.stopPropagation();
-    const list = [...(ref.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)') ?? [])];
+    const list = [...(ref.current?.querySelectorAll<HTMLElement>('[role^="menuitem"]:not(:disabled)') ?? [])];
     const i = list.indexOf(document.activeElement as HTMLElement);
     const move = (to: number) => {
       e.preventDefault();
@@ -114,12 +119,14 @@ export function Menu({ items, label, testId, x, y, width, height, fixed, onClose
           <button
             key={item.id}
             className="ctx-menu-item"
-            role="menuitem"
+            role={item.checked === undefined ? "menuitem" : "menuitemradio"}
+            aria-checked={item.checked}
             data-testid={`${testId}-${item.id}`}
             disabled={item.disabled}
+            title={item.title}
             onClick={item.onSelect}
           >
-            <Icon size={14} strokeWidth={1.75} aria-hidden="true" />
+            {Icon ? <Icon size={14} strokeWidth={1.75} aria-hidden="true" /> : <span className="ctx-menu-blank" aria-hidden="true" />}
             <span className="ctx-menu-label">{item.label}</span>
             {item.shortcut && <kbd className="ctx-menu-key">{item.shortcut}</kbd>}
           </button>
