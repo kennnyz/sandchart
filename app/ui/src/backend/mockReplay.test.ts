@@ -137,4 +137,32 @@ describe("mock replay session", () => {
     b.emitLive(e);
     expect(got).toEqual(["eth", "btc", "eth"]);
   });
+
+  it("computes indicators and position outcomes over the revealed bars only", async () => {
+    const { b, page, startTime } = await started();
+    await b.setChartIndicators([
+      { instance: "sma", moduleId: "builtin.sma", params: [["period", { int: 2 }]], colors: {}, hidden: false },
+    ]);
+    const lastTime = async () => {
+      const [r] = await b.computeIndicators(id, "1h", 0);
+      if (!("ok" in r!.result)) throw new Error(r!.result.err);
+      return r!.result.ok.lastTime;
+    };
+    expect(await lastTime()).toBe(startTime);
+    await b.replayStep(3);
+    expect(await lastTime()).toBe(page.time[page.time.length - 97]);
+    // Another timeframe is not replayed.
+    const [h4] = await b.computeIndicators(id, "4h", 0);
+    expect("ok" in h4!.result && h4!.result.ok.lastTime).toBeGreaterThan(startTime);
+
+    // A take far above every revealed bar's high but reached later stays open in the replay.
+    const i = page.time.length - 97;
+    const take = Math.max(...page.high.slice(i + 1));
+    const position = { side: "long" as const, entry: { t: page.time[i]!, p: page.close[i]! }, stop: 1, take, endT: page.time.at(-1)! };
+    const outcome = async () => (await b.getPositionOutcomes(id, "1h", [{ id: "p", position }]))[0]!.outcome.status;
+    expect(await outcome()).toBe("open");
+    await b.replayExit();
+    expect(await lastTime()).toBe(page.time.at(-1));
+    expect(await outcome()).toBe("take");
+  });
 });

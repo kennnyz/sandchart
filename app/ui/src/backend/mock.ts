@@ -635,11 +635,27 @@ export function createMockBackend(opts: MockOptions): MockBackend {
     const instrument = SYMBOLS.find((i) => i.id.symbol === symbol);
     if (!instrument) throw new Error(`unknown instrument ${symbol}`);
     const { timeOf, first } = timeline(tf);
-    const raw = column();
-    appendCandles(raw, timeOf, Math.max(first, opts.candles - BAR_CAP), opts.candles);
-    const k = 10 ** (opts.priceScale ?? instrument.priceScale);
-    const px = (a: number[]) => a.map((v) => v / k);
-    return { time: raw.time, open: px(raw.open), high: px(raw.high), low: px(raw.low), close: px(raw.close) };
+    const candles = [...candleRange(timeOf, Math.max(first, opts.candles - BAR_CAP), opts.candles)];
+    return toPriceBars(candles, opts.priceScale ?? instrument.priceScale);
+  }
+
+  function toPriceBars(candles: MockCandle[], scale: number): MockBars {
+    const k = 10 ** scale;
+    return {
+      time: candles.map((c) => c.time),
+      open: candles.map((c) => c.open / k),
+      high: candles.map((c) => c.high / k),
+      low: candles.map((c) => c.low / k),
+      close: candles.map((c) => c.close / k),
+    };
+  }
+
+  /** The open replay's revealed bars when it replays `(id, tf)`, as `with_replay_bars` in the engine. */
+  function replayBars(id: InstrumentId, tf: TimeframeCode): { scale: number; candles: MockCandle[] } | null {
+    const s = session;
+    if (!s || s.tf !== tf || s.instrument.id.source !== id.source || s.instrument.id.symbol !== id.symbol) return null;
+    reveal(s);
+    return { scale: s.instrument.priceScale, candles: s.candles.slice(0, s.current + 1) };
   }
 
   function openSession(): MockSession {
@@ -984,6 +1000,14 @@ export function createMockBackend(opts: MockOptions): MockBackend {
         const bad = mockValidatePosition(p.position);
         if (bad) throw problem(`position ${p.id}: ${bad}`);
       }
+      const replayed = replayBars(id, tf);
+      if (replayed) {
+        // Only the revealed bars count in a replay.
+        return positions.map(({ id: drawingId, position }) => ({
+          id: drawingId,
+          outcome: mockResolve(position, replayed.candles.filter((c) => c.time > position.entry.t)),
+        }));
+      }
       const { step, timeOf, first } = timeline(tf);
       return positions.map(({ id: drawingId, position }) => {
         // Bars with entry.t < time <= endT within the generated series, read up to the one that decides.
@@ -997,7 +1021,8 @@ export function createMockBackend(opts: MockOptions): MockBackend {
       await delayFor(id.symbol);
       const visible = chartIndicators.filter((i) => !i.hidden);
       if (visible.length === 0) return [];
-      const bars = priceBars(id.symbol, tf);
+      const replayed = replayBars(id, tf);
+      const bars = replayed ? toPriceBars(replayed.candles.slice(-BAR_CAP), replayed.scale) : priceBars(id.symbol, tf);
       return visible.map((i) => computeInstance(i, bars, fromTime));
     },
   };
