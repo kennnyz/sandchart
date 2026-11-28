@@ -1,6 +1,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
+  Alert,
   Backend,
   ComputedIndicator,
   ConnectionState,
@@ -118,6 +119,13 @@ export const tauriBackend: Backend = {
   // A typed array goes as the raw request body: up to 32 MiB without a JSON array of numbers.
   replayOpen: (bytes) => invoke("replay_open", bytes),
   replayExit: () => invoke("replay_exit"),
+  getAlerts: () => invoke("get_alerts"),
+  setAlert: (alert) => invoke("set_alert", { alert }),
+  rearmAlert: (id) => invoke("rearm_alert", { id }),
+  deleteAlert: (id) => invoke("delete_alert", { id }),
+  onAlertFired: (cb) => listen<Alert>("alert-fired", (e) => cb(e.payload)),
+  onAlertsChanged: (cb) => listen("alerts-changed", () => cb()),
+  setLanguage: (lang) => invoke("set_language", { lang }),
   checkUpdate: () => invoke("check_update"),
   async installUpdate(onProgress) {
     const channel = new Channel<UpdateProgress>();

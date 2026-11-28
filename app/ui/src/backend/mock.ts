@@ -1,4 +1,5 @@
 import {
+  type Alert,
   type Backend,
   type CandleColumns,
   type Candles,
@@ -24,6 +25,7 @@ import {
   type TimeframeCode,
   type UpdateInfo,
 } from "./types";
+import { type MockUpdate, mockFires, mockLevelOf, mockValidateAlert } from "./mockAlerts";
 import { MOCK_MAX_REPLAY_CANDLES, type MockCandle, mockReadReplay, mockSimulate, mockWriteReplay } from "./mockReplay";
 
 const PAGE = 1000;
@@ -109,7 +111,14 @@ export interface MockOptions {
   watchlistStore?: { load(): InstrumentId[] | null; save(ids: InstrumentId[]): void };
   /** Keeps the drawings across page loads (the browser mock uses localStorage). */
   drawingStore?: { load(): Drawing[] | null; save(all: Drawing[]): void };
+  /** Keeps the alerts across page loads (the browser mock uses localStorage). */
+  alertStore?: { load(): Alert[] | null; save(all: Alert[]): void };
 }
+
+// The store's alert caps (MAX_ACTIVE_ALERTS, MAX_ALERT_PAIRS, MAX_ALERTS).
+const MAX_ACTIVE_ALERTS = 100;
+const MAX_ALERT_PAIRS = 30;
+const MAX_ALERTS = 500;
 
 // ---- Indicators -------------------------------------------------------------------
 // TEST-ONLY CODE. The real indicators are WebAssembly modules run by the Rust engine;
@@ -522,7 +531,10 @@ function column(): CandleColumns {
 
 /** The mock plus a way for tests to push live events into its open subscriptions. */
 export interface MockBackend extends Backend {
-  /** To every open subscription, except those of an instrument being replayed. */
+  /**
+   * To every open subscription, except those of an instrument being replayed. A candle also
+   * feeds the alerts of each subscribed pair, as the engine does on its live streams.
+   */
   emitLive(e: LiveEvent): void;
   /** The text of the last `replaySave`, or null. */
   replayFile(): string | null;
@@ -581,6 +593,75 @@ export function createMockBackend(opts: MockOptions): MockBackend {
   }));
   const drawings = new Map<string, Drawing>((opts.drawingStore?.load() ?? []).map((d) => [d.id, d]));
   const keepDrawings = () => opts.drawingStore?.save([...drawings.values()]);
+  const alerts = new Map<string, Alert>((opts.alertStore?.load() ?? []).map((a) => [a.id, a]));
+  /** When each active alert was armed here: an update from before cannot fire it. */
+  const armedAt = new Map<string, number>([...alerts.values()].filter((a) => a.active).map((a) => [a.id, Date.now()]));
+  /** The last update of each pair with an active alert. */
+  const lastUpdate = new Map<string, MockUpdate>();
+  const firedListeners = new Set<(a: Alert) => void>();
+  const changedListeners = new Set<() => void>();
+  const pairKey = (id: InstrumentId) => `${id.source}/${id.symbol}`;
+  const keepAlerts = () => {
+    opts.alertStore?.save([...alerts.values()]);
+    const armedPairs = new Set([...alerts.values()].filter((a) => a.active).map((a) => pairKey(a.instrument)));
+    for (const k of lastUpdate.keys()) if (!armedPairs.has(k)) lastUpdate.delete(k);
+    for (const cb of changedListeners) cb();
+  };
+
+  /** Arms `a` after the store's checks, as `upsert_alert` and `set_alert` in Rust. */
+  function arm(a: Alert): Alert {
+    const bad = mockValidateAlert(a);
+    if (bad) throw problem(bad);
+    if (!SYMBOLS.some((i) => pairKey(i.id) === pairKey(a.instrument))) {
+      throw problem(`unknown instrument ${a.instrument.source}/${a.instrument.symbol}`);
+    }
+    if (a.kind.kind === "drawing") {
+      const d = drawings.get(a.kind.drawingId);
+      if (!d) throw problem(`drawing ${a.kind.drawingId} does not exist`);
+      if (pairKey(d.instrument) !== pairKey(a.instrument)) throw problem(`drawing ${a.kind.drawingId} is on another pair`);
+      if (!mockLevelOf(d.body)) throw problem("an alert can follow only a horizontal or a trend line");
+    }
+    const others = [...alerts.values()].filter((o) => o.id !== a.id);
+    if (others.length >= MAX_ALERTS) throw problem(`at most ${MAX_ALERTS} alerts can be kept; delete some fired ones first`);
+    const active = others.filter((o) => o.active);
+    if (active.length >= MAX_ACTIVE_ALERTS) {
+      throw problem(`at most ${MAX_ACTIVE_ALERTS} alerts can be active at once; delete one or wait for one to fire`);
+    }
+    if (new Set([...active.map((o) => pairKey(o.instrument)), pairKey(a.instrument)]).size > MAX_ALERT_PAIRS) {
+      throw problem(
+        `at most ${MAX_ALERT_PAIRS} pairs can have active alerts, each needs a live stream; delete the alerts of another pair first`,
+      );
+    }
+    alerts.set(a.id, a);
+    armedAt.set(a.id, Date.now());
+    keepAlerts();
+    return structuredClone(a);
+  }
+
+  /** Checks the active alerts of `id` against a live candle, as the engine's stream task does. */
+  function evaluateAlerts(id: InstrumentId, c: { time: number; high: number; low: number; close: number }) {
+    const key = pairKey(id);
+    const armed = [...alerts.values()].filter((a) => a.active && pairKey(a.instrument) === key);
+    if (armed.length === 0) return;
+    const cur: MockUpdate = { t: Date.now(), openTime: c.time, high: c.high, low: c.low, close: c.close };
+    const prev = lastUpdate.get(key);
+    lastUpdate.set(key, cur);
+    if (!prev) return;
+    const fired: Alert[] = [];
+    for (const a of armed) {
+      if (prev.t < (armedAt.get(a.id) ?? 0)) continue;
+      const body = a.kind.kind === "price" ? null : drawings.get(a.kind.drawingId)?.body;
+      const level = a.kind.kind === "price" ? { kind: "flat" as const, p: a.kind.price } : body ? mockLevelOf(body) : null;
+      const price = level ? mockFires(a.direction, level, prev, cur, true) : null;
+      if (price === null) continue;
+      const f: Alert = { ...a, active: false, triggeredAt: cur.t, triggeredPrice: price };
+      alerts.set(a.id, f);
+      fired.push(f);
+    }
+    if (fired.length === 0) return;
+    keepAlerts();
+    for (const f of fired) for (const cb of firedListeners) cb(structuredClone(f));
+  }
   const problem = (message: string) => ({ code: "other", message });
   const infos = (): IndicatorInfo[] => [
     ...MOCK_BUILTINS.map((b) => ({ meta: b.meta, builtin: true, repaints: false })),
@@ -773,9 +854,15 @@ export function createMockBackend(opts: MockOptions): MockBackend {
     },
 
     emitLive(e) {
-      for (const [cb, sub] of live) {
+      const evaluated = new Set<string>();
+      for (const [cb, sub] of [...live]) {
         const paused = session?.instrument.id.source === sub.source && session.instrument.id.symbol === sub.symbol;
-        if (!paused) cb(e);
+        if (paused) continue;
+        if (e.kind === "candle" && !evaluated.has(pairKey(sub))) {
+          evaluated.add(pairKey(sub));
+          evaluateAlerts(sub, e);
+        }
+        cb(e);
       }
     },
 
@@ -994,7 +1081,53 @@ export function createMockBackend(opts: MockOptions): MockBackend {
       if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw problem("a drawing id must be 1 to 64 characters from A-Z, a-z, 0-9, _ and -");
       if (opts.drawingSaveError) throw problem("mock: cannot save the drawing");
       if (drawings.delete(id)) keepDrawings();
+      // Its alerts go with it, in the same step.
+      const gone = [...alerts.values()].filter((a) => a.kind.kind === "drawing" && a.kind.drawingId === id);
+      for (const a of gone) alerts.delete(a.id);
+      if (gone.length > 0) keepAlerts();
     },
+
+    async getAlerts() {
+      await delay();
+      return [...alerts.values()].sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).map((a) => structuredClone(a));
+    },
+
+    async setAlert(input) {
+      await delay();
+      const { id, instrument, priceScale, kind, direction } = input;
+      return arm({ id, instrument, priceScale, kind, direction, active: true, createdAt: Date.now(), triggeredAt: null, triggeredPrice: null });
+    },
+
+    async rearmAlert(id) {
+      await delay();
+      const a = alerts.get(id);
+      if (!a) throw problem(`no alert "${id}"`);
+      return arm({ ...a, active: true, triggeredAt: null, triggeredPrice: null });
+    },
+
+    async deleteAlert(id) {
+      await delay();
+      if (alerts.delete(id)) {
+        armedAt.delete(id);
+        keepAlerts();
+      }
+    },
+
+    async onAlertFired(cb) {
+      firedListeners.add(cb);
+      return () => {
+        firedListeners.delete(cb);
+      };
+    },
+
+    async onAlertsChanged(cb) {
+      changedListeners.add(cb);
+      return () => {
+        changedListeners.delete(cb);
+      };
+    },
+
+    async setLanguage() {},
 
     async getPositionOutcomes(id, tf, positions) {
       await delayFor(id.symbol);
