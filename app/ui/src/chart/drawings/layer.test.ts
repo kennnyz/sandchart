@@ -515,19 +515,25 @@ describe("⌘ snapping and handles", () => {
 
 describe("many selected drawings", () => {
   it("hit-tests 2000 selected drawings in about linear time", () => {
-    const l = layer();
-    const list = Array.from({ length: 2000 }, (_, i) => drawing({ kind: "hline", p: 1_000 + i * 4 }));
-    l.setDrawings(list);
-    l.state.setSelection(list.map((d) => d.id));
-    const c = coords();
-    l.paintBase(ctx, c, 1, dark, () => {});
-    const t0 = performance.now();
-    // Pointer moves over the plot: each one checks every drawing's selection twice.
-    for (let i = 0; i < 200; i++) l.pointerMove(5 + (i % 100), 5, false);
-    const ms = performance.now() - t0;
-    expect(l.state.selection).toHaveLength(2000);
-    // A scan of the selection per drawing takes seconds here.
-    expect(ms).toBeLessThan(300);
+    /** Time of 200 pointer moves over `n` selected drawings: each move checks every drawing's selection twice. */
+    const moves = (n: number) => {
+      const l = layer();
+      const list = Array.from({ length: n }, (_, i) => drawing({ kind: "hline", p: 1_000 + i * 4 }));
+      l.setDrawings(list);
+      l.state.setSelection(list.map((d) => d.id));
+      l.paintBase(ctx, coords(), 1, dark, () => {});
+      const t0 = performance.now();
+      for (let i = 0; i < 200; i++) l.pointerMove(5 + (i % 100), 5, false);
+      const ms = performance.now() - t0;
+      expect(l.state.selection).toHaveLength(n);
+      return ms;
+    };
+    moves(500); // warm up the JIT
+    const small = moves(500);
+    const big = moves(2000);
+    // Four times the drawings: about four times the time. A scan of the selection per drawing
+    // would take sixteen times as long (seconds here); the floor keeps tiny timings from flaking.
+    expect(big).toBeLessThan(Math.max(8 * small, 150));
   });
 });
 
