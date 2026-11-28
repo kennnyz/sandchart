@@ -54,7 +54,7 @@ Moving or deleting several is one step for undo.
 
 ## Context menu
 
-Right-click a drawing to open its menu. When it is part of a selection, the menu acts on the whole selection; otherwise the drawing is selected alone first.
+Right-click a drawing (or Ctrl-click it on macOS) to open its menu. When it is part of a selection, the menu acts on the whole selection; otherwise the drawing is selected alone first.
 
 | Item | What |
 | --- | --- |

@@ -13,6 +13,19 @@ export interface KeyLike {
 
 export type DrawingKeyAction = { tool: ToolId } | { command: DrawingCommand } | { magnet: true };
 
+/** macOS (and iOS): the command modifier is ⌘, and Ctrl+click is a right click. */
+export const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+
+/** The platform's command modifier is held on a pointer event: ⌘ on macOS, Ctrl elsewhere. */
+export function cmdHeld(e: { metaKey: boolean; ctrlKey: boolean }, mac = isMac): boolean {
+  return mac ? e.metaKey : e.ctrlKey;
+}
+
+/** A macOS Ctrl+click with the main button: the system makes it a right click (`contextmenu`). */
+export function macContextClick(e: { ctrlKey: boolean; button: number }, mac = isMac): boolean {
+  return mac && e.ctrlKey && e.button === 0;
+}
+
 /** Alt + these keys: the ruler (not a stored drawing, so not in the registry) and the magnet. */
 export const RULER_CODE = "KeyR";
 export const MAGNET_CODE = "KeyM";

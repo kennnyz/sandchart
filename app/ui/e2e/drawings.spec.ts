@@ -885,6 +885,33 @@ test("right_click_shows_our_menu_and_never_the_native_one", async ({ page }) => 
   expect((await prevented()).at(-1)).toBe(false);
 });
 
+test("ctrl_click_on_macos_opens_the_menu_of_a_drawing", async ({ page }) => {
+  // The app reads the platform once at load: pretend to be a Mac on every runner.
+  await page.addInitScript(() => Object.defineProperty(Navigator.prototype, "platform", { get: () => "MacIntel" }));
+  const plot = await openChart(page);
+  const cx = Math.round(plot.left + plot.width / 2);
+  const ys = [0.3, 0.6].map((f) => Math.round(plot.top + plot.height * f));
+  const [top, bottom] = await levels(page, cx, ys);
+  await page.mouse.click(cx - 100, ys[0]!);
+  expect((await debug(page)).selectedDrawing).toBe(top!.id);
+
+  // macOS turns Ctrl+click into a right click: the press arrives with Ctrl and the main
+  // button, then `contextmenu` (sent here by hand, as a headless browser may not).
+  await page.keyboard.down("Control");
+  await page.mouse.move(cx - 100, ys[1]!);
+  await page.mouse.down();
+  await page.getByTestId("chart").evaluate((el, [x, y]) => {
+    const canvas = el.querySelectorAll("canvas")[0]!;
+    canvas.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: x, clientY: y, ctrlKey: true, button: 0 }));
+  }, [cx - 100, ys[1]!]);
+  await page.mouse.up();
+  await page.keyboard.up("Control");
+  await expect(page.getByTestId("drawing-menu")).toBeVisible();
+  // Not a ⌘-click: the line under the pointer is selected alone, not added.
+  expect((await debug(page)).selectedDrawings).toEqual([bottom!.id]);
+  expect((await debug(page)).selectionBox).toBe(false);
+});
+
 test("cmd_box_selects_several_drawings_and_delete_removes_them_in_one_step", async ({ page }) => {
   const plot = await openChart(page);
   const cx = Math.round(plot.left + plot.width / 2);

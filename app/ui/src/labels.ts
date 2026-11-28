@@ -1,7 +1,6 @@
 import type { ProblemCode } from "./backend/types";
+import { isMac } from "./chart/drawings/keys";
 import { t } from "./i18n";
-
-const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 
 /** "⌘K" on macOS, "Ctrl K" elsewhere. */
 export function shortcutLabel(key: string): string {

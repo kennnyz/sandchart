@@ -12,6 +12,7 @@ import {
   type TextEdit,
   type TextResult,
 } from "./drawings/layer";
+import { cmdHeld, macContextClick } from "./drawings/keys";
 import type { ToolId } from "./drawings/registry";
 import type { DrawingChange } from "./drawings/state";
 import { alignOffset, hasOwnPane, layoutPanes, overlayRange, paneRange, seriesValues, type IndicatorLayer } from "./indicators";
@@ -836,7 +837,8 @@ export class Chart {
   }
 
   private readonly onPointerDown = (e: PointerEvent): void => {
-    if (e.button !== 0) return;
+    // On macOS Ctrl+click is a right click: `contextmenu` opens our menu instead.
+    if (e.button !== 0 || macContextClick(e)) return;
     const p = this.local(e);
     const { plotW } = this.plot();
     const priceH = this.priceH();
@@ -853,7 +855,7 @@ export class Chart {
     const level: Level | null = this.inPricePlot(p) ? this.replay.handleAt(p.x, p.y) : null;
     if (level) this.replay.startDrag(level);
     const onDrawing =
-      !level && this.inPricePlot(p) && this.drawings.pointerDown(p.x, p.y, e.shiftKey, e.metaKey || e.ctrlKey);
+      !level && this.inPricePlot(p) && this.drawings.pointerDown(p.x, p.y, e.shiftKey, cmdHeld(e));
     // An alert level selects its alert; the press still pans, as on an empty plot.
     const alert = !level && !onDrawing ? this.alertLevels.hit(p.x, p.y) : null;
     if (alert) this.alertClickCb?.(alert);
@@ -892,7 +894,7 @@ export class Chart {
       return;
     }
     if (d?.kind === "drawing" && d.pointerId === e.pointerId) {
-      this.drawings.pointerMove(p.x, p.y, e.shiftKey, e.metaKey || e.ctrlKey);
+      this.drawings.pointerMove(p.x, p.y, e.shiftKey, cmdHeld(e));
       this.updateCrosshair();
       this.invalidateOverlay();
       return;
@@ -911,7 +913,7 @@ export class Chart {
       this.afterViewChange();
       return;
     }
-    if (this.inPricePlot(p)) this.drawings.pointerMove(p.x, p.y, e.shiftKey, e.metaKey || e.ctrlKey);
+    if (this.inPricePlot(p)) this.drawings.pointerMove(p.x, p.y, e.shiftKey, cmdHeld(e));
     else this.drawings.leave();
     this.updateCursor(p);
     // Only the mouse moved: the base layer stays as it is.
@@ -934,7 +936,7 @@ export class Chart {
     if (kind === "drawing") {
       // A cancelled pointer (a system gesture) stores nothing.
       if (e.type === "pointercancel") this.drawings.abort();
-      else this.drawings.pointerUp(p.x, p.y, e.shiftKey, e.metaKey || e.ctrlKey);
+      else this.drawings.pointerUp(p.x, p.y, e.shiftKey, cmdHeld(e));
       this.invalidateOverlay();
     }
     this.updateCursor(p);
