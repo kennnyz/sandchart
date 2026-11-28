@@ -22,6 +22,16 @@ const scale = new PriceScale(0, 10_000, 1000, "linear");
 const coords = (view: Viewport = { barWidth: 10, rightIndex: 99 }, s = scale, data = ohlc) =>
   new Coords(times, N, view, s, 1000, 1000, STEP, 2, data);
 
+/** Node has no canvas: a path that records nothing will do. */
+class FakePath {
+  moveTo() {}
+  lineTo() {}
+  rect() {}
+  arc() {}
+  closePath() {}
+}
+(globalThis as { Path2D?: unknown }).Path2D ??= FakePath;
+
 /** A 2D context that accepts every call and does nothing. */
 const ctx = new Proxy({} as CanvasRenderingContext2D, {
   get: (_t, key) => (key === "measureText" ? () => ({ width: 10 }) : () => undefined),
@@ -41,7 +51,9 @@ function layer() {
 }
 
 let n = 0;
-function drawing(body: DrawingBody, id = `d${n++}`): Drawing {
+/** Each one is painted above the ones made before it. */
+function drawing(body: DrawingBody, id = `d${n}`): Drawing {
+  n++;
   return {
     id,
     instrument: { source: "mock", symbol: "BTCUSDT" },
@@ -88,5 +100,40 @@ describe("culling", () => {
     const layout = vi.spyOn(toolFor("note")!, "layout");
     l.paintBase(ctx, c, 1, dark, () => {});
     expect(layout).not.toHaveBeenCalled();
+  });
+});
+
+describe("hit-testing", () => {
+  const hline = (p: number, id: string) => drawing({ kind: "hline", p }, id);
+
+  it("finds the selected drawing's handles first, then the top-most drawing", () => {
+    const l = layer();
+    const c = coords();
+    // Two lines at the same price: the later one is on top.
+    l.setDrawings([hline(5_000, "under"), hline(5_000, "over")]);
+    l.paintBase(ctx, c, 1, dark, () => {});
+    const y = c.y(5_000);
+    l.pointerMove(200, y, false);
+    expect(l.state.hover).toEqual({ id: "over", part: "body" });
+    // On the handle in the middle: the selected one wins even under the other.
+    l.state.select("under");
+    l.pointerMove(500, y, false);
+    expect(l.state.hover).toEqual({ id: "under", part: 0 });
+    l.state.select(null);
+    l.pointerMove(501, y, false);
+    expect(l.state.hover).toEqual({ id: "over", part: 0 });
+  });
+
+  it("lays out and lists handles once per frame, however often the pointer moves", () => {
+    const l = layer();
+    const c = coords();
+    l.setDrawings([hline(5_000, "a"), hline(3_000, "b")]);
+    const tool = toolFor("hline")!;
+    const handles = vi.spyOn(tool, "handles");
+    const layout = vi.spyOn(tool, "layout");
+    l.paintBase(ctx, c, 1, dark, () => {});
+    for (let x = 0; x < 50; x++) l.pointerMove(100 + x, 400, false);
+    expect(layout).toHaveBeenCalledTimes(2);
+    expect(handles).toHaveBeenCalledTimes(2);
   });
 });

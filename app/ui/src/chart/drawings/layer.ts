@@ -86,8 +86,8 @@ export class DrawingLayer {
   private coords: Coords | null = null;
   /** Times a drawing must reach into to be painted and hit: the plot's, with a margin. */
   private span: [number, number] = [0, 0];
-  /** Screen geometry per drawing id, valid for that drawing object and that frame. */
-  private readonly cache = new Map<string, { drawing: Drawing; coords: Coords; geom: unknown }>();
+  /** Screen geometry and handles per drawing id, valid for that drawing object and that frame. */
+  private readonly cache = new Map<string, { drawing: Drawing; coords: Coords; geom: unknown; handles: Point[] | null }>();
   private edit: Edit | null = null;
   /** Where the press that placed a point started (a press, drag and release places two). */
   private press: Point | null = null;
@@ -339,7 +339,7 @@ export class DrawingLayer {
       const d = id && id !== e?.id ? s.byId(id) : undefined;
       const tool = d && this.visibleTool(d);
       if (!d || !tool) continue;
-      const handles = tool.handles(this.geom(tool, d));
+      const handles = this.handles(tool, d);
       paintHandles(ctx, handles, color(theme, d.style), theme);
       if (debug && id === s.selected) debug.selectedHandles = handles;
     }
@@ -581,7 +581,7 @@ export class DrawingLayer {
     const d = this.state.byId(id);
     const tool = d && this.visibleTool(d);
     if (!c || !d || !tool || tool.text) return false;
-    const where = at ?? tool.handles(this.geom(tool, d)).at(-1) ?? this.mouse ?? { x: c.plotW / 2, y: c.priceH / 2 };
+    const where = at ?? this.handles(tool, d).at(-1) ?? this.mouse ?? { x: c.plotW / 2, y: c.priceH / 2 };
     this.styleEdit = { id, at: { x: where.x, y: where.y } };
     this.host.style({ drawing: d, x: where.x, y: where.y });
     this.host.invalidateOverlay();
@@ -613,12 +613,23 @@ export class DrawingLayer {
   }
 
   private geom(tool: ToolDef, d: Drawing): unknown {
+    return this.entry(tool, d).geom;
+  }
+
+  /** The handles of `d` in this frame, listed once per geometry. */
+  private handles(tool: ToolDef, d: Drawing): Point[] {
+    const e = this.entry(tool, d);
+    e.handles ??= tool.handles(e.geom);
+    return e.handles;
+  }
+
+  private entry(tool: ToolDef, d: Drawing) {
     const c = this.coords!;
     const hit = this.cache.get(d.id);
-    if (hit && hit.drawing === d && hit.coords === c) return hit.geom;
-    const geom = tool.layout(d.body, c, this.outcomes.get(d.id));
-    this.cache.set(d.id, { drawing: d, coords: c, geom });
-    return geom;
+    if (hit && hit.drawing === d && hit.coords === c) return hit;
+    const e = { drawing: d, coords: c, geom: tool.layout(d.body, c, this.outcomes.get(d.id)), handles: null };
+    this.cache.set(d.id, e);
+    return e;
   }
 
   private pruneCache(): void {
@@ -626,27 +637,43 @@ export class DrawingLayer {
     for (const id of this.cache.keys()) if (!ids.has(id)) this.cache.delete(id);
   }
 
-  /** Top-most hit: handles of every visible drawing first (the selected one before others), then bodies. */
+  /**
+   * Top-most hit: handles of every visible drawing first (the selected one before others),
+   * then bodies. Runs on every pointer move, so it allocates nothing but the result.
+   */
   private hitAt(x: number, y: number): { id: string; part: Part } | null {
     const c = this.coords;
     if (!c || c.count === 0) return null;
     const list = this.state.drawings;
     const sel = this.state.selected;
-    const order = sel ? [...list.filter((d) => d.id === sel), ...list.filter((d) => d.id !== sel).reverse()] : [...list].reverse();
-    for (const d of order) {
-      const tool = this.visibleTool(d);
-      if (!tool) continue;
-      const handles = tool.handles(this.geom(tool, d));
-      for (let i = 0; i < handles.length; i++) {
-        if (Math.hypot(handles[i]!.x - x, handles[i]!.y - y) <= HIT_TOLERANCE) return { id: d.id, part: i };
-      }
+    const selected = sel === null ? undefined : this.state.byId(sel);
+    if (selected) {
+      const i = this.handleAt(selected, x, y);
+      if (i >= 0) return { id: selected.id, part: i };
     }
-    for (let i = list.length - 1; i >= 0; i--) {
-      const d = list[i]!;
+    for (let k = list.length - 1; k >= 0; k--) {
+      const d = list[k]!;
+      if (d === selected) continue;
+      const i = this.handleAt(d, x, y);
+      if (i >= 0) return { id: d.id, part: i };
+    }
+    for (let k = list.length - 1; k >= 0; k--) {
+      const d = list[k]!;
       const tool = this.visibleTool(d);
       if (tool && tool.hitTest(this.geom(tool, d), x, y, HIT_TOLERANCE)) return { id: d.id, part: "body" };
     }
     return null;
+  }
+
+  /** Index of the handle of `d` at (x, y), or -1. */
+  private handleAt(d: Drawing, x: number, y: number): number {
+    const tool = this.visibleTool(d);
+    if (!tool) return -1;
+    const handles = this.handles(tool, d);
+    for (let i = 0; i < handles.length; i++) {
+      if (Math.hypot(handles[i]!.x - x, handles[i]!.y - y) <= HIT_TOLERANCE) return i;
+    }
+    return -1;
   }
 }
 
