@@ -352,19 +352,19 @@
         "timeframe": "1h",
         "start": 1,
         "current": 4,
-        "sha256": "83f74cc2f1756b1009afd466072aeb10927d37e5d8c0aabf9b1bf098748eea2e",
+        "sha256": "8ca11926730f129ee9f592feb2e69afd9dff9cb912d06b947bbfb020c9ed5aa9",
         "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120}],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 105, 95, 100, 7],
-          [4000, 100, 121, 99, 118, 7],
-          [5000, 118, 119, 110, 115, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 105, 95, 100, 7],
+          [14400000, 100, 121, 99, 118, 7],
+          [18000000, 118, 119, 110, 115, 7]
         ]
       },
       "expect": {
         "trades": [
-          {"side": "long", "entryTime": 2000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitTime": 4000, "exitPrice": 120, "reason": "take", "ambiguous": false, "r": 2}
+          {"side": "long", "entryTime": 7200000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitTime": 14400000, "exitPrice": 120, "reason": "take", "ambiguous": false, "r": 2}
         ],
         "stats": {"count": 1, "wins": 1, "losses": 0, "winRate": 1, "totalR": 2, "averageR": 2, "profitFactor": null, "maxDrawdownR": 0, "longestLosingStreak": 0}
       }
@@ -375,21 +375,21 @@
         "version": 2,
         "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
         "base": "1h",
-        "start": 3602000,
-        "cut": 3605000,
-        "sha256": "83f74cc2f1756b1009afd466072aeb10927d37e5d8c0aabf9b1bf098748eea2e",
-        "commands": [{"kind": "open", "time": 3602000, "side": "long", "stop": 90, "take": 120}],
+        "start": 10800000,
+        "cut": 21600000,
+        "sha256": "8ca11926730f129ee9f592feb2e69afd9dff9cb912d06b947bbfb020c9ed5aa9",
+        "commands": [{"kind": "open", "time": 10800000, "side": "long", "stop": 90, "take": 120}],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 105, 95, 100, 7],
-          [4000, 100, 121, 99, 118, 7],
-          [5000, 118, 119, 110, 115, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 105, 95, 100, 7],
+          [14400000, 100, 121, 99, 118, 7],
+          [18000000, 118, 119, 110, 115, 7]
         ]
       },
       "expect": {
         "trades": [
-          {"side": "long", "entryTime": 2000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitTime": 4000, "exitPrice": 120, "reason": "take", "ambiguous": false, "r": 2}
+          {"side": "long", "entryTime": 7200000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitTime": 14400000, "exitPrice": 120, "reason": "take", "ambiguous": false, "r": 2}
         ],
         "stats": {"count": 1, "wins": 1, "losses": 0, "winRate": 1, "totalR": 2, "averageR": 2, "profitFactor": null, "maxDrawdownR": 0, "longestLosingStreak": 0}
       }
@@ -400,20 +400,20 @@
         "version": 2,
         "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
         "base": "1h",
-        "start": 3602000,
-        "cut": 3603000,
-        "caughtUpAt": 3603000,
-        "sha256": "8e00a94b6607b2f146b1eebe48bee89d496122804148ff13bc770ff759af67b3",
-        "commands": [{"kind": "open", "time": 3602000, "side": "long", "stop": 90, "take": 120}],
+        "start": 10800000,
+        "cut": 14400000,
+        "caughtUpAt": 14400000,
+        "sha256": "664e5d64dc9d8095bd05653de46860ed79a34f49bf2da9eee34a07fd499ae101",
+        "commands": [{"kind": "open", "time": 10800000, "side": "long", "stop": 90, "take": 120}],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 105, 95, 100, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 105, 95, 100, 7]
         ]
       },
       "expect": {
         "trades": [
-          {"side": "long", "entryTime": 2000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitTime": null, "exitPrice": null, "reason": "unfinished", "ambiguous": false, "r": 0}
+          {"side": "long", "entryTime": 7200000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitTime": null, "exitPrice": null, "reason": "unfinished", "ambiguous": false, "r": 0}
         ],
         "stats": {"count": 0, "wins": 0, "losses": 0, "winRate": 0, "totalR": 0, "averageR": 0, "profitFactor": null, "maxDrawdownR": 0, "longestLosingStreak": 0}
       }
@@ -424,18 +424,18 @@
         "version": 2,
         "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
         "base": "1h",
-        "start": 3602000,
-        "cut": 3603000,
-        "caughtUpAt": 3602000,
-        "sha256": "8e00a94b6607b2f146b1eebe48bee89d496122804148ff13bc770ff759af67b3",
-        "commands": [{"kind": "open", "time": 3602000, "side": "long", "stop": 90, "take": 120}],
+        "start": 10800000,
+        "cut": 14400000,
+        "caughtUpAt": 10800000,
+        "sha256": "664e5d64dc9d8095bd05653de46860ed79a34f49bf2da9eee34a07fd499ae101",
+        "commands": [{"kind": "open", "time": 10800000, "side": "long", "stop": 90, "take": 120}],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 105, 95, 100, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 105, 95, 100, 7]
         ]
       },
-      "error": "the replay caught up at 3602000, which is not its cut 3603000"
+      "error": "the replay caught up at 10800000, which is not its cut 14400000"
     },
     {
       "name": "a file that caught up has no candle after its cut",
@@ -443,17 +443,17 @@
         "version": 2,
         "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
         "base": "1h",
-        "start": 3602000,
-        "cut": 3603000,
-        "caughtUpAt": 3603000,
-        "sha256": "83f74cc2f1756b1009afd466072aeb10927d37e5d8c0aabf9b1bf098748eea2e",
-        "commands": [{"kind": "open", "time": 3602000, "side": "long", "stop": 90, "take": 120}],
+        "start": 10800000,
+        "cut": 14400000,
+        "caughtUpAt": 14400000,
+        "sha256": "8ca11926730f129ee9f592feb2e69afd9dff9cb912d06b947bbfb020c9ed5aa9",
+        "commands": [{"kind": "open", "time": 10800000, "side": "long", "stop": 90, "take": 120}],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 105, 95, 100, 7],
-          [4000, 100, 121, 99, 118, 7],
-          [5000, 118, 119, 110, 115, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 105, 95, 100, 7],
+          [14400000, 100, 121, 99, 118, 7],
+          [18000000, 118, 119, 110, 115, 7]
         ]
       },
       "error": "a replay that caught up has no candle after its cut"
@@ -488,16 +488,16 @@
         "version": 2,
         "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
         "base": "1h",
-        "start": 3602000,
-        "cut": 3605000,
-        "sha256": "83f74cc2f1756b1009afd466072aeb10927d37e5d8c0aabf9b1bf098748eea2e",
-        "commands": [{"kind": "open", "time": 3602000, "side": "long", "stop": 90, "take": 120}],
+        "start": 10800000,
+        "cut": 21600000,
+        "sha256": "8ca11926730f129ee9f592feb2e69afd9dff9cb912d06b947bbfb020c9ed5aa9",
+        "commands": [{"kind": "open", "time": 10800000, "side": "long", "stop": 90, "take": 120}],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 105, 95, 100, 7],
-          [4000, 100, 121, 99, 118, 7],
-          [5000, 118, 119, 110, 115, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 105, 95, 100, 7],
+          [14400000, 100, 121, 99, 118, 7],
+          [18000000, 118, 119, 110, 115, 7]
         ],
         "current": 4
       },
@@ -509,16 +509,16 @@
         "version": 2,
         "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
         "base": "1h",
-        "start": 3602000,
-        "cut": 3605000,
-        "sha256": "83f74cc2f1756b1009afd466072aeb10927d37e5d8c0aabf9b1bf098748eea2e",
+        "start": 10800000,
+        "cut": 21600000,
+        "sha256": "8ca11926730f129ee9f592feb2e69afd9dff9cb912d06b947bbfb020c9ed5aa9",
         "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120}],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 105, 95, 100, 7],
-          [4000, 100, 121, 99, 118, 7],
-          [5000, 118, 119, 110, 115, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 105, 95, 100, 7],
+          [14400000, 100, 121, 99, 118, 7],
+          [18000000, 118, 119, 110, 115, 7]
         ]
       },
       "error": "not a replay file: unknown field `bar`"
@@ -529,19 +529,19 @@
         "version": 2,
         "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
         "base": "1h",
-        "start": 3602000,
-        "cut": 3604500,
-        "sha256": "83f74cc2f1756b1009afd466072aeb10927d37e5d8c0aabf9b1bf098748eea2e",
-        "commands": [{"kind": "open", "time": 3602000, "side": "long", "stop": 90, "take": 120}],
+        "start": 10800000,
+        "cut": 19800000,
+        "sha256": "8ca11926730f129ee9f592feb2e69afd9dff9cb912d06b947bbfb020c9ed5aa9",
+        "commands": [{"kind": "open", "time": 10800000, "side": "long", "stop": 90, "take": 120}],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 105, 95, 100, 7],
-          [4000, 100, 121, 99, 118, 7],
-          [5000, 118, 119, 110, 115, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 105, 95, 100, 7],
+          [14400000, 100, 121, 99, 118, 7],
+          [18000000, 118, 119, 110, 115, 7]
         ]
       },
-      "error": "the cut 3604500 is not the close time of a candle"
+      "error": "the cut 19800000 is not the close time of a candle"
     },
     {
       "name": "a version 2 file with a changed candle breaks the hash",
@@ -549,16 +549,16 @@
         "version": 2,
         "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
         "base": "1h",
-        "start": 3602000,
-        "cut": 3605000,
-        "sha256": "83f74cc2f1756b1009afd466072aeb10927d37e5d8c0aabf9b1bf098748eea2e",
-        "commands": [{"kind": "open", "time": 3602000, "side": "long", "stop": 90, "take": 120}],
+        "start": 10800000,
+        "cut": 21600000,
+        "sha256": "8ca11926730f129ee9f592feb2e69afd9dff9cb912d06b947bbfb020c9ed5aa9",
+        "commands": [{"kind": "open", "time": 10800000, "side": "long", "stop": 90, "take": 120}],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 105, 95, 100, 7],
-          [4000, 100, 122, 99, 118, 7],
-          [5000, 118, 119, 110, 115, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 105, 95, 100, 7],
+          [14400000, 100, 122, 99, 118, 7],
+          [18000000, 118, 119, 110, 115, 7]
         ]
       },
       "error": "the candles do not match the file's sha256"
@@ -569,16 +569,16 @@
         "version": 2,
         "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
         "base": "7h",
-        "start": 3602000,
-        "cut": 3605000,
-        "sha256": "83f74cc2f1756b1009afd466072aeb10927d37e5d8c0aabf9b1bf098748eea2e",
-        "commands": [{"kind": "open", "time": 3602000, "side": "long", "stop": 90, "take": 120}],
+        "start": 10800000,
+        "cut": 21600000,
+        "sha256": "8ca11926730f129ee9f592feb2e69afd9dff9cb912d06b947bbfb020c9ed5aa9",
+        "commands": [{"kind": "open", "time": 10800000, "side": "long", "stop": 90, "take": 120}],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 105, 95, 100, 7],
-          [4000, 100, 121, 99, 118, 7],
-          [5000, 118, 119, 110, 115, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 105, 95, 100, 7],
+          [14400000, 100, 121, 99, 118, 7],
+          [18000000, 118, 119, 110, 115, 7]
         ]
       },
       "error": "unknown timeframe \"7h\""
@@ -591,14 +591,14 @@
         "timeframe": "1h",
         "start": 1,
         "current": 4,
-        "sha256": "83f74cc2f1756b1009afd466072aeb10927d37e5d8c0aabf9b1bf098748eea2e",
+        "sha256": "8ca11926730f129ee9f592feb2e69afd9dff9cb912d06b947bbfb020c9ed5aa9",
         "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120}],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 105, 95, 100, 7],
-          [4000, 100, 122, 99, 118, 7],
-          [5000, 118, 119, 110, 115, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 105, 95, 100, 7],
+          [14400000, 100, 122, 99, 118, 7],
+          [18000000, 118, 119, 110, 115, 7]
         ]
       },
       "error": "the candles do not match the file's sha256"
@@ -611,14 +611,14 @@
         "timeframe": "1h",
         "start": 1,
         "current": 4,
-        "sha256": "83f74cc2f1756b1009afd466072aeb10927d37e5d8c0aabf9b1bf098748eea2e",
+        "sha256": "8ca11926730f129ee9f592feb2e69afd9dff9cb912d06b947bbfb020c9ed5aa9",
         "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120}],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 105, 95, 100, 7],
-          [4000, 100, 121, 99, 118, 7],
-          [5000, 118, 119, 110, 115, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 105, 95, 100, 7],
+          [14400000, 100, 121, 99, 118, 7],
+          [18000000, 118, 119, 110, 115, 7]
         ]
       },
       "error": "replay file version 3 is not supported (this app reads versions 1 and 2)"
@@ -631,14 +631,14 @@
         "timeframe": "1h",
         "start": 1,
         "current": 4,
-        "sha256": "83f74cc2f1756b1009afd466072aeb10927d37e5d8c0aabf9b1bf098748eea2e",
+        "sha256": "8ca11926730f129ee9f592feb2e69afd9dff9cb912d06b947bbfb020c9ed5aa9",
         "commands": [{"kind": "close", "bar": 2}],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 105, 95, 100, 7],
-          [4000, 100, 121, 99, 118, 7],
-          [5000, 118, 119, 110, 115, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 105, 95, 100, 7],
+          [14400000, 100, 121, 99, 118, 7],
+          [18000000, 118, 119, 110, 115, 7]
         ]
       },
       "error": "command 1: no open trade to close"
@@ -651,12 +651,12 @@
         "timeframe": "1h",
         "start": 1,
         "current": 2,
-        "sha256": "6ff705fdcd8ae423bf3e61d53285bff1d6f4e7157db07e60dd85a5ad2f321469",
+        "sha256": "4856b659ab2ac857dee62c80a505cb9a1791ef9714b20e83af82cde592520d44",
         "commands": [],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 101, 101, 7],
-          [3000, 100, 101, 99, 100, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 101, 101, 7],
+          [10800000, 100, 101, 99, 100, 7]
         ]
       },
       "error": "candle 1: low must be at most the open and the close"
@@ -669,12 +669,12 @@
         "timeframe": "1h",
         "start": 1,
         "current": 2,
-        "sha256": "ba0ff08e16eb49624b362be7e3a841f9fe2f703eeea40eea147932f8679bb2ab",
+        "sha256": "4d30fa4709730755c57817d1a8bc2ee79292e3f80863e47830372592e129655f",
         "commands": [],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 101, 99, 102, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 101, 99, 102, 7]
         ]
       },
       "error": "candle 2: high must be at least the open and the close"
@@ -687,12 +687,12 @@
         "timeframe": "1h",
         "start": 1,
         "current": 2,
-        "sha256": "31a45096c7a64a118a4d8e40688e5afd60e40ad2713ef7042efd70259fb1c411",
+        "sha256": "abbc17a0b3a259a7ca04999ca7c1af0837c25ca5816f04ff76ff0d63c1d53cf1",
         "commands": [],
         "candles": [
-          [1000, 100, 101, 99, 100, -1],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 101, 99, 100, 7]
+          [3600000, 100, 101, 99, 100, -1],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 101, 99, 100, 7]
         ]
       },
       "error": "candle 0: volume must not be negative"
@@ -705,13 +705,13 @@
         "timeframe": "1h",
         "start": 1,
         "current": 2,
-        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "sha256": "201b604b6f4700735ff81deff7cde19d4fbf989f10162e664ecd88f4adfff346",
         "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120}],
         "extra": 0,
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 101, 99, 100, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 101, 99, 100, 7]
         ]
       },
       "error": "not a replay file: unknown field `extra`"
@@ -724,12 +724,12 @@
         "timeframe": "1h",
         "start": 1,
         "current": 2,
-        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "sha256": "201b604b6f4700735ff81deff7cde19d4fbf989f10162e664ecd88f4adfff346",
         "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120}],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 101, 99, 100, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 101, 99, 100, 7]
         ]
       },
       "error": "not a replay file: unknown field `exchange`"
@@ -742,12 +742,12 @@
         "timeframe": "1h",
         "start": 1,
         "current": 2,
-        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "sha256": "201b604b6f4700735ff81deff7cde19d4fbf989f10162e664ecd88f4adfff346",
         "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120, "note": "x"}],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 101, 99, 100, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 101, 99, 100, 7]
         ]
       },
       "error": "not a replay file: unknown field `note`"
@@ -760,12 +760,12 @@
         "timeframe": "1h",
         "start": 1,
         "current": 2,
-        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "sha256": "201b604b6f4700735ff81deff7cde19d4fbf989f10162e664ecd88f4adfff346",
         "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90}],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 101, 99, 100, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 101, 99, 100, 7]
         ]
       },
       "error": "not a replay file: missing field `take`"
@@ -778,12 +778,12 @@
         "timeframe": "1h",
         "start": 1,
         "current": 2,
-        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "sha256": "201b604b6f4700735ff81deff7cde19d4fbf989f10162e664ecd88f4adfff346",
         "commands": [{"kind": "buy", "bar": 1}],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 101, 99, 100, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 101, 99, 100, 7]
         ]
       },
       "error": "not a replay file: unknown variant `buy`"
@@ -796,12 +796,12 @@
         "timeframe": "1h",
         "start": -1,
         "current": 2,
-        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "sha256": "201b604b6f4700735ff81deff7cde19d4fbf989f10162e664ecd88f4adfff346",
         "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120}],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 101, 99, 100, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 101, 99, 100, 7]
         ]
       },
       "error": "not a replay file: invalid value: integer `-1`, expected u32"
@@ -814,12 +814,12 @@
         "timeframe": "1h",
         "start": 1,
         "current": 2.5,
-        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "sha256": "201b604b6f4700735ff81deff7cde19d4fbf989f10162e664ecd88f4adfff346",
         "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120}],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 101, 99, 100, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 101, 99, 100, 7]
         ]
       },
       "error": "not a replay file: invalid type: floating point `2.5`, expected u32"
@@ -846,12 +846,12 @@
         "timeframe": "1h",
         "start": 1,
         "current": 2,
-        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "sha256": "201b604b6f4700735ff81deff7cde19d4fbf989f10162e664ecd88f4adfff346",
         "commands": [],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 101, 99, 100, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 101, 99, 100, 7]
         ]
       },
       "error": "the instrument's price scale 19 is above 18"
@@ -864,12 +864,12 @@
         "timeframe": "1h",
         "start": 1,
         "current": 2,
-        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "sha256": "201b604b6f4700735ff81deff7cde19d4fbf989f10162e664ecd88f4adfff346",
         "commands": [],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 101, 99, 100, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 101, 99, 100, 7]
         ]
       },
       "error": "the instrument's quantity scale 30 is above 18"
@@ -882,12 +882,12 @@
         "timeframe": "1h",
         "start": 1,
         "current": 2,
-        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "sha256": "201b604b6f4700735ff81deff7cde19d4fbf989f10162e664ecd88f4adfff346",
         "commands": [],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 101, 99, 100, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 101, 99, 100, 7]
         ]
       },
       "error": "the instrument's symbol must be 1 to 64 characters from A-Z, a-z, 0-9, ., _ and -"
@@ -900,12 +900,12 @@
         "timeframe": "1h",
         "start": 1,
         "current": 2,
-        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "sha256": "201b604b6f4700735ff81deff7cde19d4fbf989f10162e664ecd88f4adfff346",
         "commands": [],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 101, 99, 100, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 101, 99, 100, 7]
         ]
       },
       "error": "the instrument's source must be 1 to 64 characters from A-Z, a-z, 0-9, ., _ and -"
@@ -918,12 +918,12 @@
         "timeframe": "1h",
         "start": 1,
         "current": 2,
-        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "sha256": "201b604b6f4700735ff81deff7cde19d4fbf989f10162e664ecd88f4adfff346",
         "commands": [],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 101, 99, 100, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 101, 99, 100, 7]
         ]
       },
       "error": "the instrument's quote must be 1 to 64 characters from A-Z, a-z, 0-9, ., _ and -"
