@@ -20,7 +20,7 @@ The tools rail is on the left of the chart. Click a tool, or press its shortcut 
 | Tool | Shortcut | How to place it |
 | --- | --- | --- |
 | Trend line | Alt+T | Click the two ends, or press on the first end, drag and release on the second. In the style popover it can extend to the left, to the right, or both. |
-| Horizontal line | Alt+H | One click. It runs across the whole chart and its price is tagged on the price axis. |
+| Horizontal line | Alt+H | One click. It runs across the whole chart and its price is tagged on the price axis. Or click the round + at the crosshair's price label and pick **Draw horizontal line at <price>**: the line lands at exactly that price. |
 | Rectangle | Alt+B | Click two opposite corners, or drag from one to the other. It can extend to the right edge. |
 | Fibonacci retracement | Alt+F | Click where the move starts, then where it ends. Level 0 is at the end of the move, level 1 at its start. The levels are 0, 0.236, 0.382, 0.5, 0.618, 0.786, 1, 1.272 and 1.618, each labelled with its price; turn any of them off in the style popover. |
 | Long position | Alt+L | One click at the entry. The stop starts 1.5 % below the entry, the take at 3 R above it, and the position runs for 20 bars. Drag the stop, take and end handles to change them. |
@@ -109,7 +109,7 @@ The eye button at the bottom of the tools rail opens a menu:
 | ⌘ / Ctrl held | Snap the point to the bar under the pointer while placing or dragging a handle; with a tool picked, a ring shows where |
 | ⌘-drag / Ctrl-drag on empty space | Selection box |
 | ⌘-click / Ctrl-click | Add a drawing to the selection or take it out |
-| Right click | Context menu of the drawing or the selection |
+| Right click | Context menu of the drawing or the selection; on a price alert's level, its menu (see [Alerts](alerts.md#on-the-chart)) |
 | Shift held | Horizontal point with a tool or a handle; ruler with no tool |
 | Enter, double-click | Style popover, or the text editor of a note |
 | Delete, Backspace | Delete the selection (every selected drawing) |

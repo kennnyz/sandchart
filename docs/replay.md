@@ -49,6 +49,8 @@ The replay bar sits centred under the chart, with the results under it:
 | Open | Opens a `.replay` file. |
 | X | Ends the replay and goes back to the live chart. |
 
+The round **+** at the left edge of the crosshair's price label opens a menu there too: **Buy** (Shift+B) and **Sell** (Shift+S), the same as the buttons, at the close of the current step, not at the price you point at, and **Draw horizontal line at <price>**. It has no alert item, since a replay's prices are from the past. Buy and Sell are off while a trade is open and once the replay has caught up ("Real time reached").
+
 Play stops by itself at the newest bar ("End of data"), when an action fails, and when the window is hidden or minimised. There is no step back: to try again, pick the same bar with **Select bar**.
 
 Opening another pair ends the replay. Another timeframe does not (see below).

@@ -32,13 +32,14 @@ Rectangles, Fibonacci levels and the other drawings have no alerts.
 ## Set an alert
 
 - **Price alert:** point at a price on the chart and press **Alt+A** (⌥A on a Mac). The alert is set at the price under the crosshair, direction Cross, on the pair the chart shows. Not during a [replay](replay.md): its prices are from the past.
+- **From the + on the price axis:** while the mouse is over the price plot, a small round **+** sits at the left edge of the crosshair's price label. Move along the row to it and click: a menu opens at that price with **Add alert on <pair> at <price>** (the same alert as Alt+A) and **Draw horizontal line at <price>** (a line at exactly that price, without an alert). The click neither pans the chart nor places a drawing of the tool you have picked. Arrow keys move between the items, Enter picks one, Esc or a click outside closes the menu. In a replay the menu offers Buy and Sell instead of the alert (see [Replay](replay.md#controls)).
 - **Line alert:** double-click a horizontal or trend line (or select it and press Enter) to open its style. In the **Alert** row pick the direction and press **Set**. While it is set, the same row changes its direction (which arms it again) or **Remove**s it.
 
 The first alert you create may make your operating system ask whether Sandchart may show notifications. Allow it to get notifications outside the window; the message in the window and the panel work either way.
 
 ## On the chart
 
-Every active price alert of the pair on the chart shows as a thin dashed line at its price, with a bell tag and the price on the price axis. Click the line to pick the alert in the alerts panel. A fired alert has no line; a line alert is its own line. During a replay the levels are hidden.
+Every active price alert of the pair on the chart shows as a thin dashed line at its price, with a bell tag and the price on the price axis. Click the line to pick the alert in the alerts panel. Right-click it (Ctrl-click on a Mac) for its menu: **Remove alert** deletes it, as × in the panel does. Where a drawing lies over the line, the right click opens the drawing's menu instead. A fired alert has no line; a line alert is its own line. During a replay the levels are hidden.
 
 ## The alerts panel
 
