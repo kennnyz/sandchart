@@ -31,7 +31,7 @@ pub enum ConnectionState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LiveEvent {
-    /// A candle update; closed ones are already stored.
+    /// A candle update; closed ones are already stored (unless the write failed).
     Candle(LiveCandle),
     /// Candles missed while the stream was down, ascending and already stored. With
     /// `reset` the cached series was replaced, so these candles replace the chart.
@@ -228,11 +228,15 @@ async fn run(
                 }
                 if live.closed {
                     let (id, candle) = (inst.id.clone(), live.candle);
-                    if blocking(&shared.store, move |s| s.upsert_candles(&id, tf, &[candle]))
-                        .await
-                        .is_err()
+                    // The cache misses this candle (a later page load fetches it again), but
+                    // the price still counts for the chart and the alerts.
+                    if let Err(e) =
+                        blocking(&shared.store, move |s| s.upsert_candles(&id, tf, &[candle])).await
                     {
-                        continue;
+                        eprintln!(
+                            "a closed candle of {}/{} cannot be stored: {e}",
+                            inst.id.source, inst.id.symbol
+                        );
                     }
                 }
                 // Forming candles reach the indicator bars too, in memory only.

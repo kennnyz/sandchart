@@ -791,3 +791,24 @@ async fn the_engines_own_stream_only_evaluates_and_stores_nothing() {
     );
     assert_eq!(stored_candles(f._dir.path(), "BTCUSDT"), 0);
 }
+
+#[tokio::test]
+async fn a_closed_candle_that_cannot_be_stored_still_counts_for_the_alerts() {
+    let mut f = fixture(&["BTCUSDT"]).await;
+    let _chart = f
+        .engine
+        .subscribe_live(&id("BTCUSDT"), Timeframe::H1)
+        .unwrap();
+    f.engine
+        .set_alert(price_alert("a1", "BTCUSDT", 10_000, Direction::Above))
+        .await
+        .unwrap();
+    sql(f._dir.path(), "ALTER TABLE candles RENAME TO candles_away");
+    let p = &f.provider;
+    p.send("BTCUSDT", Timeframe::H1, bar(0, 9_980, 9_990, 9_990));
+    p.send_closed("BTCUSDT", Timeframe::H1, bar(0, 9_980, 10_005, 10_002));
+    assert_eq!(
+        next_fired(&mut f.events).await.triggered_price,
+        Some(10_002)
+    );
+}
