@@ -33,8 +33,7 @@ export interface ReplayBarProps {
 
 const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 
-/** "→", "Space", "⇧B". */
-/** The replay keys as shown in tooltips and menus. */
+/** The replay keys as shown in tooltips and menus ("→", "Space", "⇧B"). */
 export const REPLAY_KEYS = { step: "→", play: "Space", buy: "⇧B", sell: "⇧S", close: "⇧C" } as const;
 const KEYS = REPLAY_KEYS;
 const titled = (name: string, shortcut: string) => t("replay.shortcut", { name, shortcut });
@@ -290,7 +289,7 @@ export function ReplayBar({ replay: r, range, onDate }: ReplayBarProps) {
             data-testid="replay-select"
             {...menuButton("select")}
             title={t("replay.selectBar.title")}
-                      >
+          >
             <Rewind size={14} />
             {t("replay.selectBar")}
             <ChevronDown size={12} />
@@ -360,7 +359,7 @@ export function ReplayBar({ replay: r, range, onDate }: ReplayBarProps) {
           {...menuButton("speed")}
           aria-label={`${t("replay.speed")}: ${r.speed}x`}
           title={t("replay.speedValue", { n: r.speed })}
-                  >
+        >
           {r.speed}x
           <ChevronDown size={12} />
         </button>
@@ -371,7 +370,7 @@ export function ReplayBar({ replay: r, range, onDate }: ReplayBarProps) {
           aria-label={intervalLabel}
           title={intervalLabel}
           disabled={!v}
-                  >
+        >
           {v ? tfLabel(v.base) : ""}
           <ChevronDown size={12} />
         </button>
