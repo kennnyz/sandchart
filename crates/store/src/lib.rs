@@ -165,6 +165,38 @@ impl Store {
             .pragma_query_value(None, "data_version", |row| row.get(0))?)
     }
 
+    /// Everything the armed alerts depend on, as one value that changes when any of it does:
+    /// every alert row, the drawings active alerts follow and the price scales of their
+    /// pairs. Cheap enough to read after every commit of another process, so the alerts are
+    /// reloaded only when such a commit concerns them.
+    pub fn alerts_fingerprint(&self) -> Result<String, StoreError> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT 'a', id, source, symbol, price_scale, kind, price, drawing_id, direction,
+                    active, created_at, triggered_at
+               FROM alerts
+             UNION ALL
+             SELECT DISTINCT 'd', d.id, d.source, d.symbol, d.price_scale, d.body,
+                    NULL, NULL, NULL, NULL, NULL, NULL
+               FROM drawings d JOIN alerts a ON a.drawing_id = d.id WHERE a.active = 1
+             UNION ALL
+             SELECT DISTINCT 'i', i.source, i.source, i.symbol, i.price_scale,
+                    NULL, NULL, NULL, NULL, NULL, NULL, NULL
+               FROM instruments i JOIN alerts a ON a.source = i.source AND a.symbol = i.symbol
+              WHERE a.active = 1
+             ORDER BY 1, 2, 3, 4",
+        )?;
+        let mut rows = stmt.query([])?;
+        let mut out = String::new();
+        while let Some(row) = rows.next()? {
+            for i in 0..12 {
+                let v: rusqlite::types::Value = row.get(i)?;
+                out.push_str(&format!("{v:?}\u{1f}"));
+            }
+            out.push('\n');
+        }
+        Ok(out)
+    }
+
     /// Reverts migrations until the schema version is `version` (0 removes every table).
     pub fn migrate_down_to(&mut self, version: u32) -> Result<(), StoreError> {
         migrations::down_to(&mut self.conn, version)

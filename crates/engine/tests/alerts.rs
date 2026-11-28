@@ -852,3 +852,49 @@ async fn every_alert_of_a_burst_is_reported_to_a_receiver_that_reads_late() {
     }
     assert_eq!(fired, sandchart_store::MAX_ACTIVE_ALERTS);
 }
+
+#[tokio::test]
+async fn another_processs_writes_reload_the_alerts_only_when_they_concern_them() {
+    let mut f = fixture(&["BTCUSDT"]).await;
+    let other = Engine::open_secondary(
+        f._dir.path(),
+        None,
+        vec![f.provider.clone() as Arc<dyn Provider>],
+    )
+    .unwrap();
+    other
+        .save_drawing(drawing("h1", "BTCUSDT", DrawingBody::Hline { p: 5 }))
+        .await
+        .unwrap();
+    other.sync_instruments("fake").await.unwrap();
+    // More than one check of the service: nothing about the alerts changed.
+    tokio::time::sleep(Duration::from_millis(2_500)).await;
+    assert_eq!(
+        f.events.try_recv(),
+        Err(broadcast::error::TryRecvError::Empty),
+        "an event after writes that concern no alert"
+    );
+    other
+        .set_alert(line_alert("a", "BTCUSDT", "h1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), f.events.recv())
+            .await
+            .unwrap()
+            .unwrap(),
+        AlertEvent::Changed
+    );
+    // Moving the line it follows concerns it.
+    other
+        .save_drawing(drawing("h1", "BTCUSDT", DrawingBody::Hline { p: 6 }))
+        .await
+        .unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), f.events.recv())
+            .await
+            .unwrap()
+            .unwrap(),
+        AlertEvent::Changed
+    );
+}

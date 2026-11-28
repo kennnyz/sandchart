@@ -964,3 +964,49 @@ fn two_processes_racing_on_a_drawing_and_its_alert_leave_no_orphan() {
         );
     }
 }
+
+#[test]
+fn the_alerts_fingerprint_changes_only_with_what_alerts_depend_on() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.upsert_instruments(&[instrument("BTCUSDT")]).unwrap();
+    store.upsert_drawing(&drawing("d1", "BTCUSDT", 0)).unwrap();
+    store
+        .upsert_alert(&alert("a", "BTCUSDT", on_drawing("d1")))
+        .unwrap();
+    let mut seen = store.alerts_fingerprint().unwrap();
+    let mut changed = |store: &Store| {
+        let now = store.alerts_fingerprint().unwrap();
+        let differs = now != seen;
+        seen = now;
+        differs
+    };
+    // Candles, another drawing and the watchlist concern no alert.
+    store
+        .upsert_candles(&id("BTCUSDT"), Timeframe::H1, &series(3))
+        .unwrap();
+    store
+        .upsert_drawing(&drawing("other", "BTCUSDT", 0))
+        .unwrap();
+    store.set_watchlist(&[id("BTCUSDT")]).unwrap();
+    assert!(!changed(&store));
+    // The followed line, the pair's tick size and the alert itself do.
+    store.upsert_drawing(&drawing("d1", "BTCUSDT", 5)).unwrap();
+    assert!(!changed(&store), "z is not a level");
+    store
+        .upsert_drawing(&with_body(
+            drawing("d1", "BTCUSDT", 5),
+            DrawingBody::Hline { p: 9 },
+        ))
+        .unwrap();
+    assert!(changed(&store));
+    let mut finer = instrument("BTCUSDT");
+    finer.price_scale = 3;
+    store.upsert_instruments(&[finer]).unwrap();
+    assert!(changed(&store));
+    store
+        .upsert_alert(&alert("p", "BTCUSDT", price(1)))
+        .unwrap();
+    assert!(changed(&store));
+    store.delete_alert("p").unwrap();
+    assert!(changed(&store));
+}

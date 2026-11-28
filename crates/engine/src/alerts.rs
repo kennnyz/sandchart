@@ -474,6 +474,7 @@ impl Engine {
         let hub = Arc::clone(&self.shared.alerts);
         // Read first, so a write by another process during the first arming is not missed.
         let mut seen = self.data_version().await;
+        let mut fingerprint = self.alerts_fingerprint().await;
         if let Err(e) = self.store_and_reload(|_| Ok(())).await {
             eprintln!("cannot arm the alerts: {e}");
         }
@@ -482,16 +483,29 @@ impl Engine {
             let notified = hub.wake.notified();
             self.reconcile(&mut failing);
             let _ = tokio::time::timeout(CHECK, notified).await;
-            // Another process may have added, changed or removed alerts or their drawings.
+            // Another process may have added, changed or removed alerts or their drawings;
+            // most of its commits (candles, other drawings) concern no alert.
             let version = self.data_version().await;
             if version != seen {
                 seen = version;
+                let now = self.alerts_fingerprint().await;
+                if now.is_some() && now == fingerprint {
+                    continue;
+                }
+                fingerprint = now;
                 match self.store_and_reload(|_| Ok(())).await {
                     Ok(()) => self.shared.alerts.send(AlertEvent::Changed),
                     Err(e) => eprintln!("cannot re-arm the alerts: {e}"),
                 }
             }
         }
+    }
+
+    /// The store's [`Store::alerts_fingerprint`], `None` when it cannot be read.
+    async fn alerts_fingerprint(&self) -> Option<String> {
+        blocking(&self.shared.store, |s| s.alerts_fingerprint())
+            .await
+            .ok()
     }
 
     /// The store's `data_version`, `None` when it cannot be read.
