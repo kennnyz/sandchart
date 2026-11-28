@@ -92,6 +92,7 @@ Drawings are saved in the same local SQLite file as the candle cache, in your us
 - A drawing belongs to a pair (for example BTCUSDT on Binance) and shows on **every timeframe** of that pair: a level drawn on 1h is on 15m and 1d too.
 - Points are kept as a time and a price, never as a bar number, so drawings stay where they are when older history loads.
 - A pair holds at most 2000 drawings.
+- A drawing that cannot be shown is left out but stays saved and still counts toward the 2000: one written by a newer Sandchart version with a kind this one does not know, or one whose prices no longer fit after the exchange changed the pair's tick size. A newer version (or the old tick size) shows it again.
 - If a drawing cannot be saved, a warning strip appears above the chart and the chart reloads what is stored, so it never shows a drawing that is not saved. If the drawings cannot be loaded either, the strip says so and the chart shows none until a later change is stored or the pair is opened again.
 
 ## Position outcomes
