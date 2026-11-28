@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useState, useSyncExternalStore } from "react";
 import { backend, firstUpdateCheckMs } from "./backend";
 import type { ConnectionState, Instrument, InstrumentId, TimeframeCode } from "./backend/types";
 import { dark, light } from "./chart/theme";
@@ -14,6 +14,7 @@ import { useLanguage } from "./i18n";
 import { sourceName } from "./labels";
 import { drawingStore } from "./state/drawings";
 import { indicatorStore } from "./state/indicators";
+import { replayStore } from "./state/replay";
 import { updateStore } from "./state/update";
 
 type ThemeName = "dark" | "light";
@@ -60,6 +61,17 @@ export function App() {
   const [indicatorsOpen, setIndicatorsOpen] = useState(false);
   const [drawings] = useState(() => drawingStore(backend));
   const [updates] = useState(() => updateStore(backend));
+  const [replay] = useState(() => replayStore(backend));
+  const replayPhase = useSyncExternalStore(replay.subscribe, () => replay.state.phase);
+
+  // An opened replay file shows its own instrument and timeframe.
+  useEffect(() => {
+    replay.state.onSwitch((id, at) => {
+      setCurrent(id);
+      setTf(at);
+    });
+    return () => replay.state.onSwitch(null);
+  }, [replay]);
 
   // Update checks: the first one waits for the chart, then once a day, unless turned off. Timers
   // stop while the Mac sleeps, so a window shown again looks for a due check at once.
@@ -203,6 +215,12 @@ export function App() {
         onTheme={changeTheme}
         onSearch={() => setSearchMode("open")}
         onIndicators={() => setIndicatorsOpen(true)}
+        replayPhase={replayPhase}
+        onReplay={() => {
+          const r = replay.state;
+          if (r.phase === "off") r.pick();
+          else void r.exit();
+        }}
         watchlistHidden={!watchlistVisible}
         onShowWatchlist={() => showWatchlist(true)}
       />
@@ -222,6 +240,7 @@ export function App() {
               connection={connection}
               indicators={indicators}
               drawings={drawings}
+              replay={replay}
             />
           )}
         </div>

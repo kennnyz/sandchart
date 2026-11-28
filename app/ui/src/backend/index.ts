@@ -48,7 +48,8 @@ if (inTauri) void resetSubscriptions();
  * `checkUpdate` finds; `0.3.0` when only the next two are set), `mockUpdateError=check|install` (every check
  * fails, or every download fails halfway), `mockUpdateBlocker=translocated|not_appimage` (the update cannot be
  * installed here) and `mockUpdateDelay` (ms until the first automatic check). The watchlist and the drawings are kept in
- * localStorage (`sandchart.mock.drawings`), so a reload sees the same ones. Calls are counted in `window.__sandchartMock`, and the chart
+ * localStorage (`sandchart.mock.drawings`), so a reload sees the same ones. Calls are counted in `window.__sandchartMock`
+ * (whose `replayFile()` returns the text of the last replay save), and the chart
  * reports draw times and axis layout into `window.__sandchartDebug` (see
  * chart/debug.ts). None of this exists inside Tauri.
  */
@@ -103,7 +104,7 @@ function browserMock(): Backend {
     drawingStore: localStore<Drawing[]>(MOCK_DRAWINGS_KEY),
   });
   enableChartDebug();
-  const stats = { getCandles: 0, checkUpdate: 0 };
+  const stats = { getCandles: 0, checkUpdate: 0, replayFile: () => mock.replayFile() };
   (window as unknown as { __sandchartMock: typeof stats }).__sandchartMock = stats;
   return {
     ...mock,
