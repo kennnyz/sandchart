@@ -278,6 +278,7 @@
   "alerts.dir.below": "Ниже",
   "alerts.dir.cross": "Пересечение",
   "alerts.state.active": "Активен",
+  "alerts.state.paused": "Пауза на время реплея",
   "alerts.state.fired": "Сработал {time} по {price}",
   "alerts.rearm": "Включить снова",
   "alerts.delete": "Удалить алерт",

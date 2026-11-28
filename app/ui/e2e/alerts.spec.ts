@@ -277,6 +277,25 @@ test("removing_an_alert_from_the_popover_keeps_the_line", async ({ page }) => {
   expect(await storedDrawings(page)).toHaveLength(1);
 });
 
+test("alerts_of_the_replayed_pair_say_they_are_paused", async ({ page }) => {
+  const plot = await openChart(page);
+  await page.mouse.move(Math.round(plot.left + plot.width / 2), Math.round(plot.top + plot.height * 0.4));
+  await nextFrame(page);
+  await page.keyboard.press("Alt+KeyA");
+  await alertCount(page, 1);
+  const row = page.getByTestId("alert-row");
+  await expect(row).toContainText("Active");
+  await page.getByTestId("replay-button").click();
+  await page.mouse.click(Math.round(plot.left + plot.width / 2), Math.round(plot.top + plot.height / 2));
+  await expect(page.getByTestId("chart")).toHaveAttribute("data-replay", "on");
+  await expect(row).toHaveAttribute("data-paused", "true");
+  await expect(row).toContainText("Paused during replay");
+  await page.getByTestId("replay-exit").click();
+  await expect(page.getByTestId("chart")).toHaveAttribute("data-replay", "off");
+  await expect(row).toHaveAttribute("data-paused", "false");
+  await expect(row).toContainText("Active");
+});
+
 test("alt_a_sets_no_alert_during_a_replay", async ({ page }) => {
   const plot = await openChart(page);
   await page.getByTestId("replay-button").click();

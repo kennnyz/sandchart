@@ -278,6 +278,7 @@
   "alerts.dir.below": "Below",
   "alerts.dir.cross": "Cross",
   "alerts.state.active": "Active",
+  "alerts.state.paused": "Paused during replay",
   "alerts.state.fired": "Fired {time} at {price}",
   "alerts.rearm": "Arm again",
   "alerts.delete": "Delete the alert",

@@ -63,7 +63,7 @@ The previous price must have been on the other side: an Above alert set while th
 
 An alert fires once and then turns inactive. The message says the price when it fired: the latest price if it is past the level, or the level itself if only a wick reached it. Arm it again from the panel to wait for the next time.
 
-While a pair is open in a [replay](replay.md), its alerts are not checked. When the replay ends, the first new price is compared with the last one before the replay, so a level crossed in the meantime fires then.
+While a pair is open in a [replay](replay.md), its alerts are not checked, and the panel says **Paused during replay** for them (until the replay ends or catches up with real time). When the replay ends, the first new price is compared with the last one before the replay, so a level crossed in the meantime fires then.
 
 ## Trend lines
 

@@ -25,10 +25,12 @@ interface RowProps {
   selected: boolean;
   store: AlertStore;
   drawings?: DrawingStore;
+  /** A replay holds its pair back: the engine does not check this alert until it ends or catches up. */
+  paused: boolean;
   onOpen(id: InstrumentId): void;
 }
 
-function Row({ a, unseen, selected, store, drawings, onOpen }: RowProps) {
+function Row({ a, unseen, selected, store, drawings, paused, onOpen }: RowProps) {
   const s = store.state;
   const ref = useRef<HTMLDivElement>(null);
   // Picked on the chart: bring it into view in the list.
@@ -36,7 +38,7 @@ function Row({ a, unseen, selected, store, drawings, onOpen }: RowProps) {
     if (selected) ref.current?.scrollIntoView({ block: "nearest" });
   }, [selected]);
   const state = a.active
-    ? t("alerts.state.active")
+    ? t(paused ? "alerts.state.paused" : "alerts.state.active")
     : t("alerts.state.fired", {
         time: a.triggeredAt === null ? "" : formatUtcClock(a.triggeredAt, Date.now()),
         price: a.triggeredPrice === null ? "" : formatPrice(a.triggeredPrice, a.priceScale),
@@ -48,6 +50,7 @@ function Row({ a, unseen, selected, store, drawings, onOpen }: RowProps) {
       data-testid="alert-row"
       data-symbol={a.instrument.symbol}
       data-state={a.active ? "active" : "fired"}
+      data-paused={paused && a.active}
       data-unseen={unseen}
       data-selected={selected}
       aria-selected={selected}
@@ -104,7 +107,15 @@ const noSubscribe = () => () => {};
 const noVersion = () => 0;
 
 /** The alerts under the watchlist, newest first: pair, direction, level, state; arm again, delete. */
-export function AlertsPanel({ store, drawings, onOpen }: { store: AlertStore; drawings?: DrawingStore; onOpen(id: InstrumentId): void }) {
+export interface AlertsPanelProps {
+  store: AlertStore;
+  drawings?: DrawingStore;
+  /** The pair a replay holds back (its alerts are paused), or null. */
+  replaying?: InstrumentId | null;
+  onOpen(id: InstrumentId): void;
+}
+
+export function AlertsPanel({ store, drawings, replaying = null, onOpen }: AlertsPanelProps) {
   useSyncExternalStore(store.subscribe, store.version);
   // A line moved on the chart moves its alert's level here.
   useSyncExternalStore(drawings?.subscribe ?? noSubscribe, drawings?.version ?? noVersion);
@@ -130,6 +141,7 @@ export function AlertsPanel({ store, drawings, onOpen }: { store: AlertStore; dr
             selected={s.selected === a.id}
             store={store}
             drawings={drawings}
+            paused={replaying !== null && replaying.source === a.instrument.source && replaying.symbol === a.instrument.symbol}
             onOpen={onOpen}
           />
         ))}

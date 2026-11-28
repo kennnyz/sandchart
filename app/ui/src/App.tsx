@@ -296,7 +296,7 @@ export function App() {
               onAdd={() => setSearchMode("add")}
               onHide={() => showWatchlist(false)}
             />
-            <AlertsPanel store={alerts} drawings={drawings} onOpen={openPair} />
+            <AlertsPanel store={alerts} drawings={drawings} replaying={replaying} onOpen={openPair} />
           </div>
         )}
         <AlertToast store={alerts} />
