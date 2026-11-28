@@ -237,7 +237,78 @@ export async function mockWriteReplay(f: MockReplayFile): Promise<string> {
   );
 }
 
-/** Reads and checks a file as Rust does (size, version, limits, candles, hash, commands). */
+const FILE_FIELDS = ["version", "instrument", "timeframe", "start", "current", "sha256", "commands", "candles"];
+const INSTRUMENT_FIELDS = ["source", "symbol", "base", "quote", "priceScale", "qtyScale"];
+const COMMAND_FIELDS: Record<string, { need: string[]; may: string[] }> = {
+  open: { need: ["bar", "side", "stop", "take"], may: [] },
+  edit: { need: ["bar"], may: ["stop", "take"] },
+  close: { need: ["bar"], may: [] },
+};
+
+/** serde's `deny_unknown_fields` and required fields: the first unknown key, then the first missing one. */
+function fields(o: unknown, need: string[], may: string[] = []): Record<string, unknown> {
+  if (typeof o !== "object" || o === null || Array.isArray(o)) throw new Error("invalid type: expected a map");
+  const r = o as Record<string, unknown>;
+  for (const k of Object.keys(r)) if (!need.includes(k) && !may.includes(k) && k !== "kind") throw new Error(`unknown field \`${k}\``);
+  for (const k of need) if (!(k in r)) throw new Error(`missing field \`${k}\``);
+  return r;
+}
+
+/** An unsigned integer of `bits` bits, with serde's messages. */
+function uint(v: unknown, bits: 8 | 32): number {
+  const want = `u${bits}`;
+  if (typeof v !== "number") throw new Error(`invalid type: ${JSON.stringify(v)}, expected ${want}`);
+  if (!Number.isInteger(v)) throw new Error(`invalid type: floating point \`${v}\`, expected ${want}`);
+  if (v < 0 || v >= 2 ** bits) throw new Error(`invalid value: integer \`${v}\`, expected ${want}`);
+  return v;
+}
+
+function int(v: unknown): number {
+  if (typeof v !== "number" || !Number.isInteger(v)) throw new Error(`invalid type: ${JSON.stringify(v)}, expected i64`);
+  return v;
+}
+
+function str(v: unknown): string {
+  if (typeof v !== "string") throw new Error(`invalid type: ${JSON.stringify(v)}, expected a string`);
+  return v;
+}
+
+/** The shape serde checks in Rust's `Body`, `FileInstrument` and `Command`. */
+function checkShape(raw: Record<string, unknown>): void {
+  fields(raw, FILE_FIELDS);
+  const i = fields(raw.instrument, INSTRUMENT_FIELDS);
+  for (const k of ["source", "symbol", "base", "quote"]) str(i[k]);
+  uint(i.priceScale, 8);
+  uint(i.qtyScale, 8);
+  str(raw.timeframe);
+  uint(raw.start, 32);
+  uint(raw.current, 32);
+  str(raw.sha256);
+  if (!Array.isArray(raw.commands)) throw new Error("invalid type: expected a sequence");
+  if (raw.commands.length > MOCK_MAX_REPLAY_COMMANDS) throw new Error(`at most ${MOCK_MAX_REPLAY_COMMANDS} commands`);
+  for (const c of raw.commands as unknown[]) {
+    const kind = (c as { kind?: unknown } | null)?.kind;
+    if (kind === undefined) throw new Error("missing field `kind`");
+    const shape = typeof kind === "string" ? COMMAND_FIELDS[kind] : undefined;
+    if (!shape) throw new Error(`unknown variant \`${String(kind)}\`, expected one of \`open\`, \`edit\`, \`close\``);
+    const r = fields(c, shape.need, shape.may);
+    uint(r.bar, 32);
+    if ("side" in r && r.side !== "long" && r.side !== "short") throw new Error(`unknown variant \`${String(r.side)}\`, expected \`long\` or \`short\``);
+    for (const k of ["stop", "take"]) {
+      // An edit's `Option<i64>` takes null as "not set".
+      if (kind === "edit" && r[k] === null) delete r[k];
+      else if (k in r) int(r[k]);
+    }
+  }
+  if (!Array.isArray(raw.candles)) throw new Error("invalid type: expected a sequence");
+  if (raw.candles.length > MOCK_MAX_REPLAY_CANDLES) throw new Error(`at most ${MOCK_MAX_REPLAY_CANDLES} candles`);
+  for (const row of raw.candles as unknown[]) {
+    if (!Array.isArray(row) || row.length !== 6) throw new Error("invalid length, expected an array of length 6");
+    row.forEach(int);
+  }
+}
+
+/** Reads and checks a file as Rust does (size, version, shape, limits, candles, hash, commands). */
 export async function mockReadReplay(bytes: Uint8Array): Promise<MockReplayFile> {
   if (bytes.length > MOCK_MAX_REPLAY_BYTES) {
     throw new Error(`the replay file is ${Math.floor(bytes.length / 2 ** 20)} MiB; the limit is 32 MiB`);
@@ -252,16 +323,16 @@ export async function mockReadReplay(bytes: Uint8Array): Promise<MockReplayFile>
   if (raw.version !== MOCK_REPLAY_VERSION) {
     throw new Error(`replay file version ${String(raw.version)} is not supported (this app reads version ${MOCK_REPLAY_VERSION})`);
   }
-  const inst = raw.instrument as Record<string, unknown> | undefined;
-  const rows = raw.candles;
-  if (!inst || !Array.isArray(rows) || !Array.isArray(raw.commands) || typeof raw.start !== "number" || typeof raw.current !== "number") {
-    throw new Error("not a replay file: missing fields");
+  try {
+    checkShape(raw);
+  } catch (e) {
+    throw new Error(`not a replay file: ${e instanceof Error ? e.message : String(e)}`);
   }
+  const inst = raw.instrument as Record<string, unknown>;
+  const rows = raw.candles as number[][];
   const tf = raw.timeframe as TimeframeCode;
   if (!TIMEFRAME_CODES.includes(tf)) throw new Error(`unknown timeframe ${JSON.stringify(raw.timeframe)}`);
-  if (rows.length > MOCK_MAX_REPLAY_CANDLES) throw new Error(`not a replay file: at most ${MOCK_MAX_REPLAY_CANDLES} candles`);
-  if (raw.commands.length > MOCK_MAX_REPLAY_COMMANDS) throw new Error(`not a replay file: at most ${MOCK_MAX_REPLAY_COMMANDS} commands`);
-  const candles = (rows as number[][]).map(([time, open, high, low, close, volume]) => ({
+  const candles = rows.map(([time, open, high, low, close, volume]) => ({
     time: time!,
     open: open!,
     high: high!,
@@ -289,8 +360,8 @@ export async function mockReadReplay(bytes: Uint8Array): Promise<MockReplayFile>
     },
     tf,
     candles,
-    start: raw.start,
-    current: raw.current,
+    start: raw.start as number,
+    current: raw.current as number,
     commands: raw.commands as ReplayCommand[],
   };
   mockSimulate(file.candles, file.start, file.current, file.commands);

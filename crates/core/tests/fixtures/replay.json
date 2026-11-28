@@ -340,6 +340,147 @@
         ]
       },
       "error": "candle 0: volume must not be negative"
+    },
+    {
+      "name": "a file with an unknown field is refused",
+      "file": {
+        "version": 1,
+        "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
+        "timeframe": "1h",
+        "start": 1,
+        "current": 2,
+        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120}],
+        "extra": 0,
+        "candles": [
+          [1000, 100, 101, 99, 100, 7],
+          [2000, 100, 102, 98, 100, 7],
+          [3000, 100, 101, 99, 100, 7]
+        ]
+      },
+      "error": "not a replay file: unknown field `extra`"
+    },
+    {
+      "name": "an instrument with an unknown field is refused",
+      "file": {
+        "version": 1,
+        "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5, "exchange": "x"},
+        "timeframe": "1h",
+        "start": 1,
+        "current": 2,
+        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120}],
+        "candles": [
+          [1000, 100, 101, 99, 100, 7],
+          [2000, 100, 102, 98, 100, 7],
+          [3000, 100, 101, 99, 100, 7]
+        ]
+      },
+      "error": "not a replay file: unknown field `exchange`"
+    },
+    {
+      "name": "a command with an unknown field is refused",
+      "file": {
+        "version": 1,
+        "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
+        "timeframe": "1h",
+        "start": 1,
+        "current": 2,
+        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120, "note": "x"}],
+        "candles": [
+          [1000, 100, 101, 99, 100, 7],
+          [2000, 100, 102, 98, 100, 7],
+          [3000, 100, 101, 99, 100, 7]
+        ]
+      },
+      "error": "not a replay file: unknown field `note`"
+    },
+    {
+      "name": "a command without a field it needs is refused",
+      "file": {
+        "version": 1,
+        "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
+        "timeframe": "1h",
+        "start": 1,
+        "current": 2,
+        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90}],
+        "candles": [
+          [1000, 100, 101, 99, 100, 7],
+          [2000, 100, 102, 98, 100, 7],
+          [3000, 100, 101, 99, 100, 7]
+        ]
+      },
+      "error": "not a replay file: missing field `take`"
+    },
+    {
+      "name": "a command of an unknown kind is refused",
+      "file": {
+        "version": 1,
+        "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
+        "timeframe": "1h",
+        "start": 1,
+        "current": 2,
+        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "commands": [{"kind": "buy", "bar": 1}],
+        "candles": [
+          [1000, 100, 101, 99, 100, 7],
+          [2000, 100, 102, 98, 100, 7],
+          [3000, 100, 101, 99, 100, 7]
+        ]
+      },
+      "error": "not a replay file: unknown variant `buy`"
+    },
+    {
+      "name": "a negative start is refused",
+      "file": {
+        "version": 1,
+        "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
+        "timeframe": "1h",
+        "start": -1,
+        "current": 2,
+        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120}],
+        "candles": [
+          [1000, 100, 101, 99, 100, 7],
+          [2000, 100, 102, 98, 100, 7],
+          [3000, 100, 101, 99, 100, 7]
+        ]
+      },
+      "error": "not a replay file: invalid value: integer `-1`, expected u32"
+    },
+    {
+      "name": "a fractional current is refused",
+      "file": {
+        "version": 1,
+        "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
+        "timeframe": "1h",
+        "start": 1,
+        "current": 2.5,
+        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120}],
+        "candles": [
+          [1000, 100, 101, 99, 100, 7],
+          [2000, 100, 102, 98, 100, 7],
+          [3000, 100, 101, 99, 100, 7]
+        ]
+      },
+      "error": "not a replay file: invalid type: floating point `2.5`, expected u32"
+    },
+    {
+      "name": "a file with zero candles is refused",
+      "file": {
+        "version": 1,
+        "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
+        "timeframe": "1h",
+        "start": 0,
+        "current": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "commands": [],
+        "candles": []
+      },
+      "error": "start 0 and current 0 must satisfy start <= current < 0 candles"
     }
   ]
 }

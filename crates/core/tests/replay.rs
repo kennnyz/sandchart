@@ -118,7 +118,11 @@ fn files_match_the_fixture() {
         let got = ReplayFile::from_json(&bytes);
         match (&c.expect, &c.error) {
             (Some(want), None) => assert_sim(&got.unwrap().1, want, &c.name),
-            (None, Some(msg)) => assert_eq!(got.unwrap_err(), *msg, "{}", c.name),
+            // serde adds where in the text it failed; the fixture holds the message before it.
+            (None, Some(msg)) => {
+                let err = got.unwrap_err();
+                assert!(err.starts_with(msg.as_str()), "{}: {err}", c.name);
+            }
             _ => panic!("{}: needs exactly one of expect and error", c.name),
         }
     }
