@@ -759,6 +759,7 @@ test("a_locked_drawing_does_not_move", async ({ page }) => {
   await page.keyboard.press("Escape");
 
   // Selected, it shows a lock by its handle; a drag says "Locked" for a moment and moves nothing.
+  await page.mouse.click(cx - 100, y);
   await expect.poll(async () => (await debug(page)).lockGlyphs).toBe(1);
   await drag(page, [cx - 100, y], [cx - 60, y + 80]);
   expect((await debug(page)).lockedHint).toBe(true);
