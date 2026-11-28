@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Drawing, DrawingBody, DrawingInput, InstrumentId, PositionBody, PositionOutcome, TimeframeCode } from "../backend/types";
-import type { DrawingCommand, StyleAction, StyleEdit, TextEdit, TextResult } from "../chart/drawings/layer";
+import type { DrawingCommand, MenuAction, MenuEdit, StyleAction, StyleEdit, TextEdit, TextResult } from "../chart/drawings/layer";
 import type { ToolId } from "../chart/drawings/registry";
 import type { DrawingChange } from "../chart/drawings/state";
 import { DrawingController, type DrawingSurface, type MagnetPref } from "./drawings";
@@ -33,6 +33,9 @@ function fakeSurface() {
   const styles: StyleAction[] = [];
   const hidden: boolean[] = [];
   const storedCopies: [Drawing, Drawing][] = [];
+  const menus: MenuAction[] = [];
+  let showHidden = 0;
+  let menu: ((e: MenuEdit | null) => void) | null = null;
   let style: ((e: StyleEdit | null) => void) | null = null;
   let commit: ((c: DrawingChange) => void) | null = null;
   let tool: ((k: ToolId | null) => void) | null = null;
@@ -60,6 +63,12 @@ function fakeSurface() {
     setDrawingsHidden: (on) => hidden.push(on),
     drawingStored: (sent, saved) => storedCopies.push([sent, saved]),
     onDrawingStyle: (cb) => (style = cb),
+    drawingMenu: (a) => menus.push(a),
+    showHiddenDrawings: () => {
+      showHidden++;
+      return true;
+    },
+    onDrawingMenu: (cb) => (menu = cb),
   };
   return {
     surface,
@@ -72,6 +81,9 @@ function fakeSurface() {
     styles,
     hidden,
     storedCopies,
+    menus,
+    showHiddenCalls: () => showHidden,
+    openMenu: (e: MenuEdit | null) => menu!(e),
     openStyle: (e: StyleEdit | null) => style!(e),
     commit: (c: DrawingChange) => commit!(c),
     openText: (e: TextEdit | null) => text!(e),
@@ -357,6 +369,41 @@ describe("DrawingController", () => {
     expect(s.styles).toEqual([{ patch: { locked: true } }, { delete: true }, null]);
     s.openStyle(null);
     expect(c.styleEdit).toBeNull();
+  });
+
+  it("mirrors the context menu and passes its items to the chart", () => {
+    const s = fakeSurface();
+    const c = new DrawingController(fakeBackend([]).backend, () => {});
+    c.attach(s.surface);
+    const edit = { ids: ["a", "b"], locked: false, single: false, x: 5, y: 6 };
+    s.openMenu(edit);
+    expect(c.menu).toEqual(edit);
+    c.menuAction("lock");
+    c.menuAction(null);
+    expect(s.menus).toEqual(["lock", null]);
+    s.openMenu(null);
+    expect(c.menu).toBeNull();
+  });
+
+  it("counts the drawings hidden one by one, and shows them with hide all turned off", async () => {
+    const b = fakeBackend([]);
+    const s = fakeSurface();
+    const c = new DrawingController(b.backend, () => {});
+    c.attach(s.surface);
+    void c.open(BTC);
+    await flush();
+    b.loads[0]!.resolve([{ ...drawing("h"), hidden: true }, drawing("v")]);
+    await flush();
+    expect(c.hiddenCount).toBe(1);
+    const v = drawing("v");
+    s.commit({ before: v, after: { ...v, hidden: true } });
+    expect(c.hiddenCount).toBe(2);
+    s.commit({ before: { ...v, hidden: true }, after: null });
+    expect(c.hiddenCount).toBe(1);
+    c.toggleHidden();
+    c.showHidden();
+    expect(c.hidden).toBe(false);
+    expect(s.showHiddenCalls()).toBe(1);
   });
 
   it("hides all for the session, and picking a tool shows them again", () => {

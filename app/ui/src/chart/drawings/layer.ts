@@ -3,7 +3,7 @@ import { chartDebug } from "../debug";
 import type { ChartTheme } from "../theme";
 import type { Coords } from "./geometry";
 import { snapToBar } from "./magnet";
-import { toolById, toolFor, type Look, type Mover, type Point, type ToolDef, type ToolId } from "./registry";
+import { toolById, toolFor, type Box, type Look, type Mover, type Point, type ToolDef, type ToolId } from "./registry";
 import { paintRuler } from "./ruler";
 import { DEFAULT_STYLE, DrawingState, type DrawingChange, type DrawingPatch, type Owner, type Part } from "./state";
 
@@ -73,6 +73,20 @@ export interface StyleEdit {
 /** What the style popover does: changes the drawing (it stays open), deletes it, or closes (null). */
 export type StyleAction = { patch: DrawingPatch } | { delete: true } | null;
 
+/** The context menu of the selection is open: what it acts on, and where (CSS px of the price plot). */
+export interface MenuEdit {
+  ids: string[];
+  /** Every one of them is locked: the menu offers Unlock instead of Lock. */
+  locked: boolean;
+  /** Settings… needs exactly one drawing. */
+  single: boolean;
+  x: number;
+  y: number;
+}
+
+/** A context menu item, or close it (null). */
+export type MenuAction = "lock" | "unlock" | "hide" | "remove" | "settings" | null;
+
 /** What the layer needs from the chart. */
 export interface LayerHost {
   /** Redraw both canvas layers. */
@@ -84,6 +98,8 @@ export interface LayerHost {
   text(edit: TextEdit | null): void;
   /** Open or refresh the style popover, or close it with null. */
   style(edit: StyleEdit | null): void;
+  /** Open the context menu of the selection, or close it with null. */
+  menu(edit: MenuEdit | null): void;
 }
 
 /** Draws a price tag on the axis of the given canvas: price in ticks, background colour. */
@@ -97,14 +113,24 @@ interface CacheEntry {
   live: boolean;
 }
 
-/** A press on a drawing: what is dragged, from where, and the body it would get. */
+/** A drawing being dragged: its body at the press, and the body it would get. */
+interface Dragged {
+  id: string;
+  body0: DrawingBody;
+  body: DrawingBody;
+}
+
+/**
+ * A press on a drawing: what is dragged and from where. A handle (`part` a number) reshapes
+ * the one drawing in `items`; the body moves every item (the unlocked part of the selection).
+ */
 interface Edit {
+  /** The drawing pressed. */
   id: string;
   part: Part;
   x0: number;
   y0: number;
-  body0: DrawingBody;
-  body: DrawingBody;
+  items: Dragged[];
   moved: boolean;
 }
 
@@ -131,8 +157,10 @@ export class DrawingLayer {
   private press: Point | null = null;
   /** Last pointer position added to a stroke. */
   private strokeAt: Point | null = null;
-  /** `invert`: ⌘ or Ctrl held, the magnet does the opposite for this move. */
-  private mouse: { x: number; y: number; shift: boolean; invert: boolean } | null = null;
+  /** `cmd`: ⌘ or Ctrl held, a placed or dragged point snaps strongly to the bar under it. */
+  private mouse: { x: number; y: number; shift: boolean; cmd: boolean } | null = null;
+  /** The ⌘-drag selection box: where it started and where the pointer is. */
+  private box: { x0: number; y0: number; x1: number; y1: number } | null = null;
   private magnet = false;
   /** The ruler on the overlay: `live` while its drag lasts, then shown until the next press or Esc. */
   private ruler: { a: Anchor; b: Anchor; live: boolean } | null = null;
@@ -143,6 +171,8 @@ export class DrawingLayer {
   private textEdit: { id: string; isNew: boolean } | null = null;
   /** The drawing whose style popover is open, and where it opened. */
   private styleEdit: { id: string; at: Point } | null = null;
+  /** The drawings the context menu acts on, and where it opened. */
+  private menuEdit: { ids: string[]; at: Point } | null = null;
   /** Hide all: nothing is painted or hit; the drawings themselves are unchanged. */
   private hiddenAll = false;
   /** In a replay, the open time of the last revealed bar: a drawing anchored only later is not shown. */
@@ -164,8 +194,10 @@ export class DrawingLayer {
     this.edit = null;
     this.press = null;
     this.ruler = null;
+    this.box = null;
     this.closeText();
     this.closeStyle();
+    this.closeMenu();
     this.state.reset(list);
     this.cache.clear();
     this.host.invalidate();
@@ -179,6 +211,7 @@ export class DrawingLayer {
     this.abort();
     this.finishText(null);
     this.closeStyle();
+    this.closeMenu();
     this.state.setTool(id);
     this.host.invalidateOverlay();
   }
@@ -237,6 +270,59 @@ export class DrawingLayer {
     return this.openText(hit.id) || this.openStyle(hit.id, { x, y });
   }
 
+  /**
+   * A right click on the price plot: on a drawing, opens the context menu of the selection
+   * (a drawing outside it is selected alone first); false when no drawing is there.
+   */
+  contextMenu(x: number, y: number): boolean {
+    const s = this.state;
+    if (s.tool || this.edit || this.box) return false;
+    const hit = this.hitAt(x, y);
+    this.finishText(null);
+    this.closeStyle();
+    if (!hit) {
+      this.closeMenu();
+      return false;
+    }
+    if (!s.isSelected(hit.id)) s.select(hit.id);
+    this.menuEdit = { ids: [...s.selection], at: { x, y } };
+    this.syncMenu();
+    this.host.invalidateOverlay();
+    return true;
+  }
+
+  /** Runs what the context menu asked for on the drawings it opened for, and closes it. */
+  menuAction(action: MenuAction): void {
+    const me = this.menuEdit;
+    if (!me) return;
+    this.closeMenu();
+    const s = this.state;
+    const ids = me.ids.filter((id) => s.byId(id));
+    if (!action || ids.length === 0) return;
+    if (action === "settings") {
+      if (ids.length === 1) {
+        s.select(ids[0]!);
+        if (!this.openText(ids[0]!)) this.openStyle(ids[0]!, me.at);
+      }
+      return;
+    }
+    if (action === "remove") {
+      s.setSelection(ids);
+      s.deleteSelected();
+    } else {
+      s.updateMany(ids, action === "hide" ? { hidden: true } : { locked: action === "lock" });
+    }
+    this.host.invalidate();
+  }
+
+  /** Shows every drawing hidden one by one again (one undo step); false when there was none. */
+  showHidden(): boolean {
+    if (this.hiddenAll) this.setHiddenAll(false);
+    const done = this.state.showHidden();
+    if (done) this.host.invalidate();
+    return done;
+  }
+
   /** Runs what the style popover asked for (see `StyleAction`). */
   styleAction(action: StyleAction): void {
     const se = this.styleEdit;
@@ -266,6 +352,7 @@ export class DrawingLayer {
       this.abort();
       this.finishText(null);
       this.closeStyle();
+      this.closeMenu();
       this.state.setTool(null);
       this.state.select(null);
       this.state.hover = null;
@@ -281,13 +368,14 @@ export class DrawingLayer {
   setCutoff(t: number | null): void {
     if (t === this.cutoff) return;
     this.cutoff = t;
-    const sel = this.state.selected;
-    const d = sel === null ? undefined : this.state.byId(sel);
-    if (d && t !== null && earliestTime(d.body) > t) {
+    const s = this.state;
+    const kept = t === null ? s.selection : s.selection.filter((id) => earliestTime(s.byId(id)!.body) <= t);
+    if (kept.length !== s.selection.length) {
       this.abort();
       this.closeText();
       this.closeStyle();
-      this.state.select(null);
+      this.closeMenu();
+      s.setSelection(kept);
     }
     this.host.invalidate();
   }
@@ -303,10 +391,12 @@ export class DrawingLayer {
       const ruler = this.ruler !== null || this.rulerArmed;
       this.ruler = null;
       this.rulerArmed = false;
+      const menu = this.menuEdit !== null;
       this.abort();
       this.closeText();
       this.closeStyle();
-      const any = this.state.cancel() || ruler;
+      this.closeMenu();
+      const any = this.state.cancel() || ruler || menu;
       this.host.invalidateOverlay();
       return any;
     }
@@ -320,7 +410,8 @@ export class DrawingLayer {
       return id !== null && !this.edit && (this.openText(id) || this.openStyle(id, null));
     }
     // Not in the middle of a drag, nor on hidden drawings: the history would change unseen.
-    if (this.edit || this.press || this.hiddenAll) return false;
+    if (this.edit || this.press || this.box || this.hiddenAll) return false;
+    this.closeMenu();
     const done = cmd === "undo" ? this.state.undo() : cmd === "redo" ? this.state.redo() : this.state.deleteSelected();
     if (done) this.host.invalidate();
     return done;
@@ -330,6 +421,8 @@ export class DrawingLayer {
   abort(): void {
     if (this.edit?.moved) this.host.invalidate();
     this.edit = null;
+    if (this.box) this.host.invalidateOverlay();
+    this.box = null;
     if (this.press && this.placingStroke()) this.state.points = [];
     this.press = null;
     this.strokeAt = null;
@@ -348,18 +441,19 @@ export class DrawingLayer {
       const m = HANDLE_RADIUS + HIT_TOLERANCE;
       this.span = [c.addBars(c.t(-m), -1), c.addBars(c.t(c.plotW + m), 1)];
       if (this.cache.size > this.state.drawings.length + 32) this.pruneCache();
-      const dragged = this.edit?.moved ? this.edit.id : null;
+      const dragged = this.edit?.moved ? this.edit.items : NONE;
+      const isDragged = (id: string) => dragged.some((i) => i.id === id);
       begin(ctx, c, dpr);
       for (const d of this.state.drawings) {
         const tool = this.visibleTool(d);
-        if (!tool || d.id === dragged) continue;
+        if (!tool || isDragged(d.id)) continue;
         paintOne(ctx, tool, this.geom(tool, d), d.style, dpr, theme, false);
         painted++;
       }
       ctx.restore();
       for (const d of this.state.drawings) {
         const tool = this.visibleTool(d);
-        if (tool?.axisPrices && d.id !== dragged) for (const p of tool.axisPrices(d.body)) tag(p, color(theme, d.style));
+        if (tool?.axisPrices && !isDragged(d.id)) for (const p of tool.axisPrices(d.body)) tag(p, color(theme, d.style));
       }
     }
     const debug = chartDebug();
@@ -372,6 +466,8 @@ export class DrawingLayer {
     const debug = chartDebug();
     if (debug) {
       debug.selectedDrawing = this.state.selected;
+      debug.selectedDrawings = [...this.state.selection];
+      debug.selectionBox = this.box !== null;
       debug.hoveredDrawing = this.state.hover?.id ?? null;
       debug.ruler = null;
     }
@@ -381,7 +477,8 @@ export class DrawingLayer {
     const tags: [number, string][] = [];
     begin(ctx, c, dpr);
 
-    const hovered = s.hover && s.hover.id !== e?.id ? s.byId(s.hover.id) : undefined;
+    const dragging = (id: string) => e !== null && e.items.some((i) => i.id === id);
+    const hovered = s.hover && !dragging(s.hover.id) ? s.byId(s.hover.id) : undefined;
     const hoverTool = hovered && this.visibleTool(hovered);
     if (hovered && hoverTool) paintOne(ctx, hoverTool, this.geom(hoverTool, hovered), hovered.style, dpr, theme, true);
 
@@ -390,25 +487,26 @@ export class DrawingLayer {
     const draftTool = draft && toolFor(draft.body.kind);
     if (draft && draftTool) paintOne(ctx, draftTool, draftTool.layout(draft.body, c), draft.style, dpr, theme, false);
 
-    if (e) {
-      const d = s.byId(e.id);
-      const tool = d && toolFor(e.body.kind);
-      if (d && tool) {
-        const g = tool.layout(e.body, c);
-        paintOne(ctx, tool, g, d.style, dpr, theme, false);
-        paintHandles(ctx, tool.handles(g), color(theme, d.style), theme);
-        for (const p of tool.axisPrices?.(e.body) ?? []) tags.push([p, color(theme, d.style)]);
-      }
+    for (const item of e?.items ?? NONE) {
+      const d = s.byId(item.id);
+      const tool = d && toolFor(item.body.kind);
+      if (!d || !tool) continue;
+      const g = tool.layout(item.body, c);
+      paintOne(ctx, tool, g, d.style, dpr, theme, false);
+      paintHandles(ctx, [...tool.handles(g), ...(tool.markers?.(g) ?? NONE)], color(theme, d.style), theme);
+      for (const p of tool.axisPrices?.(item.body) ?? []) tags.push([p, color(theme, d.style)]);
     }
     if (debug) debug.selectedHandles = [];
-    for (const id of new Set([s.selected, hovered?.id])) {
-      const d = id && id !== e?.id ? s.byId(id) : undefined;
+    for (const id of new Set([...s.selection, hovered?.id])) {
+      const d = id && !dragging(id) ? s.byId(id) : undefined;
       const tool = d && this.visibleTool(d);
       if (!d || !tool) continue;
       const handles = this.handles(tool, d);
-      paintHandles(ctx, handles, color(theme, d.style), theme);
-      if (debug && id === s.selected) debug.selectedHandles = handles;
+      const markers = s.isSelected(d.id) && tool.markers ? tool.markers(this.geom(tool, d)) : NONE;
+      paintHandles(ctx, [...handles, ...markers], color(theme, d.style), theme);
+      if (debug && id === s.selected) debug.selectedHandles = [...handles, ...markers];
     }
+    if (this.box) paintBox(ctx, boxOf(this.box), theme);
 
     // The shape being placed: the points so far and the mouse as the next one. A stroke
     // shows only once it is pressed, and without a handle on every point.
@@ -416,7 +514,7 @@ export class DrawingLayer {
     const stroke = placing?.placement.stroke === true;
     if (placing && this.mouse && !this.ruler?.live && (!stroke || s.points.length > 0)) {
       const m = this.mouse;
-      const next = stroke ? this.rawAnchor(m.x, m.y) : this.anchorAt(m.x, m.y, m.invert);
+      const next = stroke ? this.rawAnchor(m.x, m.y) : this.anchorAt(m.x, m.y, m.cmd);
       const points = s.placingPoints(next, m.shift && !stroke);
       const body = placing.create(points, c);
       paintOne(ctx, placing, placing.layout(body, c), DEFAULT_STYLE, dpr, theme, false);
@@ -439,17 +537,20 @@ export class DrawingLayer {
   // ---- Pointer input (CSS px inside the price plot) ----
 
   /**
-   * A press; true when the layer takes it (the chart does not pan then). `invert` is ⌘ or
-   * Ctrl: the magnet does the opposite while it is held.
+   * A press; true when the layer takes it (the chart does not pan then). `cmd` is ⌘ or
+   * Ctrl: with a tool or on a handle the point snaps strongly to the bar under it; on a
+   * drawing's body it adds the drawing to the selection or takes it out; on empty space a
+   * drag draws a selection box.
    */
-  pointerDown(x: number, y: number, shift: boolean, invert = false): boolean {
+  pointerDown(x: number, y: number, shift: boolean, cmd = false): boolean {
     const c = this.coords;
     if (!c || c.count === 0) return false;
-    this.mouse = { x, y, shift, invert };
+    this.mouse = { x, y, shift, cmd };
     const s = this.state;
     // A press on the chart while a text editor is open closes it without saving.
     this.finishText(null);
     this.closeStyle();
+    this.closeMenu();
     // Any press puts a shown ruler away.
     if (this.ruler) {
       this.ruler = null;
@@ -458,7 +559,7 @@ export class DrawingLayer {
     // The ruler: armed with Alt+R whatever the tool, or Shift+drag on empty space without one.
     if (this.rulerArmed || (shift && !s.tool && !this.hitAt(x, y))) {
       this.rulerArmed = false;
-      const a = this.anchorAt(x, y, invert);
+      const a = this.anchorAt(x, y, cmd);
       this.ruler = { a, b: a, live: true };
       this.host.invalidateOverlay();
       return true;
@@ -469,7 +570,7 @@ export class DrawingLayer {
         s.points = [];
         s.stroke(this.rawAnchor(x, y));
         this.strokeAt = { x, y };
-      } else if (s.place(this.anchorAt(x, y, invert), shift, c)) {
+      } else if (s.place(this.anchorAt(x, y, cmd), shift, c)) {
         if (s.draft) {
           this.press = null;
           this.openText(s.draft.id);
@@ -482,27 +583,49 @@ export class DrawingLayer {
     }
     const hit = this.hitAt(x, y);
     if (!hit) {
-      if (s.selected !== null) {
+      if (cmd) {
+        this.box = { x0: x, y0: y, x1: x, y1: y };
+        return true;
+      }
+      if (s.selection.length > 0) {
         s.select(null);
         this.host.invalidateOverlay();
       }
       return false;
     }
     const d = s.byId(hit.id)!;
-    s.select(d.id);
-    // A locked drawing is selected but stays where it is.
-    this.edit = d.locked ? null : { id: d.id, part: hit.part, x0: x, y0: y, body0: d.body, body: d.body, moved: false };
+    const tool = toolFor(d.body.kind)!;
+    // The grip moves the whole drawing, as its body does.
+    const part: Part = hit.part === tool.grip ? "body" : hit.part;
+    const reshape = part !== "body" && s.isSelected(d.id);
+    if (cmd && !reshape) {
+      s.toggle(d.id);
+      this.host.invalidateOverlay();
+      return true;
+    }
+    if (!s.isSelected(d.id)) s.select(d.id);
+    // A body press drags every unlocked selected drawing; a locked one stays where it is.
+    const items = (part === "body" ? s.selectedDrawings() : [d])
+      .filter((o) => !o.locked)
+      .map((o) => ({ id: o.id, body0: o.body, body: o.body }));
+    this.edit = { id: d.id, part, x0: x, y0: y, items, moved: false };
     this.host.invalidateOverlay();
     return true;
   }
 
   /** The pointer moved over the price plot, pressed or not. */
-  pointerMove(x: number, y: number, shift: boolean, invert = false): void {
-    this.mouse = { x, y, shift, invert };
+  pointerMove(x: number, y: number, shift: boolean, cmd = false): void {
+    this.mouse = { x, y, shift, cmd };
     const c = this.coords;
     const r = this.ruler;
     if (r?.live) {
-      r.b = this.anchorAt(x, y, invert);
+      r.b = this.anchorAt(x, y, cmd);
+      this.host.invalidateOverlay();
+      return;
+    }
+    if (this.box) {
+      this.box.x1 = x;
+      this.box.y1 = y;
       this.host.invalidateOverlay();
       return;
     }
@@ -521,14 +644,19 @@ export class DrawingLayer {
       if (!e.moved) {
         if (Math.hypot(x - e.x0, y - e.y0) < DRAG_THRESHOLD) return;
         e.moved = true;
-        // The base is drawn once without it; from now on it moves on the overlay only.
+        // Only locked drawings were pressed: a drag, but nothing moves.
+        if (e.items.length === 0) return;
+        // The base is drawn once without them; from now on they move on the overlay only.
         this.host.invalidate();
       }
-      const tool = toolFor(e.body0.kind)!;
-      e.body =
-        e.part === "body"
-          ? tool.moveBy(e.body0, mover(c, x - e.x0, y - e.y0))
-          : tool.moveHandle(e.body0, e.part, this.anchorAt(x, y, invert), shift);
+      const m = mover(c, x - e.x0, y - e.y0);
+      for (const item of e.items) {
+        const tool = toolFor(item.body0.kind)!;
+        item.body =
+          e.part === "body"
+            ? tool.moveBy(item.body0, m)
+            : tool.moveHandle(item.body0, e.part, this.anchorAt(x, y, cmd), shift);
+      }
       this.host.invalidateOverlay();
       return;
     }
@@ -544,13 +672,26 @@ export class DrawingLayer {
     }
   }
 
-  pointerUp(x: number, y: number, shift: boolean, invert = false): void {
+  pointerUp(x: number, y: number, shift: boolean, cmd = false): void {
     const r = this.ruler;
     if (r?.live) {
-      r.b = this.anchorAt(x, y, invert);
+      r.b = this.anchorAt(x, y, cmd);
       r.live = false;
       // A Shift+click without a drag measures nothing.
       if (r.a.t === r.b.t && r.a.p === r.b.p) this.ruler = null;
+      this.host.invalidateOverlay();
+      return;
+    }
+    const box = this.box;
+    if (box) {
+      this.box = null;
+      box.x1 = x;
+      box.y1 = y;
+      // A ⌘-click on empty space without a drag selects nothing more.
+      if (Math.hypot(x - box.x0, y - box.y0) >= DRAG_THRESHOLD) {
+        const s = this.state;
+        s.setSelection([...s.selection, ...this.inBox(boxOf(box))]);
+      }
       this.host.invalidateOverlay();
       return;
     }
@@ -566,8 +707,15 @@ export class DrawingLayer {
     this.edit = null;
     if (e) {
       if (e.moved) {
-        this.state.edit(e.id, e.body);
-        this.host.invalidate();
+        // The base was drawn without the dragged ones: draw it again, moved or not.
+        if (e.items.length > 0) {
+          this.state.editMany(new Map(e.items.map((i) => [i.id, i.body])));
+          this.host.invalidate();
+        }
+      } else if (!cmd && this.state.selection.length > 1) {
+        // A click without a drag on one of several selected selects only it.
+        this.state.select(e.id);
+        this.host.invalidateOverlay();
       }
       return;
     }
@@ -575,7 +723,7 @@ export class DrawingLayer {
     this.press = null;
     const c = this.coords;
     if (p && c && this.state.points.length > 0 && Math.hypot(x - p.x, y - p.y) >= DRAG_THRESHOLD) {
-      if (this.state.place(this.anchorAt(x, y, invert), shift, c)) this.host.invalidate();
+      if (this.state.place(this.anchorAt(x, y, cmd), shift, c)) this.host.invalidate();
     }
   }
 
@@ -590,20 +738,35 @@ export class DrawingLayer {
   /** The cursor the layer wants, or null for the chart's own. */
   cursor(): string | null {
     const e = this.edit;
-    if (e) return e.part === "body" ? "move" : "grabbing";
-    if (this.state.tool || this.rulerArmed || this.ruler?.live) return "crosshair";
+    if (e && e.items.length > 0) return e.part === "body" ? "move" : "grabbing";
+    if (this.state.tool || this.rulerArmed || this.ruler?.live || this.box) return "crosshair";
     const h = this.state.hover;
     if (!h) return null;
-    if (this.state.byId(h.id)?.locked) return "pointer";
-    return h.part === "body" ? "move" : "grab";
+    const d = this.state.byId(h.id);
+    if (d?.locked) return "pointer";
+    return h.part === "body" || h.part === (d && toolFor(d.body.kind)?.grip) ? "move" : "grab";
   }
 
   // ---- Internals ----
 
-  /** The point under (x, y), on a bar price when the magnet is on (`invert` flips it). */
-  private anchorAt(x: number, y: number, invert: boolean): Anchor {
+  /**
+   * The point under (x, y): with `cmd` (⌘ held) on the nearest price of the bar under it
+   * (`snapToBar`, strong); with the magnet on, on a bar price close to it; else as it is.
+   */
+  private anchorAt(x: number, y: number, cmd: boolean): Anchor {
     const c = this.coords!;
-    return (this.magnet !== invert && snapToBar(c, x, y)) || this.rawAnchor(x, y);
+    const snapped = cmd ? snapToBar(c, x, y, true) : this.magnet ? snapToBar(c, x, y) : null;
+    return snapped ?? this.rawAnchor(x, y);
+  }
+
+  /** Ids of the shown drawings that touch `box`. */
+  private inBox(box: Box): string[] {
+    const ids: string[] = [];
+    for (const d of this.state.drawings) {
+      const tool = this.visibleTool(d);
+      if (tool && tool.touches(this.geom(tool, d), box)) ids.push(d.id);
+    }
+    return ids;
   }
 
   private rawAnchor(x: number, y: number): Anchor {
@@ -669,9 +832,33 @@ export class DrawingLayer {
     this.host.style(null);
   }
 
+  /** Tells the host where the context menu is and what it offers. */
+  private syncMenu(): void {
+    const me = this.menuEdit;
+    if (!me) return;
+    const list = me.ids.map((id) => this.state.byId(id)).filter((d) => d !== undefined);
+    if (list.length === 0) {
+      this.closeMenu();
+      return;
+    }
+    this.host.menu({
+      ids: list.map((d) => d.id),
+      locked: list.every((d) => d.locked),
+      single: list.length === 1,
+      x: me.at.x,
+      y: me.at.y,
+    });
+  }
+
+  private closeMenu(): void {
+    if (!this.menuEdit) return;
+    this.menuEdit = null;
+    this.host.menu(null);
+  }
+
   /** The tool of a drawing that is shown and inside the visible times. */
   private visibleTool(d: Drawing): ToolDef | undefined {
-    if (this.hiddenAll) return undefined;
+    if (this.hiddenAll || d.hidden) return undefined;
     if (this.cutoff !== null && earliestTime(d.body) > this.cutoff) return undefined;
     const tool = toolFor(d.body.kind);
     if (!tool) return undefined;
@@ -713,22 +900,23 @@ export class DrawingLayer {
   }
 
   /**
-   * Top-most hit: handles of every visible drawing first (the selected one before others),
+   * Top-most hit: handles of every visible drawing first (the selected ones before others),
    * then bodies. Runs on every pointer move, so it allocates nothing but the result.
    */
   private hitAt(x: number, y: number): { id: string; part: Part } | null {
     const c = this.coords;
     if (!c || c.count === 0) return null;
     const list = this.state.drawings;
-    const sel = this.state.selected;
-    const selected = sel === null ? undefined : this.state.byId(sel);
-    if (selected) {
-      const i = this.handleAt(selected, x, y);
-      if (i >= 0) return { id: selected.id, part: i };
+    const s = this.state;
+    for (let k = list.length - 1; k >= 0; k--) {
+      const d = list[k]!;
+      if (!s.isSelected(d.id)) continue;
+      const i = this.handleAt(d, x, y);
+      if (i >= 0) return { id: d.id, part: i };
     }
     for (let k = list.length - 1; k >= 0; k--) {
       const d = list[k]!;
-      if (d === selected) continue;
+      if (s.isSelected(d.id)) continue;
       const i = this.handleAt(d, x, y);
       if (i >= 0) return { id: d.id, part: i };
     }
@@ -750,6 +938,26 @@ export class DrawingLayer {
     }
     return -1;
   }
+}
+
+const NONE: never[] = [];
+
+/** The box between two corners, in either order. */
+function boxOf(b: { x0: number; y0: number; x1: number; y1: number }): Box {
+  return { left: Math.min(b.x0, b.x1), top: Math.min(b.y0, b.y1), right: Math.max(b.x0, b.x1), bottom: Math.max(b.y0, b.y1) };
+}
+
+/** The ⌘-drag selection box: a faint fill and a thin outline. */
+function paintBox(ctx: CanvasRenderingContext2D, b: Box, theme: ChartTheme): void {
+  ctx.setLineDash(NO_DASH);
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = theme.muted;
+  ctx.fillStyle = theme.muted;
+  ctx.globalAlpha = 0.12;
+  ctx.fillRect(b.left, b.top, b.right - b.left, b.bottom - b.top);
+  ctx.globalAlpha = 0.9;
+  ctx.strokeRect(b.left + 0.5, b.top + 0.5, b.right - b.left, b.bottom - b.top);
+  ctx.globalAlpha = 1;
 }
 
 /** Moves anchors by (dx, dy) px from where they are drawn; an axis that did not move stays exact. */

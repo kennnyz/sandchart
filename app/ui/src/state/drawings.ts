@@ -9,7 +9,7 @@ import type {
   TimeframeCode,
 } from "../backend/types";
 import { toProblem } from "../backend/types";
-import type { DrawingCommand, StyleAction, StyleEdit, TextEdit, TextResult } from "../chart/drawings/layer";
+import type { DrawingCommand, MenuAction, MenuEdit, StyleAction, StyleEdit, TextEdit, TextResult } from "../chart/drawings/layer";
 import type { ToolId } from "../chart/drawings/registry";
 import type { DrawingChange, DrawingPatch } from "../chart/drawings/state";
 
@@ -25,10 +25,13 @@ export interface DrawingSurface {
   finishDrawingText(result: TextResult): void;
   drawingStyle(action: StyleAction): void;
   setDrawingsHidden(on: boolean): void;
+  drawingMenu(action: MenuAction): void;
+  showHiddenDrawings(): boolean;
   onDrawingCommit(cb: ((c: DrawingChange) => void) | null): void;
   onDrawingTool(cb: ((id: ToolId | null) => void) | null): void;
   onDrawingText(cb: ((edit: TextEdit | null) => void) | null): void;
   onDrawingStyle(cb: ((edit: StyleEdit | null) => void) | null): void;
+  onDrawingMenu(cb: ((edit: MenuEdit | null) => void) | null): void;
 }
 
 /** A failed store, or a failed load (the chart then shows no drawings). */
@@ -100,12 +103,16 @@ export class DrawingController {
   textEdit: TextEdit | null = null;
   /** The style popover the chart has open; null when closed. */
   styleEdit: StyleEdit | null = null;
+  /** The context menu the chart has open; null when closed. */
+  menu: MenuEdit | null = null;
   /** Points snap to bar prices; kept across sessions. */
   magnet: boolean;
   /** Hide all: for this session only, the drawings are not changed. */
   hidden = false;
   /** Why the last store or load failed; null once a store succeeds or another instrument opens. */
   error: DrawingError | null = null;
+  /** Ids of the shown pair's drawings hidden one by one (stored `hidden`). */
+  private hiddenIds = new Set<string>();
   private surface: DrawingSurface | null = null;
   private id: InstrumentId | null = null;
   /** Token of the latest load. */
@@ -151,17 +158,23 @@ export class DrawingController {
       this.styleEdit = edit;
       this.onChange();
     });
+    surface.onDrawingMenu((edit) => {
+      this.menu = edit;
+      this.onChange();
+    });
     surface.setDrawingsHidden(this.hidden);
     return () => {
       surface.onDrawingCommit(null);
       surface.onDrawingTool(null);
       surface.onDrawingText(null);
       surface.onDrawingStyle(null);
+      surface.onDrawingMenu(null);
       if (this.surface !== surface) return;
       this.surface = null;
       this.tool = null;
       this.textEdit = null;
       this.styleEdit = null;
+      this.menu = null;
       this.onChange();
     };
   }
@@ -224,6 +237,22 @@ export class DrawingController {
     this.hidden = on;
     this.surface?.setDrawingsHidden(on);
     this.onChange();
+  }
+
+  /** How many drawings of the shown pair are hidden one by one. */
+  get hiddenCount(): number {
+    return this.hiddenIds.size;
+  }
+
+  /** Shows them all again (one undo step); hide all is turned off too. */
+  showHidden(): void {
+    this.setHidden(false);
+    this.surface?.showHiddenDrawings();
+  }
+
+  /** Runs an item of the open context menu, or closes it (null). */
+  menuAction(action: MenuAction): void {
+    this.surface?.drawingMenu(action);
   }
 
   /** Changes style, lock or options of the drawing in the style popover: one stored change. */
@@ -309,6 +338,8 @@ export class DrawingController {
   /** Puts `list` on the chart and tracks its positions; their outcomes start unknown. */
   private show(list: Drawing[]): void {
     this.surface?.setDrawings(list);
+    this.hiddenIds = new Set(list.filter((d) => d.hidden).map((d) => d.id));
+    this.onChange();
     this.positions = new Map();
     this.asked.clear();
     for (const d of list) {
@@ -383,9 +414,21 @@ export class DrawingController {
     this.onChange();
   }
 
+  /** Keeps the count of hidden drawings in step with a change. */
+  private trackHidden(c: DrawingChange): void {
+    const id = (c.after ?? c.before)!.id;
+    const was = this.hiddenIds.has(id);
+    const now = c.after?.hidden === true;
+    if (was === now) return;
+    if (now) this.hiddenIds.add(id);
+    else this.hiddenIds.delete(id);
+    this.onChange();
+  }
+
   private store(c: DrawingChange): void {
     this.commits++;
     this.trackPosition(c);
+    this.trackHidden(c);
     const id = this.id;
     const sent = c.after;
     const run = sent

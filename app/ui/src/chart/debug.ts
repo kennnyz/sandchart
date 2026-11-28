@@ -28,6 +28,10 @@ export interface ChartDebug {
   /** Selected and hovered drawing ids at the last overlay frame. */
   selectedDrawing: string | null;
   hoveredDrawing: string | null;
+  /** Every selected drawing id at the last overlay frame. */
+  selectedDrawings: string[];
+  /** A ⌘-drag selection box was shown at the last overlay frame. */
+  selectionBox: boolean;
   /** Handles of the selected drawing at the last overlay frame, in CSS px of the chart. */
   selectedHandles: { x: number; y: number }[];
   /** The ruler's numbers at the last overlay frame ("+1.00 (+0.50%)|12 bars, 12h"), null when it is not shown. */
@@ -65,6 +69,8 @@ export function enableChartDebug(): void {
     drawingsPainted: 0,
     selectedDrawing: null,
     hoveredDrawing: null,
+    selectedDrawings: [],
+    selectionBox: false,
     selectedHandles: [],
     ruler: null,
     outcomes: {},
