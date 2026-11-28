@@ -334,7 +334,8 @@ export class ReplayController {
       // Each step loads one more batch of newer candles at most; the cut stops moving at the end.
       for (;;) {
         const next = await this.backend.replayStep(JUMP_STEP);
-        const st = await this.backend.replayState(v.tf, NOTHING, NOTHING);
+        // Only the flags: at the base no bars are aggregated for them.
+        const st = await this.backend.replayState(v.base, NOTHING, NOTHING);
         if (st.atEnd || st.caughtUp || next === cut) break;
         cut = next;
       }

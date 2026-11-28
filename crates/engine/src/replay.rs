@@ -63,6 +63,15 @@ pub(crate) struct Session {
     /// Bumped by every change a re-base must not overwrite: a step, a command, newer
     /// candles, catching up. A re-base swaps its candles in only if it is unchanged.
     version: u64,
+    /// The revealed candles aggregated to one timeframe above the base, at `version`: a step
+    /// aggregates once for its state, the indicators and the position outcomes.
+    view: Option<View>,
+}
+
+struct View {
+    version: u64,
+    tf: Timeframe,
+    bars: Arc<Vec<Candle>>,
 }
 
 /// What the UI gets for one chart timeframe `tf` (the base or one that builds from it):
@@ -117,12 +126,18 @@ pub(crate) struct ReplayBars {
     candles: Arc<Vec<Candle>>,
     /// How many base candles are revealed.
     len: usize,
+    /// The session's aggregated bars of `tf`, when it had them at this cut.
+    view: Option<Arc<Vec<Candle>>>,
 }
 
 impl ReplayBars {
-    /// The revealed bars of the snapshot's timeframe; aggregation runs here, off the lock.
+    /// The revealed bars of the snapshot's timeframe; aggregation (when the session had
+    /// none ready) runs here, off the lock.
     pub fn revealed(&self) -> Result<Cow<'_, [Candle]>, EngineError> {
-        bars_of(&self.candles[..self.len], self.base, self.tf)
+        match &self.view {
+            Some(bars) => Ok(Cow::Borrowed(bars.as_slice())),
+            None => bars_of(&self.candles[..self.len], self.base, self.tf),
+        }
     }
 }
 
@@ -230,6 +245,29 @@ impl Session {
             && self.revealed_len() == self.candles.len()
     }
 
+    /// The revealed candles aggregated to `tf` (above the base), once per `version`.
+    fn aggregated(&mut self, tf: Timeframe) -> Result<Arc<Vec<Candle>>, EngineError> {
+        if let Some(v) = self.ready(tf) {
+            return Ok(v);
+        }
+        let shown = revealed(self.base, &self.candles, self.cut);
+        let bars = Arc::new(aggregate(shown, self.base, tf).map_err(EngineError::Replay)?);
+        self.view = Some(View {
+            version: self.version,
+            tf,
+            bars: Arc::clone(&bars),
+        });
+        Ok(bars)
+    }
+
+    /// The aggregated bars of `tf`, if they are ready for this `version`.
+    fn ready(&self, tf: Timeframe) -> Option<Arc<Vec<Candle>>> {
+        self.view
+            .as_ref()
+            .filter(|v| v.version == self.version && v.tf == tf)
+            .map(|v| Arc::clone(&v.bars))
+    }
+
     fn state(
         &mut self,
         tf: Timeframe,
@@ -237,12 +275,13 @@ impl Session {
         trades_from: u32,
     ) -> Result<ReplayState, EngineError> {
         check_view(self.base, tf)?;
+        let view = (tf != self.base).then(|| self.aggregated(tf)).transpose()?;
         let sim = match self.sim.take() {
             Some(sim) => sim,
             None => self.simulate(&self.commands)?,
         };
         let shown = revealed(self.base, &self.candles, self.cut);
-        let bars = bars_of(shown, self.base, tf)?;
+        let bars: &[Candle] = view.as_deref().map_or(shown, Vec::as_slice);
         // The base candle that closes at the start (the session simulated, so it exists).
         let first = revealed(self.base, &self.candles, self.start)
             .last()
@@ -347,6 +386,7 @@ impl Shared {
             tf,
             candles: Arc::clone(&s.candles),
             len: s.revealed_len(),
+            view: (tf != s.base).then(|| s.ready(tf)).flatten(),
         }))
     }
 
@@ -427,6 +467,7 @@ impl Engine {
             caught_up_at: None,
             newer_error: None,
             version: 0,
+            view: None,
         };
         *self.shared.session() = Some(session);
         self.load_newer().await;
@@ -623,6 +664,7 @@ impl Engine {
                     )
                 })?;
             s.id = next_session_id();
+            s.view = None;
             s.base = base;
             s.candles = Arc::new(candles);
             s.start = start;
@@ -838,6 +880,7 @@ impl Engine {
             caught_up_at: file.caught_up_at,
             newer_error: None,
             version: 0,
+            view: None,
         };
         // The whole state is built and checked before the open session is replaced, so a
         // file the UI could not show leaves the session as it was.
@@ -926,6 +969,62 @@ mod tests {
                 _ => panic!("{}: needs exactly one of expect and error", c.name),
             }
         }
+    }
+
+    #[test]
+    fn a_higher_view_is_aggregated_once_per_change_of_the_session() {
+        use std::sync::Arc;
+
+        use sandchart_core::{Instrument, InstrumentId};
+
+        use super::Session;
+        let h = 3_600_000;
+        let candles: Vec<Candle> = (0..12)
+            .map(|i| Candle {
+                open_time: i * h,
+                open: 10,
+                high: 11,
+                low: 9,
+                close: 10,
+                volume: 1,
+            })
+            .collect();
+        let mut s = Session {
+            id: 1,
+            instrument: Instrument {
+                id: InstrumentId {
+                    source: "binance".into(),
+                    symbol: "BTCUSDT".into(),
+                },
+                base: "BTC".into(),
+                quote: "USDT".into(),
+                price_scale: 2,
+                qty_scale: 5,
+            },
+            base: Timeframe::H1,
+            candles: Arc::new(candles),
+            start: h,
+            cut: 6 * h,
+            commands: Vec::new(),
+            sim: None,
+            live: false,
+            caught_up_at: None,
+            newer_error: None,
+            version: 0,
+            view: None,
+        };
+        let a = s.aggregated(Timeframe::H4).unwrap();
+        let b = s.state(Timeframe::H4, 0, 0).unwrap();
+        assert!(Arc::ptr_eq(&a, &s.ready(Timeframe::H4).unwrap()), "kept");
+        assert_eq!(b.bars, *a);
+        assert_eq!(a.len(), 2);
+        assert!(s.ready(Timeframe::H2).is_none(), "one timeframe at a time");
+        // A step changes the session: the bars are built again, with the new candle.
+        s.cut += h;
+        s.version += 1;
+        assert!(s.ready(Timeframe::H4).is_none());
+        let c = s.aggregated(Timeframe::H4).unwrap();
+        assert_eq!(c[1].volume, 3);
     }
 
     #[test]

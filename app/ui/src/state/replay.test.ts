@@ -663,6 +663,17 @@ describe("replay caught up", () => {
     expect(c.error).toBeNull();
   });
 
+  it("jumps reading only the flags, at the base, and the whole chart once at the end", async () => {
+    const { c, backend } = await started(2000, 40);
+    await c.setTimeframe("4h");
+    const asked = vi.spyOn(backend, "replayState");
+    await c.jumpToEnd();
+    const calls = asked.mock.calls;
+    expect(calls.at(-1)).toEqual(["4h", 0, 0]);
+    for (const [tf, cursor] of calls.slice(0, -1)) expect([tf, cursor]).toEqual(["1h", 0xffff_ffff]);
+    expect(c.view).toMatchObject({ tf: "4h", caughtUp: true });
+  });
+
   it("asks the live chart to follow when a step catches up", async () => {
     const { c, feed } = await started(2000, 2);
     expect(c.view!.caughtUp).toBe(false);
