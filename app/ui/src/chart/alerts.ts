@@ -52,23 +52,68 @@ export function levelAt(levels: readonly AlertLevel[], y: (p: number) => number,
 
 /**
  * Active price alerts of the chart's pair, painted on the base layer: a thin dashed line
- * in the muted colour with a bell tag at the price axis. Pointer moves only hit-test the
- * last painted frame, so they never redraw the base.
+ * in the alert colour with a bell tag at the price axis. Pointer moves only hit-test the
+ * last painted frame, so they never redraw the base. A level can be dragged to a new price.
  */
 export class AlertLevelLayer {
   private alerts: readonly Alert[] = [];
   private levels: AlertLevel[] = [];
   private coords: Coords | null = null;
   private bell: Path2D | null = null;
+  /** The level being dragged, at its price so far. */
+  private drag: { id: string; from: number; price: number } | null = null;
+  /**
+   * A level dropped at a new price, shown there until the alert comes back at that price;
+   * once its change `settled`, the next list wins either way (a refused move goes back).
+   */
+  private moved: { id: string; price: number; settled: boolean } | null = null;
 
   /** Every alert; only the active price alerts of the painted pair are drawn. */
   set(alerts: readonly Alert[]): void {
     this.alerts = alerts;
+    const m = this.moved;
+    if (m && (m.settled || !alerts.some((a) => a.id === m.id && a.active && a.kind.kind === "price"))) this.moved = null;
+  }
+
+  /** A press on the level of `id` (see `hit`). */
+  startDrag(id: string): void {
+    const l = this.levels.find((x) => x.id === id);
+    if (l) this.drag = { id, from: l.price, price: l.price };
+  }
+
+  /** The dragged level is at `price` ticks now. */
+  moveDrag(price: number): void {
+    if (this.drag) this.drag.price = price;
+  }
+
+  get dragging(): boolean {
+    return this.drag !== null;
+  }
+
+  /** Ends a drag: the alert and its new price, or null when it did not move. */
+  endDrag(): { id: string; price: number } | null {
+    const d = this.drag;
+    this.drag = null;
+    if (!d || d.price === d.from) return null;
+    this.moved = { id: d.id, price: d.price, settled: false };
+    return { id: d.id, price: d.price };
+  }
+
+  /** A drag was cancelled: the level stays where it was. */
+  cancelDrag(): void {
+    this.drag = null;
+  }
+
+  /** The change of the dropped level is done (stored or refused): the next list shows the truth. */
+  settled(): void {
+    if (this.moved) this.moved.settled = true;
   }
 
   paintBase(ctx: CanvasRenderingContext2D, c: Coords, dpr: number, th: ChartTheme, inst: Instrument | null): void {
     this.coords = c;
-    this.levels = c.count > 0 && c.plotW > 0 && c.priceH > 0 ? alertLevels(this.alerts, inst) : [];
+    const over = this.drag ?? this.moved;
+    const levels = c.count > 0 && c.plotW > 0 && c.priceH > 0 ? alertLevels(this.alerts, inst) : [];
+    this.levels = over ? levels.map((l) => (l.id === over.id ? { id: l.id, price: over.price } : l)) : levels;
     const debug = chartDebug();
     if (debug) debug.alertLevels = [];
     if (this.levels.length === 0) return;
@@ -78,8 +123,8 @@ export class AlertLevelLayer {
     ctx.beginPath();
     ctx.rect(0, 0, c.plotW, c.priceH);
     ctx.clip();
-    ctx.strokeStyle = th.muted;
-    ctx.lineWidth = 1 / dpr;
+    ctx.strokeStyle = th.alert;
+    ctx.lineWidth = 1;
     ctx.setLineDash(DASH);
     for (const l of this.levels) {
       const y = c.y(l.price);
@@ -98,7 +143,7 @@ export class AlertLevelLayer {
       const y = c.y(l.price);
       if (!(y >= 0 && y <= c.priceH)) continue;
       const left = c.plotW - TAG;
-      ctx.fillStyle = th.muted;
+      ctx.fillStyle = th.alert;
       ctx.fillRect(left, Math.round(y - TAG / 2), TAG, TAG);
       ctx.save();
       ctx.translate(left + (TAG - GLYPH) / 2, Math.round(y - TAG / 2) + (TAG - GLYPH) / 2);

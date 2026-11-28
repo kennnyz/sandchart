@@ -106,7 +106,7 @@ export interface AlertMenuAt {
  * picks the bar on release unless the pointer moved `PICK_SLOP` px or more (a pan).
  */
 type Drag = {
-  kind: "pan" | "price" | "drawing" | "replay";
+  kind: "pan" | "price" | "drawing" | "replay" | "alert";
   pointerId: number;
   lastX: number;
   lastY: number;
@@ -182,6 +182,7 @@ export class Chart {
   private readonly alertLevels = new AlertLevelLayer();
   private alertClickCb: ((id: string) => void) | null = null;
   private alertMenuCb: ((at: AlertMenuAt) => void) | null = null;
+  private alertMoveCb: ((id: string, price: number) => Promise<void>) | null = null;
   /** While set, a round "+" at the left edge of the crosshair price label opens a menu at that price. */
   private priceMenuCb: ((at: PriceMenuAt) => void) | null = null;
   /** Drawings: painted on both layers, and first in line for pointer input on the price plot. */
@@ -515,6 +516,14 @@ export class Chart {
     this.alertClickCb = cb;
   }
 
+  /**
+   * An alert level was dragged to `price` ticks (at the chart instrument's scale); the level stays
+   * there until the returned promise settles and the alerts come back. Without it levels do not drag.
+   */
+  onAlertMove(cb: ((id: string, price: number) => Promise<void>) | null): void {
+    this.alertMoveCb = cb;
+  }
+
   /** A right click on an alert level (and on no drawing): called with the alert and where. */
   onAlertMenu(cb: ((at: AlertMenuAt) => void) | null): void {
     this.alertMenuCb = cb;
@@ -626,6 +635,7 @@ export class Chart {
     this.pickCb = null;
     this.alertClickCb = null;
     this.alertMenuCb = null;
+    this.alertMoveCb = null;
     this.priceMenuCb = null;
   }
 
@@ -850,7 +860,7 @@ export class Chart {
     const coords = new Coords(s.time, s.count, this.view, scale, plotW, priceH, step, decimals, s);
     // Under the drawings: a line the user drew at the same price stays on top.
     this.alertLevels.paintBase(this.ctx, coords, this.dpr, this.theme, this.instrument);
-    for (const p of this.alertLevels.axisPrices()) drawingTag(this.ctx, f, this.buffers, p, this.theme.muted);
+    for (const p of this.alertLevels.axisPrices()) drawingTag(this.ctx, f, this.buffers, p, this.theme.alert);
     this.drawings.paintBase(this.ctx, coords, this.dpr, this.theme, (p, color) =>
       drawingTag(this.ctx, f, this.buffers, p, color),
     );
@@ -950,10 +960,13 @@ export class Chart {
     if (level) this.replay.startDrag(level);
     const onDrawing =
       !level && this.inPricePlot(p) && this.drawings.pointerDown(p.x, p.y, e.shiftKey, cmdHeld(e));
-    // An alert level selects its alert; the press still pans, as on an empty plot.
+    // An alert level selects its alert, and a drag moves it to another price.
     const alert = !level && !onDrawing ? this.alertLevels.hit(p.x, p.y) : null;
-    if (alert) this.alertClickCb?.(alert);
-    const kind = level ? "replay" : onDrawing ? "drawing" : onPriceAxis ? "price" : "pan";
+    if (alert) {
+      this.alertClickCb?.(alert);
+      if (this.alertMoveCb) this.alertLevels.startDrag(alert);
+    }
+    const kind = level ? "replay" : onDrawing ? "drawing" : alert && this.alertMoveCb ? "alert" : onPriceAxis ? "price" : "pan";
     this.drag = { kind, pointerId: e.pointerId, lastX: e.clientX, lastY: e.clientY };
     this.canvas.setPointerCapture(e.pointerId);
     if (kind === "pan") this.canvas.style.cursor = "grabbing";
@@ -975,9 +988,10 @@ export class Chart {
     }
     const onPriceAxis = p.x >= this.plot().plotW && p.y < this.priceH();
     const onLevel = this.replay.dragging || (this.inPricePlot(p) && this.replay.handleAt(p.x, p.y) !== null);
-    const onAlert = !this.drag && this.alertLevels.hit(p.x, p.y) !== null;
+    const onAlert = this.alertLevels.dragging || (!this.drag && this.alertLevels.hit(p.x, p.y) !== null);
+    const alertCursor = this.alertMoveCb ? "ns-resize" : "pointer";
     this.canvas.style.cursor =
-      onPriceAxis || onLevel ? "ns-resize" : (this.drawings.cursor() ?? (onAlert ? "pointer" : "crosshair"));
+      onPriceAxis || onLevel ? "ns-resize" : (this.drawings.cursor() ?? (onAlert ? alertCursor : "crosshair"));
   }
 
   private readonly onPointerMove = (e: PointerEvent): void => {
@@ -987,6 +1001,13 @@ export class Chart {
     const d = this.drag;
     if (d?.kind === "replay" && d.pointerId === e.pointerId) {
       this.replay.moveDrag(p.y);
+      this.updateCrosshair();
+      this.invalidate();
+      return;
+    }
+    if (d?.kind === "alert" && d.pointerId === e.pointerId) {
+      const price = this.priceAt(p.y);
+      if (price !== null) this.alertLevels.moveDrag(price);
       this.updateCrosshair();
       this.invalidate();
       return;
@@ -1056,6 +1077,19 @@ export class Chart {
       // A cancelled pointer leaves the levels as they were.
       const levels = e.type === "pointercancel" ? (this.replay.endDrag(), null) : this.replay.endDrag();
       if (levels) this.replayEditCb?.(levels.stop, levels.take);
+      this.invalidate();
+    }
+    if (kind === "alert") {
+      if (e.type === "pointercancel") this.alertLevels.cancelDrag();
+      else {
+        const moved = this.alertLevels.endDrag();
+        const cb = this.alertMoveCb;
+        if (moved && cb) {
+          void cb(moved.id, moved.price)
+            .catch(() => undefined)
+            .then(() => this.alertLevels.settled());
+        }
+      }
       this.invalidate();
     }
     if (kind === "drawing") {

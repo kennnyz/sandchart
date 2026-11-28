@@ -341,7 +341,7 @@ test("an_active_price_alert_is_a_level_on_the_chart_that_picks_it_in_the_panel",
   }
   const after = await debug(page);
   expect(after.baseDraws).toBe(before.baseDraws);
-  await expect(page.getByTestId("chart").locator("canvas").first()).toHaveCSS("cursor", "pointer");
+  await expect(page.getByTestId("chart").locator("canvas").first()).toHaveCSS("cursor", "ns-resize");
 
   // A press on it picks the alert in the panel.
   const row = page.getByTestId("alert-row");
@@ -349,8 +349,20 @@ test("an_active_price_alert_is_a_level_on_the_chart_that_picks_it_in_the_panel",
   await page.mouse.click(cx - 150, plot.top + level!.y);
   await expect(row).toHaveAttribute("data-selected", "true");
 
+  // A drag moves it: the same alert, armed at the new price, and the level stays where it was dropped.
+  await page.mouse.move(cx - 150, plot.top + level!.y);
+  await page.mouse.down();
+  await page.mouse.move(cx - 150, plot.top + level!.y + 30, { steps: 5 });
+  await page.mouse.move(cx - 150, plot.top + level!.y + 60, { steps: 5 });
+  await page.mouse.up();
+  await expect.poll(async () => ((await alerts(page))[0]!.kind as { price: number }).price).toBeLessThan((set!.kind as { price: number }).price);
+  const [moved] = await alerts(page);
+  expect(moved).toMatchObject({ id: set!.id, active: true, direction: "cross" });
+  await expect.poll(async () => Math.round((await debug(page)).alertLevels[0]!.y - level!.y)).toBe(60);
+  expect(await alerts(page)).toHaveLength(1);
+
   // Fired: nothing left to watch, so no level.
-  const price = (set!.kind as { price: number }).price;
+  const price = (moved!.kind as { price: number }).price;
   await feed(page, price - 300, price - 100, price - 100);
   await feed(page, price - 300, price + 150, price + 120);
   await expect(row).toHaveAttribute("data-state", "fired");

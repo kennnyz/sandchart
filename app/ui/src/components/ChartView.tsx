@@ -253,6 +253,13 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
     chart.onAlertClick((alertId) => alerts.state.select(alertId));
     return () => chart.onAlertClick(null);
   }, [chart, alerts, alertList, replaying]);
+  // A dragged level re-sets its alert at the new price, at the scale the chart shows it in.
+  const scaleNow = state?.instrument?.priceScale ?? null;
+  useEffect(() => {
+    if (!chart || scaleNow === null) return;
+    chart.onAlertMove((alertId, price) => alerts.state.movePrice(alertId, scaleNow, price));
+    return () => chart.onAlertMove(null);
+  }, [chart, alerts, scaleNow]);
 
   // The "+" at the crosshair price and a right click on an alert level open a menu of the chart.
   useEffect(() => {

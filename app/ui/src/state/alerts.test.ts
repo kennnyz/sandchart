@@ -45,6 +45,18 @@ describe("AlertController", () => {
     stop();
   });
 
+  it("moves a price alert to a new price: the same id, direction and scale, armed again", async () => {
+    const { c, stop } = setup();
+    await flush();
+    await c.createPrice(id, 2, 10_000, "above");
+    await c.movePrice("a1", 2, 10_250);
+    expect(c.list).toMatchObject([{ id: "a1", active: true, direction: "above", priceScale: 2, kind: { kind: "price", price: 10_250 } }]);
+    // A line alert has no price to move.
+    await c.movePrice("nope", 2, 1);
+    expect(c.list).toHaveLength(1);
+    stop();
+  });
+
   it("closes the toast by itself", async () => {
     vi.useFakeTimers();
     const { backend, c, stop } = setup();

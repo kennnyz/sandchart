@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { Alert, Instrument } from "../backend/types";
-import { alertLevels, levelAt } from "./alerts";
+import { AlertLevelLayer, alertLevels, levelAt } from "./alerts";
+import { Coords } from "./drawings/geometry";
+import { PriceScale } from "./scale";
+import { dark } from "./theme";
 
 const inst: Instrument = { id: { source: "mock", symbol: "BTCUSDT" }, base: "BTC", quote: "USDT", priceScale: 2, qtyScale: 3 };
 
@@ -52,5 +55,56 @@ describe("alert levels on the chart", () => {
     expect(levelAt(levels, y, 905)).toBeNull();
     expect(levelAt(levels, y, 880)).toBeNull();
     expect(levelAt([], y, 900)).toBeNull();
+  });
+});
+
+/** A 2D context that accepts every call and does nothing. */
+const ctx = new Proxy({} as CanvasRenderingContext2D, {
+  get: (_t, key) => (key === "measureText" ? () => ({ width: 10 }) : () => undefined),
+  set: () => true,
+});
+(globalThis as { Path2D?: unknown }).Path2D ??= class {};
+
+describe("dragging an alert level", () => {
+  // Price p ticks at y = 1000 - p / 20 on a 1000 px plot from 0 to 20 000 ticks.
+  const times = new Float64Array([0, 1, 2]);
+  const ohlc = { open: [0, 0, 0], high: [0, 0, 0], low: [0, 0, 0], close: [0, 0, 0] };
+  const c = new Coords(times, 3, { barWidth: 10, rightIndex: 2 }, new PriceScale(0, 20_000, 1000, "linear"), 1000, 1000, 1, 2, ohlc);
+
+  function layer() {
+    const l = new AlertLevelLayer();
+    l.set([alert("a"), alert("b", { kind: { kind: "price", price: 15_000 } })]);
+    l.paintBase(ctx, c, 1, dark, inst);
+    return l;
+  }
+
+  it("moves the level while dragged and gives the new price on release", () => {
+    const l = layer();
+    expect(l.hit(100, 500)).toBe("a");
+    l.startDrag("a");
+    l.moveDrag(12_340);
+    l.paintBase(ctx, c, 1, dark, inst);
+    expect(l.axisPrices()).toEqual([12_340, 15_000]);
+    expect(l.endDrag()).toEqual({ id: "a", price: 12_340 });
+    // Until the alert comes back at its new price it stays there, not at the old one.
+    l.paintBase(ctx, c, 1, dark, inst);
+    expect(l.axisPrices()).toEqual([12_340, 15_000]);
+    l.set([alert("a", { kind: { kind: "price", price: 12_340 } }), alert("b", { kind: { kind: "price", price: 15_000 } })]);
+    l.paintBase(ctx, c, 1, dark, inst);
+    expect(l.axisPrices()).toEqual([12_340, 15_000]);
+  });
+
+  it("gives nothing for a press without a move, and goes back when the change failed", () => {
+    const l = layer();
+    l.startDrag("a");
+    expect(l.endDrag()).toBeNull();
+    l.startDrag("a");
+    l.moveDrag(11_000);
+    expect(l.endDrag()).not.toBeNull();
+    // The change failed: the list read back still has the old price.
+    l.settled();
+    l.set([alert("a"), alert("b", { kind: { kind: "price", price: 15_000 } })]);
+    l.paintBase(ctx, c, 1, dark, inst);
+    expect(l.axisPrices()).toEqual([10_000, 15_000]);
   });
 });
