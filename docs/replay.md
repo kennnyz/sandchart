@@ -103,12 +103,14 @@ All results are worked out by the app's engine, from the bars and the commands y
 
 **Save** asks where to put the file. It is plain JSON, one candle and one command per line, so two files compare well in a diff. It holds:
 
-- the format version (1);
-- the pair (source, symbol, base and quote asset, price and quantity decimals) and the timeframe;
-- the candles: the context before the start and every revealed bar, as whole numbers in the pair's tick and lot size, and **no bar after the current one**;
-- the index of the first replayed bar and of the current bar;
-- every command you gave, in order: open (side, bar, stop, take), edit (bar and the new stop or take) and close (bar);
-- a SHA-256 hash of the candles. It covers the candles only, not the pair, the timeframe, the indices or the commands.
+- the format version (2);
+- the pair (source, symbol, base and quote asset, price and quantity decimals) and the base timeframe, the one the replay steps;
+- the candles: the context before the start and every revealed bar, as whole numbers in the pair's tick and lot size. The app saves **no bar after the current one**;
+- the start and the cut as times: the close time of the first replayed bar and of the current one;
+- every command you gave, in order, each with the time it was given (the close time of the then current bar): open (side, stop, take), edit (the new stop or take) and close;
+- a SHA-256 hash of the candles. It covers the candles only, not the pair, the timeframe, the times or the commands.
+
+Files saved by earlier versions (format 1, which counted bars by index) still open and give the same trades; saving one again writes format 2.
 
 It holds no results. **Open** reads the file, checks its version, its limits and the hash of its candles, and plays the commands again to get the trades and statistics. A file that fails a check is refused with the reason, and the replay you had open stays as it was. An opened file switches the chart to its pair and timeframe, and since it has no bar after its current one, it cannot be stepped further.
 
