@@ -10,6 +10,8 @@ import { DEFAULT_STYLE, DrawingState, type DrawingChange, type DrawingPatch, typ
 /** Distance in CSS px within which the pointer hits a drawing or a handle. */
 export const HIT_TOLERANCE = 6;
 const HANDLE_RADIUS = 4.5;
+/** The ⌘ snap preview ring, a little larger than a handle so it reads around one. */
+const SNAP_RING_RADIUS = 6;
 /** A press must move this far (CSS px) to count as a drag. */
 const DRAG_THRESHOLD = 3;
 /** Halo of a hovered drawing: this much wider than its line, at this opacity. */
@@ -382,6 +384,29 @@ export class DrawingLayer {
     this.host.invalidate();
   }
 
+  /**
+   * ⌘ (Ctrl) went down or up without the mouse moving: the last position is moved over again,
+   * so the snap preview, a placement, a drag or the ruler follow at once. Overlay only.
+   */
+  modifiers(cmd: boolean): void {
+    const m = this.mouse;
+    if (!m || m.cmd === cmd) return;
+    this.pointerMove(m.x, m.y, m.shift, cmd);
+  }
+
+  /**
+   * With a tool armed and ⌘ held: the bar price the next point snaps to, on screen and as an
+   * anchor (a ring on the overlay shows it before the click). Null otherwise.
+   */
+  snapPreview(): { x: number; y: number; anchor: Anchor } | null {
+    const c = this.coords;
+    const m = this.mouse;
+    const tool = this.state.tool ? toolById(this.state.tool) : undefined;
+    if (!c || !m?.cmd || !tool || tool.placement.stroke === true || this.ruler?.live) return null;
+    const anchor = snapToBar(c, m.x, m.y, true);
+    return anchor ? { x: c.x(anchor.t), y: c.y(anchor.p), anchor } : null;
+  }
+
   /** Snaps placed and dragged points to bar prices (see `snapToBar`). */
   setMagnet(on: boolean): void {
     this.magnet = on;
@@ -526,6 +551,9 @@ export class DrawingLayer {
       if (s.points.length > 0 && !stroke) paintHandles(ctx, points.map((a) => ({ x: c.x(a.t), y: c.y(a.p) })), col, theme);
       for (const p of placing.axisPrices?.(body) ?? []) tags.push([p, col]);
     }
+    const snap = this.snapPreview();
+    if (snap) paintSnap(ctx, snap, theme);
+    if (debug) debug.snapRing = snap && { x: snap.x, y: snap.y };
     if (this.ruler) {
       const text = paintRuler(ctx, c, this.ruler.a, this.ruler.b, theme);
       if (debug) debug.ruler = text;
@@ -1017,6 +1045,17 @@ function paintOne(
   tool.paint(ctx, g, lk);
   ctx.globalAlpha = 1;
   ctx.setLineDash(NO_DASH);
+}
+
+/** The ⌘ snap target: a ring around the bar price the next point takes. */
+function paintSnap(ctx: CanvasRenderingContext2D, p: Point, theme: ChartTheme): void {
+  ctx.globalAlpha = 1;
+  ctx.setLineDash(NO_DASH);
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = theme.fg;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, SNAP_RING_RADIUS, 0, Math.PI * 2);
+  ctx.stroke();
 }
 
 function paintHandles(ctx: CanvasRenderingContext2D, points: Point[], stroke: string, theme: ChartTheme): void {

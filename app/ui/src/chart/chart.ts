@@ -193,6 +193,9 @@ export class Chart {
       this.canvas.addEventListener("gesturechange", this.onGestureChange);
       this.canvas.addEventListener("gestureend", this.onGestureEnd);
     }
+    window.addEventListener("keydown", this.onModifier);
+    window.addEventListener("keyup", this.onModifier);
+    window.addEventListener("blur", this.onBlur);
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(host);
     this.resize();
@@ -540,6 +543,9 @@ export class Chart {
     this.destroyed = true;
     cancelAnimationFrame(this.frame);
     this.resizeObserver.disconnect();
+    window.removeEventListener("keydown", this.onModifier);
+    window.removeEventListener("keyup", this.onModifier);
+    window.removeEventListener("blur", this.onBlur);
     this.canvas.removeEventListener("pointerdown", this.onPointerDown);
     this.canvas.removeEventListener("pointermove", this.onPointerMove);
     this.canvas.removeEventListener("pointerup", this.onPointerUp);
@@ -920,6 +926,15 @@ export class Chart {
     this.updateCrosshair();
     this.invalidateOverlay();
   };
+
+  /** ⌘ (Ctrl) pressed or let go with the mouse still: drawings snap (and preview it) at once. */
+  private readonly onModifier = (e: KeyboardEvent): void => {
+    if (e.key !== "Meta" && e.key !== "Control") return;
+    this.drawings.modifiers(cmdHeld(e));
+  };
+
+  /** The window lost focus: a ⌘ let go elsewhere never sends its keyup here. */
+  private readonly onBlur = (): void => this.drawings.modifiers(false);
 
   private readonly onPointerUp = (e: PointerEvent): void => {
     if (this.drag?.pointerId !== e.pointerId) return;

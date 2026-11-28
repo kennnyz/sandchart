@@ -524,3 +524,60 @@ describe("many selected drawings", () => {
     expect(ms).toBeLessThan(300);
   });
 });
+
+describe("⌘ snap preview", () => {
+  // Bar 50 at x = 510: open and close 5000 (y 500), high 6000 (y 400), low 4000 (y 600).
+  it("shows where a point would snap before the first click, as soon as ⌘ goes down or up", () => {
+    const { l, rec, paint } = recording();
+    paint();
+    l.setTool("trend");
+    l.pointerMove(511, 430, false, false);
+    expect(l.snapPreview()).toBeNull();
+    const base = rec.base;
+    const overlay = rec.overlay;
+    // No mouse movement: the key alone shows the ring on the high of the bar under the mouse.
+    l.modifiers(true);
+    expect(l.snapPreview()).toEqual({ x: 510, y: 400, anchor: { t: 50 * STEP, p: 6_000 } });
+    expect(rec.overlay).toBeGreaterThan(overlay);
+    l.modifiers(true);
+    l.modifiers(false);
+    expect(l.snapPreview()).toBeNull();
+    // Only the overlay is drawn again.
+    expect(rec.base).toBe(base);
+  });
+
+  it("follows the mouse with ⌘ held and places the first point on that price", () => {
+    const { l, rec, paint } = recording();
+    paint();
+    l.setOwner({ instrument: { source: "mock", symbol: "BTCUSDT" }, priceScale: 2 });
+    l.setTool("trend");
+    l.pointerMove(611, 590, false, true);
+    expect(l.snapPreview()?.anchor).toEqual({ t: 60 * STEP, p: 4_000 });
+    l.pointerDown(611, 590, false, true);
+    l.pointerUp(611, 590, false, true);
+    expect(l.state.points).toEqual([{ t: 60 * STEP, p: 4_000 }]);
+    // The second point: ⌘ pressed while the line follows the mouse.
+    l.pointerMove(711, 520, false, false);
+    expect(l.snapPreview()).toBeNull();
+    const base = rec.base;
+    l.modifiers(true);
+    expect(l.snapPreview()?.anchor).toEqual({ t: 70 * STEP, p: 5_000 });
+    expect(rec.base).toBe(base);
+  });
+
+  it("shows nothing without a tool, off the bars, or after the mouse left", () => {
+    const { l, paint } = recording();
+    paint();
+    l.pointerMove(511, 430, false, true);
+    expect(l.snapPreview()).toBeNull();
+    l.setTool("trend");
+    l.pointerMove(511, 100, false, true);
+    expect(l.snapPreview()).toBeNull();
+    l.pointerMove(511, 430, false, true);
+    expect(l.snapPreview()).not.toBeNull();
+    l.leave();
+    l.modifiers(false);
+    l.modifiers(true);
+    expect(l.snapPreview()).toBeNull();
+  });
+});

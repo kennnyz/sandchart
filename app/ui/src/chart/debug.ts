@@ -34,6 +34,8 @@ export interface ChartDebug {
   selectionBox: boolean;
   /** Handles of the selected drawing at the last overlay frame, in CSS px of the chart. */
   selectedHandles: { x: number; y: number }[];
+  /** The ⌘ snap preview ring at the last overlay frame, in CSS px of the chart; null when not shown. */
+  snapRing: { x: number; y: number } | null;
   /** The ruler's numbers at the last overlay frame ("+1.00 (+0.50%)|12 bars, 12h"), null when it is not shown. */
   ruler: string | null;
   /** Position outcomes the chart was last given, by drawing id: "take", "stop", "open", with "?" when ambiguous. */
@@ -72,6 +74,7 @@ export function enableChartDebug(): void {
     selectedDrawings: [],
     selectionBox: false,
     selectedHandles: [],
+    snapRing: null,
     ruler: null,
     outcomes: {},
     lastBarTime: null,
