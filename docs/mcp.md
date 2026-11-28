@@ -128,7 +128,7 @@ Candles, oldest first, from the local cache; candles that are missing are fetche
 
 ### list_indicators
 
-The built-in indicators and the ones installed in the app, with their parameters (kind, range, default) and output series. No input.
+The built-in indicators and the ones installed in the app, with their parameters (kind, range, default) and output series. No input. The server reads the installed indicators once, when it starts: one you install or remove in the app while it runs shows here after the agent restarts the server.
 
 ```json
 { "indicators": [
@@ -324,6 +324,7 @@ The instrument list is downloaded once per server start; after a failure, at mos
 The server and the app may run at the same time. Both use the same SQLite file in WAL mode: reads never wait, and a write waits up to 5 seconds for the other program's write instead of failing. The server never deletes indicator files or compiled modules; that is the app's job.
 
 - Drawings the agent saves appear on your chart the next time the app loads that pair.
+- Indicators you install or remove in the app reach the server when it starts again (most agents restart it with a new session).
 - Alerts the agent sets or deletes are armed or disarmed by a running app within a few seconds, and show in its alerts panel. While the app is closed they are stored and start when the app starts.
 - The server works while the app is closed too: candles, indicators, drawings and replays need only the database (and the exchange for candles that are not cached yet).
 
