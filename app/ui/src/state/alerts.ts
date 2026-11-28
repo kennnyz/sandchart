@@ -49,16 +49,22 @@ export class AlertController {
   }
 
   async load(): Promise<void> {
+    if (await this.read()) this.onChange();
+  }
+
+  /** Reads the list back; false when it failed or a newer read overtook it. */
+  private async read(): Promise<boolean> {
     const token = ++this.token;
     try {
       const list = await this.backend.getAlerts();
-      if (token !== this.token) return;
+      if (token !== this.token) return false;
       this.list = list;
       // A fired alert that was deleted or armed again is no longer news.
       for (const id of this.unseen) if (!list.some((a) => a.id === id && !a.active)) this.unseen.delete(id);
-      this.onChange();
+      return true;
     } catch (e) {
       console.error("loading the alerts failed", e);
+      return false;
     }
   }
 
@@ -108,6 +114,13 @@ export class AlertController {
     if (this.unseen.delete(id)) this.onChange();
   }
 
+  /** The error strip was closed. */
+  dismissError(): void {
+    if (this.error === null) return;
+    this.error = null;
+    this.onChange();
+  }
+
   dismissToast(): void {
     if (this.toastTimer) clearTimeout(this.toastTimer);
     this.toastTimer = null;
@@ -134,7 +147,8 @@ export class AlertController {
       console.error("changing an alert failed", e);
       this.error = toProblem(e).message;
     }
-    await this.load();
+    // One notice for the change and the list read back after it.
+    await this.read();
     this.onChange();
   }
 }

@@ -187,6 +187,7 @@
   "alerts.toastLine": "the line",
   "alerts.toastClose": "Close",
   "alerts.error": "The alert was not saved: {error}",
+  "alerts.errorClose": "Close",
   "drawingStyle.alert": "Alert",
   "drawingStyle.alertCreate": "Set",
   "drawingStyle.alertRemove": "Remove",

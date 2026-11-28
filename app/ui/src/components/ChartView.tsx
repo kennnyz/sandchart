@@ -223,7 +223,8 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
   useEffect(() => {
     if (!chart) return;
     const onKey = (e: KeyboardEvent) => {
-      if (!alertKey(e)) return;
+      // A replay shows past bars: the crosshair price is no price to watch now.
+      if (!alertKey(e) || replay.state.phase !== "off") return;
       const at = chart.crosshairPrice();
       if (!at) return;
       e.preventDefault();
@@ -231,7 +232,7 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [chart, alerts]);
+  }, [chart, alerts, replay]);
 
   const styled = styleEdit?.drawing;
   const lineAlert: LineAlert | undefined =
@@ -318,7 +319,7 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
           text={t("alerts.error", { error: alerts.state.error })}
           retryAt={null}
           retryLabel={() => ""}
-          detail={alerts.state.error}
+          dismiss={{ label: t("alerts.errorClose"), onDismiss: () => alerts.state.dismissError() }}
         />
       )}
       {rp.error !== null && (

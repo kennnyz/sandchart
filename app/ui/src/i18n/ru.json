@@ -187,6 +187,7 @@
   "alerts.toastLine": "линии",
   "alerts.toastClose": "Закрыть",
   "alerts.error": "Алерт не сохранён: {error}",
+  "alerts.errorClose": "Закрыть",
   "drawingStyle.alert": "Алерт",
   "drawingStyle.alertCreate": "Поставить",
   "drawingStyle.alertRemove": "Убрать",

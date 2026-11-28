@@ -186,3 +186,48 @@ test("removing_an_alert_from_the_popover_keeps_the_line", async ({ page }) => {
   await expect(pop.getByTestId("drawing-alert")).toHaveAttribute("data-state", "none");
   expect(await storedDrawings(page)).toHaveLength(1);
 });
+
+test("alt_a_sets_no_alert_during_a_replay", async ({ page }) => {
+  const plot = await openChart(page);
+  await page.getByTestId("replay-button").click();
+  await expect(page.getByTestId("replay-hint")).toBeVisible();
+  await page.mouse.click(Math.round(plot.left + plot.width / 2), Math.round(plot.top + plot.height / 2));
+  await expect(page.getByTestId("chart")).toHaveAttribute("data-replay", "on");
+  await page.mouse.move(Math.round(plot.left + plot.width / 3), Math.round(plot.top + plot.height * 0.4));
+  await nextFrame(page);
+  await page.keyboard.press("Alt+KeyA");
+  await nextFrame(page);
+  await page.waitForTimeout(200);
+  expect(await alerts(page)).toEqual([]);
+  await expect(page.getByTestId("alerts-empty")).toBeVisible();
+});
+
+test("a_refused_alert_shows_its_reason_once_until_closed", async ({ page }) => {
+  // 100 active alerts already: the next one is refused.
+  await page.addInitScript(() => {
+    const all = Array.from({ length: 100 }, (_, i) => ({
+      id: `full-${i}`,
+      instrument: { source: "mock", symbol: "BTCUSDT" },
+      priceScale: 2,
+      kind: { kind: "price", price: 1 + i },
+      direction: "cross",
+      active: true,
+      createdAt: i,
+      triggeredAt: null,
+      triggeredPrice: null,
+    }));
+    if (localStorage.getItem("sandchart.mock.alerts") === null) localStorage.setItem("sandchart.mock.alerts", JSON.stringify(all));
+  });
+  const plot = await openChart(page);
+  await page.mouse.move(Math.round(plot.left + plot.width / 2), Math.round(plot.top + plot.height * 0.4));
+  await nextFrame(page);
+  await page.keyboard.press("Alt+KeyA");
+  const strip = page.getByTestId("alert-error");
+  await expect(strip).toContainText("at most 100 alerts can be active");
+  const text = (await strip.textContent()) ?? "";
+  expect(text.split("at most 100 alerts").length - 1).toBe(1);
+  expect(await strip.getAttribute("title")).toBeNull();
+  await strip.getByRole("button").click();
+  await expect(strip).toHaveCount(0);
+  expect(await alerts(page)).toHaveLength(100);
+});

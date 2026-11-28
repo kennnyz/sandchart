@@ -92,4 +92,27 @@ describe("AlertController", () => {
     expect(c.list).toEqual([]);
     stop();
   });
+
+  it("tells the view once per change, and keeps a refused change's error until dismissed or a change succeeds", async () => {
+    const { c, stop, changes } = setup();
+    await flush();
+    changes.count = 0;
+    await c.createPrice(id, 2, 10_000);
+    expect(changes.count).toBe(1);
+
+    changes.count = 0;
+    await c.rearm("nope");
+    expect(changes.count).toBe(1);
+    expect(c.error).toBe('no alert "nope"');
+    c.dismissError();
+    expect(c.error).toBeNull();
+    expect(changes.count).toBe(2);
+    c.dismissError();
+    expect(changes.count).toBe(2);
+
+    await c.rearm("nope");
+    await c.createPrice(id, 2, 10_100);
+    expect(c.error).toBeNull();
+    stop();
+  });
 });

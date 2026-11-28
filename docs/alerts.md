@@ -30,7 +30,7 @@ Rectangles, Fibonacci levels and the other drawings have no alerts.
 
 ## Set an alert
 
-- **Price alert:** point at a price on the chart and press **Alt+A** (⌥A on a Mac). The alert is set at the price under the crosshair, direction Cross, on the pair the chart shows.
+- **Price alert:** point at a price on the chart and press **Alt+A** (⌥A on a Mac). The alert is set at the price under the crosshair, direction Cross, on the pair the chart shows. Not during a [replay](replay.md): its prices are from the past.
 - **Line alert:** double-click a horizontal or trend line (or select it and press Enter) to open its style. In the **Alert** row pick the direction and press **Set**. While it is set, the same row changes its direction (which arms it again) or **Remove**s it.
 
 The first alert you create may make your operating system ask whether Sandchart may show notifications. Allow it to get notifications outside the window; the message in the window and the panel work either way.
@@ -76,7 +76,7 @@ Alerts an AI agent sets or deletes through the [MCP server](mcp.md) follow the s
 - At most 32 live connections in all, the chart's included. An alert on a new pair is refused when all of them are in use.
 - No sound in this version.
 
-An alert that is refused shows the reason in a strip above the chart.
+An alert that is refused shows the reason in a strip above the chart until you close it (×) or the next change of an alert succeeds.
 
 ## Privacy
 
