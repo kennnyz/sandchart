@@ -15,6 +15,8 @@ import { gestureZoomFactor, indexToX, panBy, visibleRange, xToIndex, zoomAt, typ
 const DEFAULT_BAR_WIDTH = 8;
 /** Empty bars between the last candle and the price axis after a reset. */
 const RIGHT_MARGIN_BARS = 5;
+/** In a replay: room right of the cut for the open trade's zone, labels and R. */
+const REPLAY_MARGIN_BARS = 24;
 /** `onNeedOlder` fires when the left edge is this close to the first candle. */
 const NEED_OLDER_BARS = 100;
 /** Bars that must stay on screen at either edge while panning. */
@@ -130,6 +132,7 @@ export class Chart {
   private drawingStyleCb: ((edit: StyleEdit | null) => void) | null = null;
   /** A replay's trades and cut; its stop and take handles come before drawings for input. */
   private readonly replay = new ReplayLayer();
+  private replayOn = false;
   private replayEditCb: ((stop: number, take: number) => void) | null = null;
   /** While a replay start is picked: called with the open time of the clicked bar. */
   private pickCb: ((time: number) => void) | null = null;
@@ -201,6 +204,8 @@ export class Chart {
     this.instrument = c.instrument;
     this.drawings.setOwner({ instrument: c.instrument.id, priceScale: c.instrument.priceScale });
     this.tf = inferTimeframe(s);
+    // New bars: the next replay marks make room right of the cut again.
+    this.replayOn = false;
     this.atHistoryStart = c.atHistoryStart || n === 0;
     this.olderPending = false;
     this.axisWidth = PRICE_AXIS_WIDTH;
@@ -419,7 +424,15 @@ export class Chart {
 
   /** A replay's trades and where its revealed bars end, or none. */
   setReplay(m: ReplayMarks | null): void {
+    const entering = m !== null && !this.replayOn;
+    this.replayOn = m !== null;
     this.replay.set(m);
+    // Entering a replay on the last bar: leave room for the trade right of the cut. New bars keep it.
+    if (entering && this.view.rightIndex >= this.series.count - 1) {
+      this.view = { barWidth: this.view.barWidth, rightIndex: this.series.count - 1 + REPLAY_MARGIN_BARS };
+      this.afterViewChange();
+      return;
+    }
     this.invalidate();
   }
 
@@ -611,7 +624,14 @@ export class Chart {
     const s = this.series;
     const range = visibleRange(this.view, plotW, s.count);
     const ind = this.ind;
-    const extra = ind.layers.length > 0 ? overlayRange(ind.layers, ind.offsets, range[0], range[1], ind.tickMul) : null;
+    let extra = ind.layers.length > 0 ? overlayRange(ind.layers, ind.offsets, range[0], range[1], ind.tickMul) : null;
+    // The open replay trade's stop and take stay in view: they are what the user drags.
+    const levels = this.replay.scalePrices();
+    if (levels.length > 0) {
+      const lo = Math.min(...levels);
+      const hi = Math.max(...levels);
+      extra = extra ? [Math.min(extra[0], lo), Math.max(extra[1], hi)] : [lo, hi];
+    }
     const [min, max] = autoscale(s.low, s.high, range, 0.08, this.mode, extra);
     return new PriceScale(min, max, priceH, this.mode);
   }

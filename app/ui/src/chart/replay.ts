@@ -152,6 +152,15 @@ export class ReplayLayer {
     return t ? [t.entryPrice, d ? d.stop : t.stop, d ? d.take : t.take] : [];
   }
 
+  /**
+   * Prices autoscale keeps in view: the open trade's entry, stop and take as the engine has
+   * them. Not the dragged ones: the scale would move under the pointer and run away with it.
+   */
+  scalePrices(): number[] {
+    const t = this.open();
+    return t ? [t.entryPrice, t.stop, t.take] : [];
+  }
+
   /** On the base layer after the drawings; `c` maps this frame. */
   paintBase(ctx: CanvasRenderingContext2D, c: Coords, dpr: number, th: ChartTheme): void {
     this.coords = c;
@@ -182,7 +191,8 @@ export class ReplayLayer {
     ctx.stroke();
     ctx.setLineDash(NO_DASH);
     const w = ctx.measureText(m.label).width + 2 * PAD;
-    tag(ctx, m.label, th.fg, Math.min(cut + GAP, c.plotW - w - 2), LABEL_H / 2 + 6, th);
+    // At the foot of the line, clear of the trade labels at the top.
+    tag(ctx, m.label, th.fg, Math.min(cut + GAP, c.plotW - w - 2), c.priceH - LABEL_H / 2 - 6, th);
 
     for (const t of m.trades) if (t.reason !== "open" && this.paintClosed(ctx, t, c, th) && debug) debug.replayClosed++;
     const open = this.open();
