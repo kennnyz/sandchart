@@ -50,7 +50,7 @@ Every change is saved when you release the mouse, not while you drag.
 - **Delete** or Backspace removes them all.
 - A click without a drag on one of them selects only that one; a click on empty space deselects all.
 
-Moving or deleting several is one step for undo.
+Moving or deleting several is one step for undo, and one write: either all of them are saved or none is.
 
 ## Context menu
 

@@ -259,7 +259,7 @@ function recording() {
   const host: LayerHost = {
     invalidate: () => rec.base++,
     invalidateOverlay: () => rec.overlay++,
-    commit: (c) => rec.commits.push(c),
+    commit: (step) => rec.commits.push(...step),
     tool: () => {},
     text: () => {},
     style: (e) => rec.styles.push(e),

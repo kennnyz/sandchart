@@ -374,6 +374,10 @@ export interface Backend {
   saveDrawing(d: DrawingInput): Promise<Drawing>;
   /** Removes a drawing; an unknown id is not an error. */
   deleteDrawing(id: string): Promise<void>;
+  /** `saveDrawing` for several in one write: all are stored or none is; resolves to them as stored, in order. */
+  saveDrawings(list: DrawingInput[]): Promise<Drawing[]>;
+  /** Removes several drawings (and their alerts) in one write; unknown ids are not an error. */
+  deleteDrawings(ids: string[]): Promise<void>;
   /** Outcome of each position over the cached candles of `tf`, in the order given. */
   getPositionOutcomes(
     id: InstrumentId,

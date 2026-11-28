@@ -50,7 +50,7 @@ if (inTauri) void resetSubscriptions();
  * fails, or every download fails halfway), `mockUpdateBlocker=translocated|not_appimage` (the update cannot be
  * installed here) and `mockUpdateDelay` (ms until the first automatic check). The watchlist, the drawings and the alerts
  * are kept in localStorage (`sandchart.mock.drawings`, `sandchart.mock.alerts`), so a reload sees the same ones. Calls
- * are counted in `window.__sandchartMock` (whose `replayFile()` returns the text of the last replay save and
+ * are counted in `window.__sandchartMock` (`drawingWrites`: every drawing save or delete call; its `replayFile()` returns the text of the last replay save and
  * `emitLive(event)` pushes a live event into the open subscriptions, which also feeds the alerts), and the chart
  * reports draw times and axis layout into `window.__sandchartDebug` (see
  * chart/debug.ts). None of this exists inside Tauri.
@@ -110,6 +110,7 @@ function browserMock(): Backend {
   const stats = {
     getCandles: 0,
     checkUpdate: 0,
+    drawingWrites: 0,
     replayFile: () => mock.replayFile(),
     emitLive: (e: LiveEvent) => mock.emitLive(e),
   };
@@ -123,6 +124,22 @@ function browserMock(): Backend {
     checkUpdate() {
       stats.checkUpdate++;
       return mock.checkUpdate();
+    },
+    saveDrawing(d) {
+      stats.drawingWrites++;
+      return mock.saveDrawing(d);
+    },
+    deleteDrawing(id) {
+      stats.drawingWrites++;
+      return mock.deleteDrawing(id);
+    },
+    saveDrawings(list) {
+      stats.drawingWrites++;
+      return mock.saveDrawings(list);
+    },
+    deleteDrawings(ids) {
+      stats.drawingWrites++;
+      return mock.deleteDrawings(ids);
     },
   };
 }

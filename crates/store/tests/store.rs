@@ -1050,3 +1050,70 @@ fn the_alerts_fingerprint_changes_only_with_what_alerts_depend_on() {
     store.delete_alert("p").unwrap();
     assert!(changed(&store));
 }
+
+#[test]
+fn save_drawings_stores_all_or_nothing_within_the_cap() {
+    let mut store = Store::open_in_memory().unwrap();
+    for i in 0..MAX_DRAWINGS_PER_INSTRUMENT - 1 {
+        store
+            .upsert_drawing(&drawing(&format!("d{i}"), "BTCUSDT", 0))
+            .unwrap();
+    }
+    // One more fits, two do not: neither is stored, and the edit in the same batch is undone.
+    let err = store
+        .save_drawings(&[
+            drawing("d0", "BTCUSDT", 9),
+            drawing("new1", "BTCUSDT", 0),
+            drawing("new2", "BTCUSDT", 0),
+        ])
+        .unwrap_err();
+    assert!(
+        matches!(err, StoreError::TooManyDrawings { max: 2000 }),
+        "{err:?}"
+    );
+    let list = store.drawings(&id("BTCUSDT")).unwrap();
+    assert_eq!(list.len(), MAX_DRAWINGS_PER_INSTRUMENT - 1);
+    assert_eq!(store.drawing("d0").unwrap().unwrap().z, 0);
+    assert_eq!(store.drawing("new1").unwrap(), None);
+
+    // Moving one away in the same batch makes room: the cap holds for the result.
+    store
+        .save_drawings(&[
+            drawing("new1", "BTCUSDT", 0),
+            drawing("new2", "BTCUSDT", 0),
+            drawing("d1", "ETHUSDT", 0),
+        ])
+        .unwrap();
+    assert_eq!(
+        store.drawings(&id("BTCUSDT")).unwrap().len(),
+        MAX_DRAWINGS_PER_INSTRUMENT
+    );
+    assert_eq!(store.save_drawings(&[]).unwrap(), 0);
+}
+
+#[test]
+fn delete_drawings_removes_them_and_their_alerts_together() {
+    let mut store = Store::open_in_memory().unwrap();
+    store
+        .save_drawings(&[
+            drawing("a", "BTCUSDT", 0),
+            drawing("b", "BTCUSDT", 1),
+            drawing("c", "BTCUSDT", 2),
+        ])
+        .unwrap();
+    store
+        .upsert_alert(&alert("x", "BTCUSDT", on_drawing("a")))
+        .unwrap();
+    let removed = store
+        .delete_drawings(&["a".into(), "b".into(), "unknown".into()])
+        .unwrap();
+    assert_eq!(removed, 1);
+    let left: Vec<String> = store
+        .drawings(&id("BTCUSDT"))
+        .unwrap()
+        .into_iter()
+        .map(|d| d.id)
+        .collect();
+    assert_eq!(left, vec!["c".to_owned()]);
+    assert!(store.alerts().unwrap().is_empty());
+}

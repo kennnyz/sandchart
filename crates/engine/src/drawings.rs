@@ -42,29 +42,74 @@ impl Engine {
     /// rescaled to the current one; a drawing that no longer fits or breaks a rule after
     /// rounding is rejected. `updated_at` is set to now; the saved drawing is returned. Alerts
     /// that can no longer follow it (it is no longer a line) are deleted with it.
-    pub async fn save_drawing(&self, mut d: Drawing) -> Result<Drawing, EngineError> {
-        let key = d.instrument.clone();
-        let scale = blocking(&self.shared.store, move |s| s.instrument(&key))
-            .await?
-            .ok_or_else(|| EngineError::UnknownInstrument(d.instrument.clone()))?
-            .price_scale;
-        d.updated_at = self.now_ms();
-        if d.price_scale == scale {
-            validate(&d).map_err(EngineError::Drawing)?;
-        } else {
-            d = at_scale(d, scale)
-                .map_err(|e| EngineError::Drawing(format!("at price scale {scale}: {e}")))?;
+    pub async fn save_drawing(&self, d: Drawing) -> Result<Drawing, EngineError> {
+        let mut saved = self.save_drawings(vec![d]).await?;
+        saved
+            .pop()
+            .ok_or_else(|| EngineError::Drawing("nothing was saved".into()))
+    }
+
+    /// `save_drawing` for several drawings as one write: every one is checked (and
+    /// rescaled) first, then all are stored in one transaction or none is. The alerts are
+    /// re-armed once. Returns them as saved, in the order given.
+    pub async fn save_drawings(&self, list: Vec<Drawing>) -> Result<Vec<Drawing>, EngineError> {
+        check_batch(list.len())?;
+        if list.is_empty() {
+            return Ok(list);
         }
-        let saved = d.clone();
-        let removed = blocking(&self.shared.store, move |s| s.upsert_drawing(&saved)).await?;
-        self.drawing_saved(&d.id, removed > 0).await?;
-        Ok(d)
+        let mut keys: Vec<InstrumentId> = Vec::new();
+        for d in &list {
+            if !keys.contains(&d.instrument) {
+                keys.push(d.instrument.clone());
+            }
+        }
+        let scales = blocking(&self.shared.store, move |s| {
+            keys.into_iter()
+                .map(|k| Ok((s.instrument(&k)?.map(|i| i.price_scale), k)))
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .await?;
+        let now = self.now_ms();
+        let list = list
+            .into_iter()
+            .map(|mut d| {
+                let scale = scales
+                    .iter()
+                    .find(|(_, k)| *k == d.instrument)
+                    .and_then(|(scale, _)| *scale)
+                    .ok_or_else(|| EngineError::UnknownInstrument(d.instrument.clone()))?;
+                d.updated_at = now;
+                if d.price_scale == scale {
+                    validate(&d).map_err(EngineError::Drawing)?;
+                    Ok(d)
+                } else {
+                    at_scale(d, scale)
+                        .map_err(|e| EngineError::Drawing(format!("at price scale {scale}: {e}")))
+                }
+            })
+            .collect::<Result<Vec<_>, EngineError>>()?;
+        let rows = list.clone();
+        let removed = blocking(&self.shared.store, move |s| s.save_drawings(&rows)).await?;
+        self.drawings_saved(&list, removed > 0).await?;
+        Ok(list)
     }
 
     /// Removes a drawing and its alerts; an unknown id is not an error.
     pub async fn delete_drawing(&self, id: &str) -> Result<(), EngineError> {
-        validate_id(id).map_err(EngineError::Drawing)?;
-        self.delete_drawing_and_alerts(id.to_owned()).await
+        self.delete_drawings(vec![id.to_owned()]).await
+    }
+
+    /// Removes drawings and their alerts in one write; every id is checked first, and
+    /// unknown ones are not an error.
+    pub async fn delete_drawings(&self, ids: Vec<String>) -> Result<(), EngineError> {
+        check_batch(ids.len())?;
+        for id in &ids {
+            validate_id(id).map_err(EngineError::Drawing)?;
+        }
+        if ids.is_empty() {
+            return Ok(());
+        }
+        self.delete_drawings_and_alerts(ids).await
     }
 
     /// The outcome of each position over the cached candles of `tf`, in the order given.
@@ -116,6 +161,16 @@ impl Engine {
         })
         .await
     }
+}
+
+/// A batch of drawings is at most what one pair can hold.
+fn check_batch(n: usize) -> Result<(), EngineError> {
+    if n > MAX_DRAWINGS_PER_INSTRUMENT {
+        return Err(EngineError::Drawing(format!(
+            "at most {MAX_DRAWINGS_PER_INSTRUMENT} drawings per request, not {n}"
+        )));
+    }
+    Ok(())
 }
 
 /// `d` with its prices at `scale`, validated after any rounding.

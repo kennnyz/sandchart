@@ -92,7 +92,8 @@ export interface LayerHost {
   /** Redraw both canvas layers. */
   invalidate(): void;
   invalidateOverlay(): void;
-  commit(change: DrawingChange): void;
+  /** One user action's changes, to store as one write. */
+  commit(step: DrawingChange[]): void;
   tool(id: ToolId | null): void;
   /** Open (or move) the text editor, or close it with null. */
   text(edit: TextEdit | null): void;
@@ -180,8 +181,8 @@ export class DrawingLayer {
 
   constructor(private readonly host: LayerHost) {
     this.state = new DrawingState({
-      commit: (c) => {
-        host.commit(c);
+      commit: (step) => {
+        host.commit(step);
         this.syncStyle();
       },
       tool: (k) => host.tool(k),

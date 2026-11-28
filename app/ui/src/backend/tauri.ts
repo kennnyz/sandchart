@@ -108,6 +108,8 @@ export const tauriBackend: Backend = {
   getDrawings: (id) => invoke("get_drawings", { source: id.source, symbol: id.symbol }),
   saveDrawing: (drawing) => invoke("save_drawing", { drawing }),
   deleteDrawing: (id) => invoke("delete_drawing", { id }),
+  saveDrawings: (drawings) => invoke("save_drawings", { drawings }),
+  deleteDrawings: (ids) => invoke("delete_drawings", { ids }),
   getPositionOutcomes: (id, tf, positions) =>
     invoke("get_position_outcomes", { source: id.source, symbol: id.symbol, tf, positions }),
   replayStart: (id, tf, startTime) =>

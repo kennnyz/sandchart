@@ -306,6 +306,33 @@ describe("mock backend", () => {
       await b.saveDrawing(input("d0", { kind: "hline", p: 9 }));
     });
 
+    it("saves and deletes several in one write, all or none, as the engine does", async () => {
+      const b = createMockBackend({ candles: 10 });
+      await b.saveDrawing(input("a", { kind: "hline", p: 1 }));
+      await expect(
+        b.saveDrawings([input("a", { kind: "hline", p: 2 }), input("b", { kind: "hline", p: 3 }), input("c", long({ stop: 100 }))]),
+      ).rejects.toMatchObject({ message: "a long position needs stop < entry < take" });
+      expect((await b.getDrawings(id)).map((d) => [d.id, d.body])).toEqual([["a", { kind: "hline", p: 1 }]]);
+
+      const saved = await b.saveDrawings([input("a", { kind: "hline", p: 2 }), input("b", { kind: "hline", p: 3 })]);
+      expect(saved.map((d) => d.id)).toEqual(["a", "b"]);
+      expect((await b.getDrawings(id)).map((d) => d.body)).toEqual([{ kind: "hline", p: 2 }, { kind: "hline", p: 3 }]);
+
+      await expect(b.deleteDrawings(["a", "not ok"])).rejects.toMatchObject({ message: expect.stringContaining("drawing id") });
+      expect(await b.getDrawings(id)).toHaveLength(2);
+      await b.deleteDrawings(["a", "b", "gone"]);
+      expect(await b.getDrawings(id)).toEqual([]);
+    });
+
+    it("keeps the cap for a batch: one too many stores none of it", async () => {
+      const b = createMockBackend({ candles: 10, latencyMs: 0 });
+      await b.saveDrawings(Array.from({ length: 1999 }, (_, i) => input(`d${i}`, { kind: "hline", p: i })));
+      await expect(b.saveDrawings([input("x", { kind: "hline", p: 1 }), input("y", { kind: "hline", p: 1 })])).rejects.toMatchObject({
+        message: expect.stringContaining("at most 2000"),
+      });
+      expect(await b.getDrawings(id)).toHaveLength(1999);
+    });
+
     it("resolve matches the Rust fixture", () => {
       type Case = PositionBody & { name: string; candles: number[][]; expect: PositionOutcome };
       const cases = fixture.cases as Case[];

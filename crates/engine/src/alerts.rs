@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use sandchart_core::alert::{Alert, AlertKind, Level, Update, fires, validate};
 use sandchart_core::drawing::validate_id;
-use sandchart_core::{Candle, InstrumentId, Timeframe};
+use sandchart_core::{Candle, Drawing, InstrumentId, Timeframe};
 use sandchart_store::{MAX_ACTIVE_ALERTS, MAX_ALERT_PAIRS, Store, StoreError};
 use tokio::sync::{Notify, broadcast};
 use tokio::task::JoinHandle;
@@ -256,9 +256,10 @@ impl Hub {
     }
 
     /// Whether a drawing has an armed alert, so a change of it must re-arm.
-    fn follows(&self, drawing_id: &str) -> bool {
+    fn follows_any(&self, list: &[Drawing]) -> bool {
+        let ids: HashSet<&str> = list.iter().map(|d| d.id.as_str()).collect();
         self.state().armed.values().flatten().any(
-            |a| matches!(&a.alert.kind, AlertKind::Drawing { drawing_id: d } if d == drawing_id),
+            |a| matches!(&a.alert.kind, AlertKind::Drawing { drawing_id: d } if ids.contains(d.as_str())),
         )
     }
 
@@ -466,24 +467,27 @@ impl Engine {
         .await
     }
 
-    /// A drawing was saved: its armed alerts follow its new place, and `removed` says the
-    /// store deleted alerts that could no longer follow it.
-    pub(crate) async fn drawing_saved(
+    /// Drawings were saved: their armed alerts follow their new place, and `removed` says
+    /// the store deleted alerts that could no longer follow them. One reload for all.
+    pub(crate) async fn drawings_saved(
         &self,
-        drawing_id: &str,
+        list: &[Drawing],
         removed: bool,
     ) -> Result<(), EngineError> {
-        if removed || self.shared.alerts.follows(drawing_id) {
+        if removed || self.shared.alerts.follows_any(list) {
             self.store_and_reload(|_| Ok(())).await?;
             self.shared.alerts.send(AlertEvent::Changed);
         }
         Ok(())
     }
 
-    /// Deletes a drawing and its alerts in one transaction, then disarms them.
-    pub(crate) async fn delete_drawing_and_alerts(&self, id: String) -> Result<(), EngineError> {
+    /// Deletes drawings and their alerts in one transaction, then disarms them.
+    pub(crate) async fn delete_drawings_and_alerts(
+        &self,
+        ids: Vec<String>,
+    ) -> Result<(), EngineError> {
         let removed = self
-            .store_and_reload(move |s| s.delete_drawing(&id))
+            .store_and_reload(move |s| s.delete_drawings(&ids))
             .await?;
         if removed > 0 {
             self.shared.alerts.send(AlertEvent::Changed);

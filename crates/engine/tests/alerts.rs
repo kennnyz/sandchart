@@ -962,3 +962,48 @@ async fn a_new_tick_size_from_the_apps_own_sync_rearms_at_it() {
     p.send("BTCUSDT", Timeframe::M1, bar(0, 99_800, 100_050, 100_050));
     assert_eq!(next_fired(&mut f.events).await.price_scale, 3);
 }
+
+#[tokio::test]
+async fn a_group_change_of_lines_with_alerts_is_one_alert_change() {
+    let mut f = fixture(&["BTCUSDT"]).await;
+    let e = &f.engine;
+    e.save_drawings(vec![
+        drawing("h1", "BTCUSDT", DrawingBody::Hline { p: 10_000 }),
+        drawing("h2", "BTCUSDT", DrawingBody::Hline { p: 12_000 }),
+    ])
+    .await
+    .unwrap();
+    e.set_alert(line_alert("a1", "BTCUSDT", "h1"))
+        .await
+        .unwrap();
+    e.set_alert(line_alert("a2", "BTCUSDT", "h2"))
+        .await
+        .unwrap();
+    let changes = |events: &mut broadcast::Receiver<AlertEvent>| {
+        let mut n = 0;
+        while let Ok(ev) = events.try_recv() {
+            n += usize::from(ev == AlertEvent::Changed);
+        }
+        n
+    };
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    changes(&mut f.events);
+
+    // Moving both lines: one reload, one event.
+    e.save_drawings(vec![
+        drawing("h1", "BTCUSDT", DrawingBody::Hline { p: 10_100 }),
+        drawing("h2", "BTCUSDT", DrawingBody::Hline { p: 12_100 }),
+    ])
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(changes(&mut f.events), 1);
+
+    // Deleting both: their alerts go in the same write, with one event.
+    e.delete_drawings(vec!["h1".into(), "h2".into()])
+        .await
+        .unwrap();
+    assert!(e.alerts().await.unwrap().is_empty());
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(changes(&mut f.events), 1);
+}

@@ -37,7 +37,7 @@ function fakeSurface() {
   let showHidden = 0;
   let menu: ((e: MenuEdit | null) => void) | null = null;
   let style: ((e: StyleEdit | null) => void) | null = null;
-  let commit: ((c: DrawingChange) => void) | null = null;
+  let commit: ((step: DrawingChange[]) => void) | null = null;
   let tool: ((k: ToolId | null) => void) | null = null;
   let text: ((e: TextEdit | null) => void) | null = null;
   const surface: DrawingSurface = {
@@ -85,7 +85,8 @@ function fakeSurface() {
     showHiddenCalls: () => showHidden,
     openMenu: (e: MenuEdit | null) => menu!(e),
     openStyle: (e: StyleEdit | null) => style!(e),
-    commit: (c: DrawingChange) => commit!(c),
+    /** One undo step: a single change or all of a group's. */
+    commit: (c: DrawingChange | DrawingChange[]) => commit!(Array.isArray(c) ? c : [c]),
     openText: (e: TextEdit | null) => text!(e),
     hasListeners: () => commit !== null || text !== null,
   };
@@ -112,15 +113,17 @@ function fakeBackend(stored: Drawing[], scale = 2) {
       calls.push(`get ${id.symbol}`);
       return new Promise<Drawing[]>((resolve, reject) => loads.push({ id, resolve, reject }));
     },
-    saveDrawing: async (d: DrawingInput) => {
-      calls.push(`save ${d.id} ${JSON.stringify(Object.keys(d).sort())}`);
+    saveDrawings: async (list: DrawingInput[]) => {
+      calls.push(`save ${list.map((d) => d.id).join(",")} ${JSON.stringify(Object.keys(list[0]!).sort())}`);
       await wait();
       // At another scale the engine rescales (here: one decimal more, ×10).
-      const body = d.priceScale === scale || d.body.kind !== "hline" ? d.body : { ...d.body, p: d.body.p * 10 };
-      return { ...d, priceScale: scale, body, updatedAt: 9 };
+      return list.map((d) => {
+        const body = d.priceScale === scale || d.body.kind !== "hline" ? d.body : { ...d.body, p: d.body.p * 10 };
+        return { ...d, priceScale: scale, body, updatedAt: 9 };
+      });
     },
-    deleteDrawing: async (id: string) => {
-      calls.push(`delete ${id}`);
+    deleteDrawings: async (ids: string[]) => {
+      calls.push(`delete ${ids.join(",")}`);
       await wait();
     },
     getPositionOutcomes: (_id: InstrumentId, tf: TimeframeCode, positions: { id: string; position: PositionBody }[]) =>
@@ -352,6 +355,43 @@ describe("DrawingController", () => {
     expect(c.error).toEqual({ kind: "save", message: "locked" });
     void c.open(ETH);
     expect(c.error).toBeNull();
+  });
+
+  it("stores a group step in one call, and a failed one reloads what is stored and shows why", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const b = fakeBackend([]);
+    const s = fakeSurface();
+    const c = new DrawingController(b.backend, () => {});
+    c.attach(s.surface);
+    void c.open(BTC);
+    await flush();
+    const [x, y] = [drawing("x", 1), drawing("y", 2)];
+    b.loads[0]!.resolve([x, y]);
+    await flush();
+    s.commit([
+      { before: x, after: { ...x, body: { kind: "hline", p: 11 } } },
+      { before: y, after: { ...y, body: { kind: "hline", p: 12 } } },
+    ]);
+    await flush();
+    expect(b.calls.at(-1)).toMatch(/^save x,y /);
+    b.pending[0]!.resolve();
+    await flush();
+
+    s.commit([
+      { before: x, after: null },
+      { before: y, after: null },
+    ]);
+    await flush();
+    expect(b.calls.at(-1)).toBe("delete x,y");
+    expect(b.calls.filter((l) => l.startsWith("delete"))).toHaveLength(1);
+    b.pending[1]!.reject({ code: "other", message: "disk full" });
+    await flush();
+    expect(c.error).toEqual({ kind: "save", message: "disk full" });
+    expect(b.calls.at(-1)).toBe("get BTCUSDT");
+    // Nothing of the step was stored: the chart gets both back.
+    b.loads[1]!.resolve([x, y]);
+    await flush();
+    expect(s.sets.at(-1)).toEqual([x, y]);
   });
 
   it("mirrors the style popover and passes its actions to the chart", () => {

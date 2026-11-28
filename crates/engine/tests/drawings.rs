@@ -392,3 +392,99 @@ async fn position_outcomes_in_a_replay_see_only_the_revealed_bars() {
         "the cache again after the replay"
     );
 }
+
+#[tokio::test]
+async fn save_drawings_stores_all_or_nothing() {
+    let f = Fixture::new();
+    f.engine
+        .save_drawing(drawing("a", DrawingBody::Hline { p: 1 }))
+        .await
+        .unwrap();
+    // The last one breaks a rule: nothing is written, not even the first two.
+    let bad = drawing(
+        "c",
+        DrawingBody::Position(PositionBody {
+            stop: 13_000,
+            ..long(0, H)
+        }),
+    );
+    let batch = vec![
+        drawing("a", DrawingBody::Hline { p: 2 }),
+        drawing("b", DrawingBody::Hline { p: 3 }),
+        bad,
+    ];
+    let err = f.engine.save_drawings(batch).await.unwrap_err();
+    assert!(
+        matches!(&err, EngineError::Drawing(m) if m.contains("stop < entry < take")),
+        "{err:?}"
+    );
+    let list = f.engine.drawings(&id("BTCUSDT")).await.unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].body, DrawingBody::Hline { p: 1 });
+
+    // An unknown pair anywhere in the batch refuses it too.
+    let mut elsewhere = drawing("d", DrawingBody::Hline { p: 4 });
+    elsewhere.instrument = id("NOPE");
+    let err = f
+        .engine
+        .save_drawings(vec![drawing("b", DrawingBody::Hline { p: 3 }), elsewhere])
+        .await
+        .unwrap_err();
+    assert!(matches!(err, EngineError::UnknownInstrument(_)), "{err:?}");
+    assert_eq!(f.engine.drawings(&id("BTCUSDT")).await.unwrap().len(), 1);
+
+    let saved = f
+        .engine
+        .save_drawings(vec![
+            drawing("a", DrawingBody::Hline { p: 2 }),
+            drawing("b", DrawingBody::Hline { p: 3 }),
+        ])
+        .await
+        .unwrap();
+    assert!(saved.iter().all(|d| d.updated_at == NOW));
+    assert_eq!(f.engine.drawings(&id("BTCUSDT")).await.unwrap(), saved);
+}
+
+#[tokio::test]
+async fn delete_drawings_checks_every_id_first() {
+    let f = Fixture::new();
+    f.engine
+        .save_drawings(vec![
+            drawing("a", DrawingBody::Hline { p: 1 }),
+            drawing("b", DrawingBody::Hline { p: 2 }),
+            drawing("c", DrawingBody::Hline { p: 3 }),
+        ])
+        .await
+        .unwrap();
+    let err = f
+        .engine
+        .delete_drawings(vec!["a".into(), "not ok".into()])
+        .await
+        .unwrap_err();
+    assert!(matches!(err, EngineError::Drawing(_)), "{err:?}");
+    assert_eq!(f.engine.drawings(&id("BTCUSDT")).await.unwrap().len(), 3);
+    f.engine
+        .delete_drawings(vec!["a".into(), "b".into(), "gone".into()])
+        .await
+        .unwrap();
+    let left = f.engine.drawings(&id("BTCUSDT")).await.unwrap();
+    assert_eq!(
+        left.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(),
+        ["c"]
+    );
+}
+
+#[tokio::test]
+async fn a_batch_has_at_most_as_many_drawings_as_a_pair_holds() {
+    let f = Fixture::new();
+    let many: Vec<Drawing> = (0..=2000)
+        .map(|i| drawing(&format!("d{i}"), DrawingBody::Hline { p: 1 }))
+        .collect();
+    let err = f.engine.save_drawings(many).await.unwrap_err();
+    assert!(
+        matches!(&err, EngineError::Drawing(m) if m.contains("at most 2000 drawings")),
+        "{err:?}"
+    );
+    let ids: Vec<String> = (0..=2000).map(|i| format!("d{i}")).collect();
+    assert!(f.engine.delete_drawings(ids).await.is_err());
+}

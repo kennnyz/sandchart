@@ -21,8 +21,11 @@ export interface Owner {
 }
 
 export interface StateListener {
-  /** A change to store; undo and redo come through here too. */
-  commit(change: DrawingChange): void;
+  /**
+   * The changes of one step to store, all or none (a group move or delete has several);
+   * undo and redo come through here too. A step only saves or only deletes.
+   */
+  commit(step: DrawingChange[]): void;
   /** The active tool changed (picked, placed, cancelled). */
   tool(id: ToolId | null): void;
 }
@@ -332,7 +335,7 @@ export class DrawingState {
 
   /**
    * Applies a step: the drawings it leaves become the selection unless they all were in it
-   * already; those it hides or deletes leave it. Each change goes to the listener to be stored.
+   * already; those it hides or deletes leave it. The step goes to the listener to be stored.
    */
   private apply(step: Step): void {
     const ids = new Set(step.map((c) => (c.after ?? c.before)!.id));
@@ -348,6 +351,6 @@ export class DrawingState {
     this.selection = shown.every((id) => kept.includes(id)) ? kept : shown;
     const h = this.hover;
     if (h && ids.has(h.id) && !after.some((d) => d.id === h.id && !d.hidden)) this.hover = null;
-    for (const c of step) this.listener.commit(c);
+    this.listener.commit([...step]);
   }
 }

@@ -962,6 +962,38 @@ test("cmd_box_selects_several_drawings_and_delete_removes_them_in_one_step", asy
   await storedCount(page, 3);
 });
 
+test("a_group_delete_of_many_drawings_is_one_write_and_one_undo", async ({ page }) => {
+  const plot = await openChart(page);
+  const cx = Math.round(plot.left + plot.width / 2);
+  const [hi, lo] = await levels(page, cx, [plot.top + plot.height * 0.2, plot.top + plot.height * 0.8].map(Math.round));
+  // 40 levels between the two placed ones.
+  await page.evaluate(
+    ([a, b]) => {
+      const all = JSON.parse(localStorage.getItem("sandchart.mock.drawings")!) as { id: string; z: number; body: { p: number } }[];
+      const seed = all[0]!;
+      const n = 40;
+      const list = Array.from({ length: n }, (_, i) => ({ ...seed, id: `many-${i}`, z: i, body: { kind: "hline", p: Math.round(b! + ((a! - b!) * i) / (n - 1)) } }));
+      localStorage.setItem("sandchart.mock.drawings", JSON.stringify(list));
+    },
+    [hi!.body.p!, lo!.body.p!],
+  );
+  await page.reload();
+  await expect(page.getByTestId("legend")).toHaveAttribute("data-time", /^\d+$/);
+  await expect.poll(async () => (await debug(page)).drawingsPainted).toBe(40);
+  const writes = () => page.evaluate(() => (window as unknown as { __sandchartMock: { drawingWrites: number } }).__sandchartMock.drawingWrites);
+
+  await cmdDrag(page, [cx - 300, plot.top + plot.height * 0.15], [cx - 260, plot.top + plot.height * 0.85]);
+  expect((await debug(page)).selectedDrawings).toHaveLength(40);
+  const before = await writes();
+  await page.keyboard.press("Delete");
+  await storedCount(page, 0);
+  expect(await writes()).toBe(before + 1);
+  await page.keyboard.press("ControlOrMeta+z");
+  await storedCount(page, 40);
+  expect(await writes()).toBe(before + 2);
+  await expect.poll(async () => (await debug(page)).drawingsPainted).toBe(40);
+});
+
 test("lock_from_the_menu_keeps_every_selected_drawing_in_place", async ({ page }) => {
   const plot = await openChart(page);
   const cx = Math.round(plot.left + plot.width / 2);

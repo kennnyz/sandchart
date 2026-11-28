@@ -137,7 +137,7 @@ export class Chart {
   private readonly ind: IndicatorFrame = { layers: [], offsets: [], tickMul: 1, priceH: 0, panes: [] };
   /** Plot height `ind.priceH` and the pane rows were laid out for; -1 forces a new layout. */
   private layoutH = -1;
-  private drawingCommitCb: ((c: DrawingChange) => void) | null = null;
+  private drawingCommitCb: ((step: DrawingChange[]) => void) | null = null;
   private drawingToolCb: ((id: ToolId | null) => void) | null = null;
   private drawingTextCb: ((edit: TextEdit | null) => void) | null = null;
   private drawingStyleCb: ((edit: StyleEdit | null) => void) | null = null;
@@ -155,7 +155,7 @@ export class Chart {
   private readonly drawings = new DrawingLayer({
     invalidate: () => this.invalidate(),
     invalidateOverlay: () => this.invalidateOverlay(),
-    commit: (c) => this.drawingCommitCb?.(c),
+    commit: (step) => this.drawingCommitCb?.(step),
     tool: (k) => this.drawingToolCb?.(k),
     text: (e) => this.drawingTextCb?.(e),
     style: (e) => this.drawingStyleCb?.(e),
@@ -456,7 +456,7 @@ export class Chart {
   }
 
   /** Every change of a drawing by the user, undo and redo included, to be stored. */
-  onDrawingCommit(cb: ((c: DrawingChange) => void) | null): void {
+  onDrawingCommit(cb: ((step: DrawingChange[]) => void) | null): void {
     this.drawingCommitCb = cb;
   }
 

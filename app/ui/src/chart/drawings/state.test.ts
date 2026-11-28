@@ -16,9 +16,19 @@ function setup() {
   const commits: DrawingChange[] = [];
   const tools: (ToolId | null)[] = [];
   let n = 0;
-  const s = new DrawingState({ commit: (ch) => commits.push(ch), tool: (k) => tools.push(k) }, () => `d${++n}`);
+  const steps: DrawingChange[][] = [];
+  const s = new DrawingState(
+    {
+      commit: (step) => {
+        steps.push(step);
+        commits.push(...step);
+      },
+      tool: (k) => tools.push(k),
+    },
+    () => `d${++n}`,
+  );
   s.setOwner({ instrument: BTC, priceScale: 2 });
-  return { s, commits, tools };
+  return { s, commits, steps, tools };
 }
 
 function stored(id: string, z: number, p = 50, locked = false): Drawing {
@@ -289,13 +299,15 @@ describe("several selected", () => {
   });
 
   it("deletes every selected drawing as one undo step and brings them all back", () => {
-    const { s, commits } = setup();
+    const { s, commits, steps } = setup();
     const a = stored("a", 1, 10);
     const l = stored("l", 2, 20, true);
     const c3 = stored("c", 3, 30);
     s.reset([a, l, c3]);
     s.setSelection(["a", "l"]);
     expect(s.deleteSelected()).toBe(true);
+    // One step reaches the listener whole, to be stored in one write.
+    expect(steps).toEqual([[{ before: a, after: null }, { before: l, after: null }]]);
     expect(s.drawings).toEqual([c3]);
     expect(s.selection).toEqual([]);
     expect(commits).toEqual([
