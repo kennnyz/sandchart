@@ -206,6 +206,51 @@ test("replay_picking_cancels_with_esc_and_starts_by_date", async ({ page }) => {
   void plot;
 });
 
+test("replay_picking_pans_on_drag_zooms_on_wheel_and_picks_on_click", async ({ page }) => {
+  const plot = await openChart(page);
+  await page.getByTestId("replay-button").click();
+  const x = plot.left + plot.width * 0.5;
+  const y = plot.top + plot.height / 2;
+  /** Open time of the bar under (px, y). */
+  const barAt = async (px: number) => {
+    await page.mouse.move(px, y);
+    await nextFrame(page);
+    return Number(await page.getByTestId("legend").getAttribute("data-time"));
+  };
+  const before = await barAt(x);
+
+  // A drag pans the chart and starts nothing.
+  await page.mouse.down();
+  await page.mouse.move(x + 60, y, { steps: 6 });
+  await page.mouse.move(x + 150, y, { steps: 6 });
+  await page.mouse.up();
+  await expect(page.getByTestId("chart")).toHaveAttribute("data-replay", "picking");
+  expect(await barAt(x)).toBeLessThan(before);
+
+  // A drag that comes back to where it began is still a pan, not a pick.
+  await page.mouse.down();
+  await page.mouse.move(x + 40, y, { steps: 4 });
+  await page.mouse.move(x, y, { steps: 4 });
+  await page.mouse.up();
+  await expect(page.getByTestId("chart")).toHaveAttribute("data-replay", "picking");
+
+  // The wheel zooms while picking (around the pointer, so look away from it).
+  const left = plot.left + 40;
+  const unzoomed = await barAt(left);
+  await page.mouse.move(x, y);
+  await page.mouse.wheel(0, -400);
+  await expect.poll(() => barAt(left)).not.toBe(unzoomed);
+  await expect(page.getByTestId("chart")).toHaveAttribute("data-replay", "picking");
+
+  // A click with a little jitter picks the bar under the release.
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  const picked = await barAt(x + 2);
+  await page.mouse.up();
+  await expect(page.getByTestId("chart")).toHaveAttribute("data-replay", "on");
+  await expect.poll(() => lastBar(page)).toBe(picked);
+});
+
 test("replay_indicators_and_drawings_see_only_revealed_bars", async ({ page }) => {
   const plot = await openChart(page, "?mockLatency=5&mockIndicators=sma");
   await expect.poll(async () => (await debug(page)).indicatorLastTimes[0]).toBe(await lastBar(page));

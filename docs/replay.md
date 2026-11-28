@@ -19,7 +19,7 @@ Replay walks through history bar by bar, as if it were live: you see a bar, deci
 1. Open the pair and timeframe you want to practise on.
 2. Click **Replay** in the top bar. A bar under the chart says what to do next.
 3. Pick the first bar:
-   - **click a bar** on the chart: a line marks the bar under the mouse and dims everything after it; or
+   - **click a bar** on the chart: a line marks the bar under the mouse and dims everything after it. The start is picked when the button comes up; a press that moves 4 px or more pans the chart instead, and the wheel zooms, so you can look for the bar first; or
    - **pick a date**: the replay starts at the first bar of that day (UTC). The date can be anywhere in the history the chart has loaded; scroll left first to load older bars.
 
    Esc or the **X** at the right end puts it away without starting.

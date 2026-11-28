@@ -101,7 +101,20 @@ export interface AlertMenuAt {
   y: number;
 }
 
-type Drag = { kind: "pan" | "price" | "drawing" | "replay"; pointerId: number; lastX: number; lastY: number };
+/**
+ * A press being dragged. `pick`: where a press began while a replay start is picked; it
+ * picks the bar on release unless the pointer moved `PICK_SLOP` px or more (a pan).
+ */
+type Drag = {
+  kind: "pan" | "price" | "drawing" | "replay";
+  pointerId: number;
+  lastX: number;
+  lastY: number;
+  pick?: { x: number; y: number } | null;
+};
+
+/** A press that moves this far (CSS px) before release pans instead of picking a replay start. */
+export const PICK_SLOP = 4;
 
 /**
  * Candlestick chart on two stacked Canvas 2D layers: main pane, price axis on the right,
@@ -909,11 +922,12 @@ export class Chart {
     const priceH = this.priceH();
     const onPriceAxis = p.x >= plotW && p.y < priceH;
     if (this.pickCb) {
-      // Picking a replay start: a click on a bar picks it; nothing else happens.
+      // Picking a replay start: the press pans like any other, and picks the bar on release
+      // when it did not move (onPointerUp).
       this.mouse = p;
       this.updateCrosshair();
-      const i = this.crosshairIndex;
-      if (i !== null && p.y < this.plot().plotH) this.pickCb(this.series.time[i]!);
+      this.drag = { kind: "pan", pointerId: e.pointerId, lastX: e.clientX, lastY: e.clientY, pick: p };
+      this.canvas.setPointerCapture(e.pointerId);
       return;
     }
     // The "+" opens its menu: no pan, no drawing, and focus stays where it was.
@@ -976,6 +990,16 @@ export class Chart {
       return;
     }
     if (d && d.pointerId === e.pointerId) {
+      if (d.pick) {
+        // Picking a replay start: a press that stays within the slop is a click, not a pan.
+        if (Math.hypot(p.x - d.pick.x, p.y - d.pick.y) < PICK_SLOP) {
+          this.updateCrosshair();
+          this.invalidateOverlay();
+          return;
+        }
+        d.pick = null;
+        this.canvas.style.cursor = "grabbing";
+      }
       const dx = e.clientX - d.lastX;
       const dy = e.clientY - d.lastY;
       d.lastX = e.clientX;
@@ -1009,10 +1033,17 @@ export class Chart {
 
   private readonly onPointerUp = (e: PointerEvent): void => {
     if (this.drag?.pointerId !== e.pointerId) return;
-    const kind = this.drag.kind;
+    const { kind, pick } = this.drag;
     this.drag = null;
     if (this.canvas.hasPointerCapture(e.pointerId)) this.canvas.releasePointerCapture(e.pointerId);
     const p = this.local(e);
+    if (pick && this.pickCb && e.type !== "pointercancel" && Math.hypot(p.x - pick.x, p.y - pick.y) < PICK_SLOP) {
+      // A click (no drag) while picking a replay start: the bar under it is the start.
+      this.mouse = p;
+      this.updateCrosshair();
+      const i = this.crosshairIndex;
+      if (i !== null && p.y < this.plot().plotH) this.pickCb(this.series.time[i]!);
+    }
     if (kind === "replay") {
       // A cancelled pointer leaves the levels as they were.
       const levels = e.type === "pointercancel" ? (this.replay.endDrag(), null) : this.replay.endDrag();
