@@ -89,6 +89,8 @@ export interface MockOptions {
   indicatorError?: boolean;
   /** Every `setChartIndicators` rejects with "mock: cannot save". */
   indicatorSaveError?: boolean;
+  /** Every `saveDrawing` and `deleteDrawing` rejects with "mock: cannot save the drawing". */
+  drawingSaveError?: boolean;
   /** `listIndicators` reports the installed module `test.broken` as failed to load, and a service error. */
   indicatorProblems?: boolean;
   /** The first this many `listIndicators` calls reject with "mock: engine starting". */
@@ -745,6 +747,7 @@ export function createMockBackend(opts: MockOptions): MockBackend {
       await delay();
       const instrument = SYMBOLS.find((i) => i.id.source === d.instrument.source && i.id.symbol === d.instrument.symbol);
       if (!instrument) throw problem(`unknown instrument ${d.instrument.source}/${d.instrument.symbol}`);
+      if (opts.drawingSaveError) throw problem("mock: cannot save the drawing");
       const bad = mockValidateDrawing(d);
       if (bad) throw problem(bad);
       const same = (o: Drawing) => o.instrument.source === d.instrument.source && o.instrument.symbol === d.instrument.symbol;
@@ -763,6 +766,7 @@ export function createMockBackend(opts: MockOptions): MockBackend {
     async deleteDrawing(id) {
       await delay();
       if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw problem("a drawing id must be 1 to 64 characters from A-Z, a-z, 0-9, _ and -");
+      if (opts.drawingSaveError) throw problem("mock: cannot save the drawing");
       if (drawings.delete(id)) keepDrawings();
     },
 

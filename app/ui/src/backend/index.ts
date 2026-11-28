@@ -43,7 +43,7 @@ if (inTauri) void resetSubscriptions();
  * (comma-separated symbols; empty for none), `mockIndicators` (comma-separated built-ins,
  * e.g. `sma,bollinger,rsi,macd`, put on the chart at start) and `mockIndicatorError=1`
  * (every indicator compute fails), `mockIndicatorSaveError=1` (saving the chart indicators
- * fails), `mockIndicatorLoadFailures` (that many indicator list calls fail first) and
+ * fails), `mockDrawingSaveError=1` (saving or deleting a drawing fails), `mockIndicatorLoadFailures` (that many indicator list calls fail first) and
  * `mockIndicatorProblems=1` (a module that failed to load and a service error), `mockUpdate` (the version
  * `checkUpdate` finds; `0.3.0` when only the next two are set), `mockUpdateError=check|install` (every check
  * fails, or every download fails halfway), `mockUpdateBlocker=translocated|not_appimage` (the update cannot be
@@ -93,6 +93,7 @@ function browserMock(): Backend {
     indicators: (q.get("mockIndicators") ?? "").split(",").filter(Boolean),
     indicatorError: q.get("mockIndicatorError") === "1",
     indicatorSaveError: q.get("mockIndicatorSaveError") === "1",
+    drawingSaveError: q.get("mockDrawingSaveError") === "1",
     indicatorLoadFailures: num("mockIndicatorLoadFailures"),
     indicatorProblems: q.get("mockIndicatorProblems") === "1",
     update,
