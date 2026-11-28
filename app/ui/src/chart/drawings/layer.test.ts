@@ -61,6 +61,7 @@ function drawing(body: DrawingBody, id = `d${n}`): Drawing {
     body,
     style: { color: 0, width: 1, dash: false },
     locked: false,
+    hidden: false,
     z: n,
     updatedAt: 0,
   };

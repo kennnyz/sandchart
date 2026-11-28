@@ -189,6 +189,7 @@ describe("mock backend", () => {
       body,
       style: { color: 2, width: 1, dash: false },
       locked: false,
+      hidden: false,
       z,
     });
     const long = (over: Partial<PositionBody> = {}): DrawingBody => ({
@@ -281,8 +282,8 @@ describe("mock backend", () => {
     });
 
     it("validates as Rust does: the shared fixture, with the same messages", () => {
-      type Case = { name: string; drawing: Omit<DrawingInput, "instrument" | "priceScale" | "locked">; error?: string };
-      const full = (c: Case): DrawingInput => ({ ...c.drawing, instrument: id, priceScale: 2, locked: false });
+      type Case = { name: string; drawing: Omit<DrawingInput, "instrument" | "priceScale" | "locked" | "hidden"> & { hidden?: boolean }; error?: string };
+      const full = (c: Case): DrawingInput => ({ ...c.drawing, instrument: id, priceScale: 2, locked: false, hidden: c.drawing.hidden ?? false });
       const ok = validDrawings.cases as Case[];
       const bad = invalidDrawings.cases as Case[];
       expect(ok.length).toBeGreaterThanOrEqual(10);
@@ -388,6 +389,7 @@ describe("mock alerts", () => {
     body: { kind: "hline", p },
     style: { color: 0, width: 1, dash: false },
     locked: false,
+    hidden: false,
     z: 0,
   });
 

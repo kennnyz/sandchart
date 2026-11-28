@@ -216,6 +216,8 @@ export interface DrawingInput {
   body: DrawingBody;
   style: DrawingStyle;
   locked: boolean;
+  /** Not painted or hit-tested until the user shows it again. */
+  hidden: boolean;
   /** Paint order, lowest first. */
   z: number;
 }
