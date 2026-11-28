@@ -25,8 +25,9 @@ const _: () = assert!(MAX_ALERT_PAIRS + 2 <= MAX_LIVE_STREAMS);
 /// or low of the bar is close to the moment it happened.
 const ALERT_TF: Timeframe = Timeframe::M1;
 
-/// How soon a stream that could not be opened is tried again.
-const RETRY: Duration = Duration::from_secs(5);
+/// How often the service looks for alerts another process (the MCP server) wrote, and
+/// tries again a stream that could not be opened.
+const CHECK: Duration = Duration::from_secs(2);
 
 const EVENT_BUFFER: usize = 64;
 
@@ -445,24 +446,38 @@ impl Engine {
     /// pair with an active one. Runs until the engine's runtime stops; spawn it once.
     pub async fn run_alerts(&self) {
         let hub = Arc::clone(&self.shared.alerts);
+        // Read first, so a write by another process during the first arming is not missed.
+        let mut seen = self.data_version().await;
         if let Err(e) = self.store_and_reload(|_| Ok(())).await {
             eprintln!("cannot arm the alerts: {e}");
         }
         let mut failing: HashSet<InstrumentId> = HashSet::new();
         loop {
             let notified = hub.wake.notified();
-            let retry = self.reconcile(&mut failing);
-            if retry {
-                let _ = tokio::time::timeout(RETRY, notified).await;
-            } else {
-                notified.await;
+            self.reconcile(&mut failing);
+            let _ = tokio::time::timeout(CHECK, notified).await;
+            // Another process may have added, changed or removed alerts or their drawings.
+            let version = self.data_version().await;
+            if version != seen {
+                seen = version;
+                match self.store_and_reload(|_| Ok(())).await {
+                    Ok(()) => self.shared.alerts.send(AlertEvent::Changed),
+                    Err(e) => eprintln!("cannot re-arm the alerts: {e}"),
+                }
             }
         }
     }
 
+    /// The store's `data_version`, `None` when it cannot be read.
+    async fn data_version(&self) -> Option<u32> {
+        blocking(&self.shared.store, |s| s.data_version())
+            .await
+            .ok()
+    }
+
     /// Opens the engine's own stream for every armed pair without one and closes the ones
-    /// no longer needed. Returns whether a stream could not be opened (retry later).
-    fn reconcile(&self, failing: &mut HashSet<InstrumentId>) -> bool {
+    /// no longer needed. A stream that cannot be opened is tried again on the next call.
+    fn reconcile(&self, failing: &mut HashSet<InstrumentId>) {
         let hub = &self.shared.alerts;
         let (start, stop) = {
             let mut st = hub.state();
@@ -490,7 +505,6 @@ impl Engine {
             task.abort();
         }
         failing.retain(|id| start.contains(id));
-        let mut retry = false;
         for id in start {
             match self.open_live(&id, ALERT_TF, true) {
                 Ok(mut handle) => {
@@ -504,7 +518,6 @@ impl Engine {
                     hub.state().own.insert(id, task);
                 }
                 Err(e) => {
-                    retry = true;
                     if failing.insert(id.clone()) {
                         eprintln!(
                             "no live stream for the alerts of {}/{}: {e}",
@@ -514,7 +527,6 @@ impl Engine {
                 }
             }
         }
-        retry
     }
 }
 

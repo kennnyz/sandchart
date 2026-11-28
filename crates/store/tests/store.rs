@@ -774,3 +774,22 @@ fn two_processes_opening_an_old_file_migrate_it_once() {
         .unwrap();
     assert_eq!(version, 4);
 }
+
+#[test]
+fn data_version_changes_only_with_another_connections_commits() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sandchart.db");
+    let mut app = Store::open(&path).unwrap();
+    let mut other = Store::open(&path).unwrap();
+    let v0 = app.data_version().unwrap();
+    app.upsert_instruments(&[instrument("BTCUSDT")]).unwrap();
+    assert_eq!(
+        app.data_version().unwrap(),
+        v0,
+        "its own writes do not count"
+    );
+    other.upsert_drawing(&drawing("a", "BTCUSDT", 0)).unwrap();
+    let v1 = app.data_version().unwrap();
+    assert_ne!(v1, v0);
+    assert_eq!(app.data_version().unwrap(), v1);
+}

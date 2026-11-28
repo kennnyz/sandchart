@@ -651,3 +651,28 @@ async fn deleting_an_alert_disarms_it() {
     assert!(f.engine.alerts().await.unwrap().is_empty());
     none_fired(&mut f.events).await;
 }
+
+#[tokio::test]
+async fn alerts_another_process_sets_or_deletes_are_armed_or_disarmed() {
+    let f = fixture(&["BTCUSDT"]).await;
+    // The MCP server: a second engine on the same data folder, without the alert service.
+    let other = Engine::open_secondary(
+        f._dir.path(),
+        None,
+        vec![f.provider.clone() as Arc<dyn Provider>],
+    )
+    .unwrap();
+    other
+        .set_alert(price_alert("a", "BTCUSDT", 100, Direction::Cross))
+        .await
+        .unwrap();
+    until("the app arms the other process's alert", || {
+        f.provider.open("BTCUSDT") == [Timeframe::M1]
+    })
+    .await;
+    other.delete_alert("a").await.unwrap();
+    until("the app disarms it", || {
+        f.provider.open("BTCUSDT").is_empty()
+    })
+    .await;
+}

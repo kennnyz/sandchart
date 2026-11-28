@@ -132,6 +132,14 @@ impl Store {
         Ok(Store { conn })
     }
 
+    /// A number that changes when another connection (another process) commits to the
+    /// file, and never for this store's own writes.
+    pub fn data_version(&self) -> Result<u32, StoreError> {
+        Ok(self
+            .conn
+            .pragma_query_value(None, "data_version", |row| row.get(0))?)
+    }
+
     /// Reverts migrations until the schema version is `version` (0 removes every table).
     pub fn migrate_down_to(&mut self, version: u32) -> Result<(), StoreError> {
         migrations::down_to(&mut self.conn, version)
