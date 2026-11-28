@@ -143,34 +143,26 @@ struct Fetched {
     warning: Option<String>,
 }
 
-/// A JSON parameter value as the module's spec wants it.
+/// A JSON parameter value as the module's spec wants it (an integer is a float for a float
+/// parameter); one of another type passes as is, and the engine's check names the problem.
 fn param_value(meta: &Meta, name: &str, v: &Value) -> Result<ParamValue, String> {
-    let Some(spec) = meta.params.iter().find(|p| p.id == name) else {
-        let names: Vec<&str> = meta.params.iter().map(|p| p.id.as_str()).collect();
-        return Err(format!(
-            "{} has no parameter {name:?}; its parameters are: {}",
-            meta.id,
-            if names.is_empty() {
-                "none".to_owned()
-            } else {
-                names.join(", ")
-            }
-        ));
+    let kind = meta.params.iter().find(|p| p.id == name).map(|p| &p.kind);
+    let as_kind = match kind {
+        Some(ParamKind::Int { .. }) => v.as_i64().map(ParamValue::Int),
+        Some(ParamKind::Float { .. }) => v.as_f64().map(ParamValue::Float),
+        _ => None,
     };
-    let value = match &spec.kind {
-        ParamKind::Int { .. } => v.as_i64().map(ParamValue::Int),
-        ParamKind::Float { .. } => v.as_f64().map(ParamValue::Float),
-        ParamKind::Boolean => v.as_bool().map(ParamValue::Boolean),
-        ParamKind::Choice(_) => v.as_str().map(|s| ParamValue::Choice(s.to_owned())),
+    let as_is = || match v {
+        Value::Bool(b) => Some(ParamValue::Boolean(*b)),
+        Value::String(s) => Some(ParamValue::Choice(s.clone())),
+        Value::Number(n) => n
+            .as_i64()
+            .map(ParamValue::Int)
+            .or_else(|| n.as_f64().map(ParamValue::Float)),
+        _ => None,
     };
-    value.ok_or_else(|| {
-        let want = match spec.kind {
-            ParamKind::Int { .. } => "an integer",
-            ParamKind::Float { .. } => "a number",
-            ParamKind::Boolean => "true or false",
-            ParamKind::Choice(_) => "a string",
-        };
-        format!("parameter {name:?} of {} must be {want}, not {v}", meta.id)
+    as_kind.or_else(as_is).ok_or_else(|| {
+        format!("parameter {name:?} must be a number, true or false, or a string, not {v}")
     })
 }
 
@@ -427,6 +419,10 @@ impl Sandchart {
             .iter()
             .map(|(k, v)| Ok((k.clone(), param_value(meta, k, v)?)))
             .collect::<Result<Vec<_>, String>>()?;
+        self.engine
+            .check_indicator_params(&meta.id, &params)
+            .await
+            .map_err(err)?;
         let inst = self.instrument(&p.source, &p.symbol).await?;
         let f = self.fetch(&inst.id, tf, last_n, None, None).await?;
         let (times, computed) = self

@@ -864,6 +864,33 @@ impl Engine {
         Ok(out)
     }
 
+    /// Checks `params` for [`Engine::compute_indicator`] without computing anything, so a
+    /// caller can refuse them before it fetches candles.
+    pub async fn check_indicator_params(
+        &self,
+        module_id: &str,
+        params: &[(String, ParamValue)],
+    ) -> Result<(), EngineError> {
+        self.resolve_strict(module_id, params).await.map(|_| ())
+    }
+
+    /// The loaded module and `params` resolved against it; a parameter it does not have or
+    /// a value that does not fit is an error.
+    async fn resolve_strict(
+        &self,
+        module_id: &str,
+        params: &[(String, ParamValue)],
+    ) -> Result<(Loaded, Vec<(String, ParamValue)>), EngineError> {
+        let svc = &self.indicators;
+        svc.wait_ready().await?;
+        let loaded = svc
+            .loaded(module_id)
+            .ok_or_else(|| EngineError::Indicator(format!("no indicator {module_id:?}")))?;
+        let resolved = loaded.module.resolve_params(params);
+        check_params(loaded.module.meta(), params, &resolved)?;
+        Ok((loaded, resolved))
+    }
+
     /// Computes one indicator with `params` over the same bars as the chart (every cached
     /// bar of `(id, tf)` up to [`MAX_INDICATOR_BARS`], or a replay's revealed bars) and
     /// keeps the last `last_n`. Returns the open times of the kept bars with the result.
@@ -877,13 +904,7 @@ impl Engine {
         params: Vec<(String, ParamValue)>,
         last_n: usize,
     ) -> Result<(Vec<i64>, Computed), EngineError> {
-        let svc = &self.indicators;
-        svc.wait_ready().await?;
-        let loaded = svc
-            .loaded(module_id)
-            .ok_or_else(|| EngineError::Indicator(format!("no indicator {module_id:?}")))?;
-        let resolved = loaded.module.resolve_params(&params);
-        check_params(loaded.module.meta(), &params, &resolved)?;
+        let (loaded, resolved) = self.resolve_strict(module_id, &params).await?;
 
         let bars = match self.shared.replay_bars(id, tf) {
             Some(r) => {

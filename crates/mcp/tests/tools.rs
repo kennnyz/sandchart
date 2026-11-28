@@ -447,7 +447,22 @@ async fn indicator_requests_are_checked() {
             run("builtin.sma", json!({ "period": "5" }), json!(5)),
         )
         .await;
-    assert_contains(&e, "must be an integer");
+    assert_contains(
+        &e,
+        "parameter \"period\" of builtin.sma: the choice \"5\" does not fit an integer in 1..=",
+    );
+    let e = h
+        .fail(
+            "compute_indicator",
+            run("builtin.sma", json!({ "period": [5] }), json!(5)),
+        )
+        .await;
+    assert_eq!(
+        e,
+        "parameter \"period\" must be a number, true or false, or a string, not [5]"
+    );
+    // Rejected before any candle is fetched.
+    assert_eq!(h.requests("/api/v3/klines").await, 0);
     let e = h
         .fail(
             "compute_indicator",
@@ -582,7 +597,8 @@ async fn a_position_resolves_over_the_candles_fetched_back_to_its_entry() {
         )
         .await;
     assert_eq!(e, "a long position needs stop < entry < take");
-    let mut wrong = json!({ "symbol": "BTCUSDT", "timeframe": "1h", "priceScale": 1, "position": position });
+    let mut wrong =
+        json!({ "symbol": "BTCUSDT", "timeframe": "1h", "priceScale": 1, "position": position });
     let e = h.fail("position_outcome", wrong.take()).await;
     assert_contains(&e, "priceScale must be 2");
 }
@@ -715,7 +731,10 @@ async fn alerts_are_set_listed_and_deleted() {
                     "direction": "above" }),
         )
         .await;
-    assert_contains(&e, "priceScale must be 2, the price scale of binance/BTCUSDT");
+    assert_contains(
+        &e,
+        "priceScale must be 2, the price scale of binance/BTCUSDT",
+    );
 
     h.call(
         "save_drawing",
@@ -954,9 +973,7 @@ async fn a_position_is_resolved_from_its_end_back_and_refused_past_5000_bars() {
 async fn every_price_of_a_drawing_comes_with_its_decimal_and_saves_back_as_it_is() {
     let h = harness().await;
     let pt = |t: i64, p: i64| json!({ "t": T0 + t * H, "p": p });
-    let save = |body: Value| {
-        json!({ "symbol": "BTCUSDT", "priceScale": 2, "body": body })
-    };
+    let save = |body: Value| json!({ "symbol": "BTCUSDT", "priceScale": 2, "body": body });
     let cases = [
         (
             json!({ "kind": "trend", "a": pt(0, 10_000), "b": pt(1, 10_150),
