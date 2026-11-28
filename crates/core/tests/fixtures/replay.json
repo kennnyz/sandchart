@@ -173,6 +173,32 @@
       "current": 4,
       "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 130}, {"kind": "edit", "bar": 2}],
       "error": "command 2: an edit must set the stop or the take"
+    },
+    {
+      "name": "long stop gap: a bar opening under the stop fills at its open",
+      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 102, 98, 100], [3000, 85, 88, 80, 86], [4000, 86, 87, 85, 86]],
+      "start": 1,
+      "current": 3,
+      "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120}],
+      "expect": {
+        "trades": [
+          {"side": "long", "entryBar": 1, "entryTime": 2000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitBar": 2, "exitTime": 3000, "exitPrice": 85, "reason": "stop", "ambiguous": false, "r": -1.5}
+        ],
+        "stats": {"count": 1, "wins": 0, "losses": 1, "winRate": 0, "totalR": -1.5, "averageR": -1.5, "profitFactor": 0, "maxDrawdownR": 1.5, "longestLosingStreak": 1}
+      }
+    },
+    {
+      "name": "short take gap: a bar opening under the take fills at its open",
+      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 101, 99, 100], [3000, 80, 84, 78, 82], [4000, 82, 83, 81, 82]],
+      "start": 1,
+      "current": 3,
+      "commands": [{"kind": "open", "bar": 1, "side": "short", "stop": 110, "take": 85}],
+      "expect": {
+        "trades": [
+          {"side": "short", "entryBar": 1, "entryTime": 2000, "entryPrice": 100, "initialStop": 110, "stop": 110, "take": 85, "exitBar": 2, "exitTime": 3000, "exitPrice": 80, "reason": "take", "ambiguous": false, "r": 2}
+        ],
+        "stats": {"count": 1, "wins": 1, "losses": 0, "winRate": 1, "totalR": 2, "averageR": 2, "profitFactor": null, "maxDrawdownR": 0, "longestLosingStreak": 0}
+      }
     }
   ],
   "files": [

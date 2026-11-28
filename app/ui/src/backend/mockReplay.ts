@@ -63,7 +63,11 @@ function advance(t: Running, candles: MockCandle[], to: number): ReplayTrade | n
   );
   if (out.exitTime === null || out.status === "open") return null;
   const bar = from + bars.findIndex((c) => c.time >= out.exitTime!);
-  return out.status === "stop" ? finish(t, candles, bar, t.stop, "stop", out.ambiguous) : finish(t, candles, bar, t.take, "take", false);
+  // A bar that opens beyond the level (a gap) fills at its open.
+  const open = candles[bar]!.open;
+  const long = t.side === "long";
+  if (out.status === "stop") return finish(t, candles, bar, long ? Math.min(t.stop, open) : Math.max(t.stop, open), "stop", out.ambiguous);
+  return finish(t, candles, bar, long ? Math.max(t.take, open) : Math.min(t.take, open), "take", false);
 }
 
 function checkLevels(side: Side, price: number, stop: number, take: number): string | null {

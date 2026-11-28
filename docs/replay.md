@@ -74,13 +74,13 @@ Closed trades stay on the chart as an entry dot and an exit dot joined by a dash
 ## Fills and R
 
 - **Opening** fills at the close of the current bar.
-- **Stop and take** are checked from the next bar on. A long is stopped when a bar's low reaches the stop and takes profit when a bar's high reaches the take; a short is the mirror image. The trade fills exactly at the stop or take price.
+- **Stop and take** are checked from the next bar on. A long is stopped when a bar's low reaches the stop and takes profit when a bar's high reaches the take; a short is the mirror image. The trade fills at the stop or take price, or at the bar's open when the bar opens beyond it (a gap): a long whose stop is at 90 and whose next bar opens at 85 fills at 85.
 - **A bar that touches both the stop and the take counts as a stop**, marked "?" on the chart: one bar alone cannot say which came first. This is the same rule as for position drawings; replay on a lower timeframe to see the order.
 - **Close trade** fills at the close of the current bar.
 - An edit of the stop or take applies from the next bar.
 - There are no fees and no slippage.
 
-**R** is the result measured in units of the first risk: (exit − entry) / (entry − stop at entry). It is measured against the stop the trade was **opened** with, so moving the stop later does not change what 1 R is. A take at 2 R is +2.0R; a stop at the first stop is −1.0R; a stop moved to the entry closes at 0.0R.
+**R** is the result measured in units of the first risk: (exit − entry) / (entry − stop at entry). It is measured against the stop the trade was **opened** with, so moving the stop later does not change what 1 R is. A take at 2 R is +2.0R; a stop at the first stop is −1.0R (more when a gap opens through it); a stop moved to the entry closes at 0.0R.
 
 ## Results
 

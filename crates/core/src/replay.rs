@@ -186,9 +186,14 @@ impl Running {
         );
         let exit_time = out.exit_time?;
         let bar = from + candles[from..=to].partition_point(|c| c.open_time < exit_time);
+        // A bar that opens beyond the level (a gap) fills at its open, not at the level.
+        let open = candles[bar].open;
+        let long = self.side == Side::Long;
         let (price, reason) = match out.status {
-            Status::Stop => (self.stop, ExitReason::Stop),
-            Status::Take => (self.take, ExitReason::Take),
+            Status::Stop if long => (self.stop.min(open), ExitReason::Stop),
+            Status::Stop => (self.stop.max(open), ExitReason::Stop),
+            Status::Take if long => (self.take.max(open), ExitReason::Take),
+            Status::Take => (self.take.min(open), ExitReason::Take),
             Status::Open => return None,
         };
         Some(self.finish(candles, bar, price, reason, out.ambiguous))
@@ -218,8 +223,9 @@ fn check_levels(side: Side, price: i64, stop: i64, take: i64) -> Result<(), Stri
 /// close of their bar; the first one that is not is reported (numbered from 1).
 ///
 /// Rules (ADR 0005): one trade at a time; open and close fill at the close of their bar;
-/// stop and take are checked from the next bar on, like a position drawing; an edit
-/// applies from the next bar. Commands at a bar come after that bar's hit check.
+/// stop and take are checked from the next bar on, like a position drawing, and fill at
+/// their level, or at the bar's open when it opens beyond the level; an edit applies from
+/// the next bar. Commands at a bar come after that bar's hit check.
 pub fn simulate(
     candles: &[Candle],
     start: u32,
