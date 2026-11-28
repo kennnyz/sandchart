@@ -1,6 +1,7 @@
 import {
   toProblem,
   type Backend,
+  type CandleColumns,
   type Candles,
   type Instrument,
   type InstrumentId,
@@ -8,6 +9,7 @@ import {
   type LiveEvent,
   type Problem,
   type ProblemCode,
+  type ReplayState,
   type TimeframeCode,
 } from "../backend/types";
 
@@ -44,6 +46,8 @@ export interface SessionState {
   problem: SessionProblem | null;
   /** Bumped on every change of the candles, so the legend re-reads them. */
   version: number;
+  /** The chart shows a replay's revealed bars: no live updates, no older pages. */
+  replay: boolean;
 }
 
 /** Seconds before each retry after consecutive failures; the last one repeats. */
@@ -82,6 +86,7 @@ export class ChartSession {
     instrument: null,
     problem: null,
     version: 0,
+    replay: false,
   };
 
   constructor(
@@ -98,8 +103,43 @@ export class ChartSession {
   async open(id: InstrumentId, tf: TimeframeCode): Promise<void> {
     const gen = this.reset();
     this.chart.clear();
-    this.set({ id, tf, status: "loading", instrument: null, problem: null, version: this.state.version + 1 });
+    this.set({ id, tf, status: "loading", instrument: null, problem: null, version: this.state.version + 1, replay: false });
     await this.loadLatest(gen);
+  }
+
+  /**
+   * Shows a replay's revealed bars as the whole chart, in place of the live chart: the live
+   * stream and every retry stop, and no older page is asked for (`open` goes back to live).
+   */
+  showReplay(st: ReplayState): void {
+    this.reset();
+    this.chart.setData({ instrument: st.instrument, ...st.bars, atHistoryStart: false, warning: null });
+    this.set({
+      id: st.instrument.id,
+      tf: st.tf,
+      status: "ready",
+      instrument: st.instrument,
+      problem: null,
+      version: this.state.version + 1,
+      replay: true,
+    });
+  }
+
+  /** Appends newly revealed replay bars. */
+  appendReplay(bars: CandleColumns): void {
+    if (!this.state.replay) return;
+    for (let i = 0; i < bars.time.length; i++) {
+      this.chart.updateLast({
+        time: bars.time[i]!,
+        open: bars.open[i]!,
+        high: bars.high[i]!,
+        low: bars.low[i]!,
+        close: bars.close[i]!,
+        volume: bars.volume[i]!,
+        closed: true,
+      });
+    }
+    this.bump();
   }
 
   /** Loads the page before the first candle; `Chart.onNeedOlder` calls it. */
@@ -107,7 +147,8 @@ export class ChartSession {
     const gen = this.gen;
     const { id, tf } = this.state;
     const first = this.chart.candle(0);
-    if (!id || !first || this.olderInFlight) return;
+    // A replay has only its context before the start: nothing older to load.
+    if (!id || !first || this.olderInFlight || this.state.replay) return;
     this.olderInFlight = true;
     try {
       const older = await this.backend.getCandles(id, tf, first.time);

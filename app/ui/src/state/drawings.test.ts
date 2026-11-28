@@ -594,4 +594,27 @@ describe("position outcomes", () => {
     c.candles(ETH, "1h", 0, 100 * H);
     expect(b.resolves).toHaveLength(1);
   });
+
+  it("drops every outcome, final ones too, when a replay replaces the bars", async () => {
+    const { b, s, c } = await loaded([drawing("p1", 0, BTC, pos()), drawing("p2", 0, BTC, pos(80))]);
+    c.candles(BTC, "1h", 0, 100 * H);
+    // An answer over the live bars is still on its way when the replay starts.
+    c.resetOutcomes();
+    expect(s.outcomes.at(-1)).toEqual(new Map());
+    b.resolves[0]!.resolve([
+      { id: "p1", outcome: TAKE },
+      { id: "p2", outcome: STOP },
+    ]);
+    await flush();
+    expect(s.outcomes.at(-1)).toEqual(new Map());
+    // The replay's bars (same first and last as before): both are asked again.
+    c.candles(BTC, "1h", 0, 100 * H);
+    expect(b.resolves[1]!.positions.map((p) => p.id)).toEqual(["p1", "p2"]);
+    b.resolves[1]!.resolve([
+      { id: "p1", outcome: OPEN },
+      { id: "p2", outcome: OPEN },
+    ]);
+    await flush();
+    expect(s.outcomes.at(-1)).toEqual(new Map([["p1", OPEN], ["p2", OPEN]]));
+  });
 });

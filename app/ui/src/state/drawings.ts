@@ -192,6 +192,18 @@ export class DrawingController {
     void this.refreshOutcomes(older);
   }
 
+  /**
+   * The chart's bars were replaced by others of the same timeframe (a replay started or
+   * ended): every outcome is dropped, also a final one, and answers still on the way are
+   * ignored. The next `candles` asks for all of them again.
+   */
+  resetOutcomes(): void {
+    this.outcomeToken++;
+    this.asked.clear();
+    this.bars = null;
+    this.setOutcomes(new Map());
+  }
+
   /** Picking a tool shows hidden drawings again: a new one should not be placed unseen. */
   toggleTool(id: ToolId): void {
     if (this.tool !== id) this.setHidden(false);
