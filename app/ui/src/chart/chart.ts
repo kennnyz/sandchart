@@ -7,9 +7,10 @@ import type { DrawingChange } from "./drawings/state";
 import { alignOffset, hasOwnPane, layoutPanes, overlayRange, paneRange, seriesValues, type IndicatorLayer } from "./indicators";
 import { draw, drawingTag, drawOverlay, plotSize, priceAxisWidth, RenderBuffers, type Crosshair, type FrameInput, type Series } from "./render";
 import type { IndicatorFrame } from "./renderIndicators";
+import { ReplayLayer, snapStart, type Level, type ReplayMarks } from "./replay";
 import { autoscale, PriceScale, type PriceScaleMode } from "./scale";
 import { AXIS_FONT, PRICE_AXIS_WIDTH, type ChartTheme } from "./theme";
-import { gestureZoomFactor, panBy, visibleRange, xToIndex, zoomAt, type Viewport } from "./viewport";
+import { gestureZoomFactor, indexToX, panBy, visibleRange, xToIndex, zoomAt, type Viewport } from "./viewport";
 
 const DEFAULT_BAR_WIDTH = 8;
 /** Empty bars between the last candle and the price axis after a reset. */
@@ -71,7 +72,7 @@ interface GestureEventLike extends UIEvent {
   readonly clientY: number;
 }
 
-type Drag = { kind: "pan" | "price" | "drawing"; pointerId: number; lastX: number; lastY: number };
+type Drag = { kind: "pan" | "price" | "drawing" | "replay"; pointerId: number; lastX: number; lastY: number };
 
 /**
  * Candlestick chart on two stacked Canvas 2D layers: main pane, price axis on the right,
@@ -127,6 +128,11 @@ export class Chart {
   private drawingToolCb: ((id: ToolId | null) => void) | null = null;
   private drawingTextCb: ((edit: TextEdit | null) => void) | null = null;
   private drawingStyleCb: ((edit: StyleEdit | null) => void) | null = null;
+  /** A replay's trades and cut; its stop and take handles come before drawings for input. */
+  private readonly replay = new ReplayLayer();
+  private replayEditCb: ((stop: number, take: number) => void) | null = null;
+  /** While a replay start is picked: called with the open time of the clicked bar. */
+  private pickCb: ((time: number) => void) | null = null;
   /** Drawings: painted on both layers, and first in line for pointer input on the price plot. */
   private readonly drawings = new DrawingLayer({
     invalidate: () => this.invalidate(),
@@ -411,6 +417,37 @@ export class Chart {
     this.drawingToolCb = cb;
   }
 
+  /** A replay's trades and where its revealed bars end, or none. */
+  setReplay(m: ReplayMarks | null): void {
+    this.replay.set(m);
+    this.invalidate();
+  }
+
+  /** The stop or take of the open replay trade was dragged and dropped. */
+  onReplayEdit(cb: ((stop: number, take: number) => void) | null): void {
+    this.replayEditCb = cb;
+  }
+
+  /**
+   * Picks a replay start: while set, the bar under the mouse is marked and a click on it
+   * calls `cb` with its open time instead of panning or drawing. Null ends it.
+   */
+  setPick(cb: ((time: number) => void) | null): void {
+    this.pickCb = cb;
+    this.canvas.style.cursor = "crosshair";
+    this.invalidateOverlay();
+  }
+
+  /** Open time of the first loaded bar at or after `t`, for a replay start picked by date. */
+  barAtOrAfter(t: number): number | null {
+    return snapStart(this.series.time, this.series.count, t);
+  }
+
+  /** Price axis width in CSS px. */
+  get priceAxisWidth(): number {
+    return this.axisWidth;
+  }
+
   /** Candle `index` of the current series (indices shift by the size of every prepend). */
   candle(index: number): LiveCandle | null {
     const s = this.series;
@@ -455,6 +492,8 @@ export class Chart {
     this.drawingToolCb = null;
     this.drawingTextCb = null;
     this.drawingStyleCb = null;
+    this.replayEditCb = null;
+    this.pickCb = null;
   }
 
   // ---- Internals ----
@@ -672,6 +711,8 @@ export class Chart {
     this.drawings.paintBase(this.ctx, coords, this.dpr, this.theme, (p, color) =>
       drawingTag(this.ctx, f, this.buffers, p, color),
     );
+    this.replay.paintBase(this.ctx, coords, this.dpr, this.theme);
+    for (const p of this.replay.axisPrices()) drawingTag(this.ctx, f, this.buffers, p, this.theme.muted);
     this.lastFrame = f;
     const debug = chartDebug();
     if (debug) {
@@ -682,6 +723,8 @@ export class Chart {
       debug.plotWidth = plotW;
       debug.historyLabel = historyStart ? historyStart.join("|") : null;
       debug.panes = this.ind.panes.length;
+      debug.lastBarTime = s.count > 0 ? s.time[s.count - 1]! : null;
+      debug.indicatorLastTimes = this.ind.layers.flatMap((l) => (l.computed ? [l.computed.lastTime] : []));
     }
   }
 
@@ -698,9 +741,13 @@ export class Chart {
       ch.index = this.crosshairIndex;
     }
     const octx = this.octx;
-    drawOverlay(f, octx, inPlot ? ch : null, this.buffers, () =>
-      this.drawings.paintOverlay(octx, this.dpr, this.theme, (p, color) => drawingTag(octx, f, this.buffers, p, color)),
-    );
+    drawOverlay(f, octx, inPlot ? ch : null, this.buffers, () => {
+      this.drawings.paintOverlay(octx, this.dpr, this.theme, (p, color) => drawingTag(octx, f, this.buffers, p, color));
+      if (this.pickCb && inPlot && this.crosshairIndex !== null) {
+        const x = indexToX(this.view, this.crosshairIndex, plotW);
+        this.replay.paintPick(octx, x, plotW, plotH, this.dpr, this.theme);
+      }
+    });
   }
 
   private local(e: { clientX: number; clientY: number }): { x: number; y: number } {
@@ -714,9 +761,20 @@ export class Chart {
     const { plotW } = this.plot();
     const priceH = this.priceH();
     const onPriceAxis = p.x >= plotW && p.y < priceH;
-    // On the price plot drawings come first: a tool places, a press on a drawing selects it.
-    const onDrawing = this.inPricePlot(p) && this.drawings.pointerDown(p.x, p.y, e.shiftKey, e.metaKey || e.ctrlKey);
-    const kind = onDrawing ? "drawing" : onPriceAxis ? "price" : "pan";
+    if (this.pickCb) {
+      // Picking a replay start: a click on a bar picks it; nothing else happens.
+      this.mouse = p;
+      this.updateCrosshair();
+      const i = this.crosshairIndex;
+      if (i !== null && p.y < this.plot().plotH) this.pickCb(this.series.time[i]!);
+      return;
+    }
+    // The open replay trade's stop and take come first, then drawings: a tool places, a press on a drawing selects it.
+    const level: Level | null = this.inPricePlot(p) ? this.replay.handleAt(p.x, p.y) : null;
+    if (level) this.replay.startDrag(level);
+    const onDrawing =
+      !level && this.inPricePlot(p) && this.drawings.pointerDown(p.x, p.y, e.shiftKey, e.metaKey || e.ctrlKey);
+    const kind = level ? "replay" : onDrawing ? "drawing" : onPriceAxis ? "price" : "pan";
     this.drag = { kind, pointerId: e.pointerId, lastX: e.clientX, lastY: e.clientY };
     this.canvas.setPointerCapture(e.pointerId);
     if (kind === "pan") this.canvas.style.cursor = "grabbing";
@@ -728,8 +786,13 @@ export class Chart {
   }
 
   private updateCursor(p: { x: number; y: number }): void {
+    if (this.pickCb) {
+      this.canvas.style.cursor = "crosshair";
+      return;
+    }
     const onPriceAxis = p.x >= this.plot().plotW && p.y < this.priceH();
-    this.canvas.style.cursor = onPriceAxis ? "ns-resize" : (this.drawings.cursor() ?? "crosshair");
+    const onLevel = this.replay.dragging || (this.inPricePlot(p) && this.replay.handleAt(p.x, p.y) !== null);
+    this.canvas.style.cursor = onPriceAxis || onLevel ? "ns-resize" : (this.drawings.cursor() ?? "crosshair");
   }
 
   private readonly onPointerMove = (e: PointerEvent): void => {
@@ -737,6 +800,12 @@ export class Chart {
     this.mouse = p;
     const priceH = this.priceH();
     const d = this.drag;
+    if (d?.kind === "replay" && d.pointerId === e.pointerId) {
+      this.replay.moveDrag(p.y);
+      this.updateCrosshair();
+      this.invalidate();
+      return;
+    }
     if (d?.kind === "drawing" && d.pointerId === e.pointerId) {
       this.drawings.pointerMove(p.x, p.y, e.shiftKey, e.metaKey || e.ctrlKey);
       this.updateCrosshair();
@@ -771,6 +840,12 @@ export class Chart {
     this.drag = null;
     if (this.canvas.hasPointerCapture(e.pointerId)) this.canvas.releasePointerCapture(e.pointerId);
     const p = this.local(e);
+    if (kind === "replay") {
+      // A cancelled pointer leaves the levels as they were.
+      const levels = e.type === "pointercancel" ? (this.replay.endDrag(), null) : this.replay.endDrag();
+      if (levels) this.replayEditCb?.(levels.stop, levels.take);
+      this.invalidate();
+    }
     if (kind === "drawing") {
       // A cancelled pointer (a system gesture) stores nothing.
       if (e.type === "pointercancel") this.drawings.abort();

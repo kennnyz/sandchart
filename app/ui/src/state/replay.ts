@@ -1,4 +1,5 @@
 import { typing, type KeyLike } from "../chart/drawings/keys";
+export { clampLevel } from "../chart/replay";
 import {
   toProblem,
   type Backend,
@@ -104,13 +105,6 @@ export function defaultLevels(side: Side, close: number): { stop: number; take: 
 export function validLevels(side: Side, close: number, stop: number, take: number): boolean {
   const inRange = [stop, take].every((v) => Number.isInteger(v) && Math.abs(v) <= MAX_TICKS);
   return inRange && (side === "long" ? stop < close && close < take : take < close && close < stop);
-}
-
-/** A dragged level kept on its side of the close, so a drop is always a valid edit. */
-export function clampLevel(side: Side, level: "stop" | "take", close: number, p: number): number {
-  const below = (side === "long") === (level === "stop");
-  const v = below ? Math.min(p, close - 1) : Math.max(p, close + 1);
-  return Math.min(MAX_TICKS, Math.max(-MAX_TICKS, v));
 }
 
 /**
@@ -235,7 +229,7 @@ export class ReplayController {
   /** Closes the open trade at the close of the current bar. */
   closeTrade(): Promise<void> {
     if (!this.view?.open) return Promise.resolve();
-    return this.command(() => ({ kind: "close", bar: this.view!.current }));
+    return this.command(() => (this.view!.open ? { kind: "close", bar: this.view!.current } : null));
   }
 
   /** New stop and take of the open trade, in force from the next bar; a level that did not change is not sent. */
@@ -310,16 +304,20 @@ export class ReplayController {
     const v = this.view;
     if (this.phase !== "on" || !v || v.open) return Promise.resolve();
     return this.command(() => {
+      // A second click while the first trade was on its way opens nothing.
+      if (this.view!.open) return null;
       const { stop, take } = defaultLevels(side, this.view!.close);
       return { kind: "open", bar: this.view!.current, side, stop, take };
     });
   }
 
   /** Sends a command made at run time (from the then current bar) and reads the results back. */
-  private command(make: () => ReplayCommand): Promise<void> {
+  private command(make: () => ReplayCommand | null): Promise<void> {
     return this.run(async () => {
       if (this.phase !== "on" || !this.view) return;
-      await this.backend.replayCommand(make());
+      const cmd = make();
+      if (!cmd) return;
+      await this.backend.replayCommand(cmd);
       await this.sync();
     });
   }

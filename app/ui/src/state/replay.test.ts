@@ -137,6 +137,11 @@ describe("replay controller", () => {
     await c.sell();
     expect(c.view!.trades).toHaveLength(1);
     expect(c.error).toBeNull();
+    // Two clicks before the first answer: one trade, no error.
+    await c.closeTrade();
+    await Promise.all([c.buy(), c.buy(), c.closeTrade(), c.closeTrade()]);
+    expect(c.view!.trades).toHaveLength(2);
+    expect(c.error).toBeNull();
   });
 
   it("edits only changed levels, refuses invalid ones, and closes manually", async () => {
