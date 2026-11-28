@@ -118,6 +118,9 @@ test("replay_start_step_play_trade_save_open_exit", async ({ page }) => {
   await expect(page.getByTestId("replay-buy")).toBeDisabled();
   await expect(page.getByTestId("replay-sell")).toBeDisabled();
   await expect(page.getByTestId("replay-trades-r")).toHaveAttribute("title", "R relative to the stop at entry");
+  // The first trade unfolds the results, which takes room from the chart: read the handles after it.
+  await expect(page.getByTestId("replay-stats")).toHaveAttribute("data-collapsed", "false");
+  await nextFrame(page);
   await expect.poll(async () => (await debug(page)).replayHandles !== null).toBe(true);
   const handles = (await debug(page)).replayHandles!;
   expect(handles.stop.y).toBeGreaterThan(handles.take.y);
