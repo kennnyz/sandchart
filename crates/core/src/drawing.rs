@@ -20,12 +20,14 @@ pub const PALETTE_SLOTS: u8 = 8;
 pub const MAX_WIDTH: u8 = 4;
 
 /// A point: `t` in ms since the Unix epoch, `p` in price ticks.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Anchor {
     pub t: i64,
     pub p: i64,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Style {
     /// Palette slot, `0..=7`.
@@ -37,6 +39,7 @@ pub struct Style {
 
 /// What is drawn. JSON is `{ "kind": "trend", ... }` with camelCase fields, the same in the
 /// store and over IPC.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(
     tag = "kind",

@@ -9,6 +9,7 @@ use crate::model::InstrumentId;
 
 /// What an alert watches. JSON is `{ "kind": "price", "price": 100 }` or
 /// `{ "kind": "drawing", "drawingId": "d1" }`, the same in the store and over IPC.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
     tag = "kind",
@@ -22,6 +23,7 @@ pub enum AlertKind {
     Drawing { drawing_id: String },
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Direction {
