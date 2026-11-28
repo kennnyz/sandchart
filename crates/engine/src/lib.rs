@@ -5,7 +5,9 @@
 //! * [`Engine::import_csv`] loads local files as the `csv` source.
 //! * [`Engine::drawings`] and [`Engine::save_drawing`] keep the chart drawings.
 //! * [`Engine::replay_start`] and the other `replay_*` methods run one replay session.
+//! * [`Engine::set_alert`] and [`Engine::run_alerts`] keep price and line alerts.
 
+mod alerts;
 mod chart;
 mod csv_import;
 mod drawings;
@@ -23,6 +25,7 @@ use sandchart_indicators::{Limits, Runtime};
 use sandchart_store::{Store, StoreError};
 use tokio::sync::watch;
 
+pub use alerts::{AlertEvent, MAX_LIVE_STREAMS};
 pub use chart::ChartPage;
 pub use indicators::{
     Computed, FailedIndicator, IndicatorInfo, IndicatorList, IndicatorStats, Inspection, Instance,
@@ -68,6 +71,9 @@ pub enum EngineError {
     /// A replay command, file or request was refused.
     #[error("{0}")]
     Replay(String),
+    /// An alert the UI sent breaks a rule, or cannot be armed.
+    #[error("{0}")]
+    Alert(String),
 }
 
 type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
@@ -91,6 +97,9 @@ pub(crate) struct Shared {
     bars: Arc<Mutex<indicators::BarState>>,
     /// The open replay, if any; its instrument's live events are held back.
     replay: Arc<Mutex<Option<replay::Session>>>,
+    /// Armed alerts and the live streams that feed them.
+    alerts: Arc<alerts::Hub>,
+    clock: Clock,
 }
 
 pub struct Engine {
@@ -222,6 +231,8 @@ impl Engine {
                 inputs: Arc::default(),
                 bars: Arc::default(),
                 replay: Arc::default(),
+                alerts: Arc::default(),
+                clock: clock.clone(),
             },
             providers: providers
                 .into_iter()

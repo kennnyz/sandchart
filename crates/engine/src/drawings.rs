@@ -56,13 +56,14 @@ impl Engine {
         }
         let saved = d.clone();
         blocking(&self.shared.store, move |s| s.upsert_drawing(&saved)).await?;
+        self.drawing_saved(&d.id).await?;
         Ok(d)
     }
 
+    /// Removes a drawing and its alerts; an unknown id is not an error.
     pub async fn delete_drawing(&self, id: &str) -> Result<(), EngineError> {
         validate_id(id).map_err(EngineError::Drawing)?;
-        let id = id.to_owned();
-        blocking(&self.shared.store, move |s| s.delete_drawing(&id)).await
+        self.delete_drawing_and_alerts(id.to_owned()).await
     }
 
     /// The outcome of each position over the cached candles of `tf`, in the order given.

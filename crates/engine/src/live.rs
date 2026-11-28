@@ -10,6 +10,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
+use crate::alerts::{StreamGuard, record_fired};
 use crate::chart::{Fetched, fetch_catch_up};
 use crate::{Engine, EngineError, Shared, blocking};
 
@@ -64,10 +65,25 @@ impl Engine {
     /// Closed candles are stored. Any stream error marks the connection as reconnecting;
     /// on the next good message the gap is filled over REST and reported once as
     /// [`LiveEvent::Backfilled`], however many errors came in between.
+    ///
+    /// It also feeds the alerts of `id` (ADR 0007) and counts toward [`MAX_LIVE_STREAMS`],
+    /// together with the streams the engine opens for alerts.
+    ///
+    /// [`MAX_LIVE_STREAMS`]: crate::MAX_LIVE_STREAMS
     pub fn subscribe_live(
         &self,
         id: &InstrumentId,
         tf: Timeframe,
+    ) -> Result<LiveHandle, EngineError> {
+        self.open_live(id, tf, false)
+    }
+
+    /// `subscribe_live`; `own` marks a stream the engine opened for alerts.
+    pub(crate) fn open_live(
+        &self,
+        id: &InstrumentId,
+        tf: Timeframe,
+        own: bool,
     ) -> Result<LiveHandle, EngineError> {
         let runtime = tokio::runtime::Handle::try_current().map_err(|_| EngineError::NoRuntime)?;
         let provider = self
@@ -76,8 +92,16 @@ impl Engine {
         let instrument = crate::lock(&self.shared.store)
             .instrument(id)?
             .ok_or_else(|| EngineError::UnknownInstrument(id.clone()))?;
+        let guard = self.shared.alerts.open_stream(id, own)?;
         let (tx, events) = mpsc::channel(EVENT_BUFFER);
-        let task = runtime.spawn(run(self.shared.clone(), provider, instrument, tf, tx));
+        let task = runtime.spawn(run(
+            self.shared.clone(),
+            provider,
+            instrument,
+            tf,
+            tx,
+            guard,
+        ));
         Ok(LiveHandle { events, task })
     }
 }
@@ -142,6 +166,7 @@ async fn run(
     inst: Instrument,
     tf: Timeframe,
     tx: mpsc::Sender<LiveEvent>,
+    stream_slot: StreamGuard,
 ) {
     let mut stream = provider.live(&inst, tf);
     let mut gap = GapGuard {
@@ -199,6 +224,18 @@ async fn run(
                 }
                 // Forming candles reach the indicator bars too, in memory only.
                 shared.live_bar(&inst, tf, &live.candle);
+                // A replayed pair's alerts wait too: the first update after the replay is
+                // compared with the last one before it.
+                if !shared.replaying(&inst.id) {
+                    let now = (shared.clock)();
+                    let fired =
+                        shared
+                            .alerts
+                            .evaluate(&inst.id, stream_slot.key, &live.candle, now);
+                    if !fired.is_empty() {
+                        tokio::spawn(record_fired(shared.clone(), fired));
+                    }
+                }
                 LiveEvent::Candle(live)
             }
         };

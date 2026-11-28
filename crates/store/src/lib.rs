@@ -529,12 +529,56 @@ impl Store {
     }
 
     /// Removes a drawing and its alerts, atomically; an unknown id is not an error.
-    pub fn delete_drawing(&mut self, id: &str) -> Result<(), StoreError> {
+    /// Returns how many alerts went with it.
+    pub fn delete_drawing(&mut self, id: &str) -> Result<usize, StoreError> {
         let tx = self.conn.transaction()?;
-        tx.execute("DELETE FROM alerts WHERE drawing_id = ?1", [id])?;
+        let alerts = tx.execute("DELETE FROM alerts WHERE drawing_id = ?1", [id])?;
         tx.execute("DELETE FROM drawings WHERE id = ?1", [id])?;
         tx.commit()?;
-        Ok(())
+        Ok(alerts)
+    }
+
+    /// One drawing by id; `None` when there is none or it cannot be read.
+    pub fn drawing(&self, id: &str) -> Result<Option<Drawing>, StoreError> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT source, symbol, price_scale, body, style, locked, z, updated_at
+                 FROM drawings WHERE id = ?1",
+                [id],
+                |row| {
+                    Ok((
+                        InstrumentId {
+                            source: row.get(0)?,
+                            symbol: row.get(1)?,
+                        },
+                        row.get::<_, u8>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, bool>(5)?,
+                        row.get::<_, i64>(6)?,
+                        row.get::<_, i64>(7)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((instrument, price_scale, body, style, locked, z, updated_at)) = row else {
+            return Ok(None);
+        };
+        let (Ok(body), Ok(style)) = (serde_json::from_str(&body), serde_json::from_str(&style))
+        else {
+            return Ok(None);
+        };
+        Ok(Some(Drawing {
+            id: id.to_owned(),
+            instrument,
+            price_scale,
+            body,
+            style,
+            locked,
+            z,
+            updated_at,
+        }))
     }
 
     /// Every alert, oldest first. A row this version cannot read is left out and logged.

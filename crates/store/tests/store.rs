@@ -392,7 +392,9 @@ fn upsert_replaces_a_drawing_and_delete_removes_it() {
     moved.body = DrawingBody::Hline { p: 555 };
     moved.price_scale = 4;
     store.upsert_drawing(&moved).unwrap();
-    assert_eq!(store.drawings(&id("BTCUSDT")).unwrap(), vec![moved]);
+    assert_eq!(store.drawings(&id("BTCUSDT")).unwrap(), vec![moved.clone()]);
+    assert_eq!(store.drawing("a").unwrap(), Some(moved));
+    assert_eq!(store.drawing("nope").unwrap(), None);
 
     store.delete_drawing("a").unwrap();
     assert!(store.drawings(&id("BTCUSDT")).unwrap().is_empty());
@@ -626,7 +628,8 @@ fn deleting_a_drawing_deletes_its_alerts() {
     // Saving the drawing again (a move) keeps its alerts.
     store.upsert_drawing(&drawing("d1", "BTCUSDT", 3)).unwrap();
     assert_eq!(store.alerts().unwrap().len(), 4);
-    store.delete_drawing("d1").unwrap();
+    assert_eq!(store.delete_drawing("d1").unwrap(), 2);
+    assert_eq!(store.delete_drawing("d1").unwrap(), 0);
     let ids: Vec<String> = store.alerts().unwrap().into_iter().map(|a| a.id).collect();
     assert_eq!(ids, ["a3", "a4"]);
 }
