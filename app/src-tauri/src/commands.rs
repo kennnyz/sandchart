@@ -7,19 +7,22 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
+use sandchart_core::replay::Command;
 use sandchart_core::{InstrumentId, Timeframe};
 use sandchart_engine::{Engine, EngineError};
-use tauri::State;
 use tauri::async_runtime::{JoinHandle, spawn, spawn_blocking};
 use tauri::ipc::Channel;
+use tauri::ipc::{InvokeBody, Request};
+use tauri::{AppHandle, State};
+use tauri_plugin_dialog::DialogExt;
 
 use sandchart_indicators::MAX_MODULE_BYTES;
 
 use crate::dto::{
     CandlesDto, DayChangeDto, DrawingDto, DrawingInputDto, IndicatorInfoDto, IndicatorListDto,
     InspectionDto, InstanceDto, InstanceResultDto, InstrumentDto, InstrumentIdDto, LiveDto,
-    PositionInputDto, PositionOutcomeDto, ProblemDto, connection_name, to_candles_dto,
-    to_day_change_dto, to_live_dto,
+    PositionInputDto, PositionOutcomeDto, ProblemDto, ReplayStateDto, connection_name,
+    to_candles_dto, to_day_change_dto, to_live_dto, to_replay_state_dto,
 };
 
 /// Most results one search returns.
@@ -349,6 +352,92 @@ pub async fn get_position_outcomes(
         .into_iter()
         .map(|(id, outcome)| PositionOutcomeDto { id, outcome })
         .collect())
+}
+
+/// Starts a replay at the cached bar opening at `start_time`; the state has every
+/// revealed bar.
+#[tauri::command]
+pub async fn replay_start(
+    state: State<'_, AppState>,
+    source: String,
+    symbol: String,
+    tf: String,
+    start_time: i64,
+) -> CmdResult<ReplayStateDto> {
+    let id = InstrumentId { source, symbol };
+    let st = state
+        .engine
+        .replay_start(&id, timeframe(&tf)?, start_time)
+        .await?;
+    Ok(to_replay_state_dto(st)?)
+}
+
+/// Reveals up to `n` bars; returns the index of the current bar.
+#[tauri::command]
+pub async fn replay_step(state: State<'_, AppState>, n: u32) -> CmdResult<u32> {
+    blocking(&state, move |e| e.replay_step(n)).await
+}
+
+#[tauri::command]
+pub async fn replay_command(state: State<'_, AppState>, command: Command) -> CmdResult<()> {
+    blocking(&state, move |e| e.replay_command(command)).await
+}
+
+/// The session with the revealed bars from index `cursor` on.
+#[tauri::command]
+pub async fn replay_state(state: State<'_, AppState>, cursor: u32) -> CmdResult<ReplayStateDto> {
+    let st = blocking(&state, move |e| e.replay_state(cursor)).await?;
+    Ok(to_replay_state_dto(st)?)
+}
+
+/// Asks where to save the session with the native save panel and writes the file there.
+/// Returns the path, or `None` when the user cancelled.
+#[tauri::command]
+pub async fn replay_save(app: AppHandle, state: State<'_, AppState>) -> CmdResult<Option<String>> {
+    let (name, bytes) = blocking(&state, |e| {
+        let st = e.replay_state(u32::MAX)?;
+        let name = format!("{}-{}.replay", st.instrument.id.symbol, st.tf.code());
+        Ok((name, e.replay_export()?))
+    })
+    .await?;
+    spawn_blocking(move || {
+        let Some(path) = app
+            .dialog()
+            .file()
+            .add_filter("Sandchart replay", &["replay"])
+            .set_file_name(name)
+            .blocking_save_file()
+        else {
+            return Ok(None);
+        };
+        let path = path.into_path().map_err(ProblemDto::other)?;
+        std::fs::write(&path, bytes)
+            .map_err(|e| ProblemDto::other(format!("cannot write {}: {e}", path.display())))?;
+        Ok(Some(path.display().to_string()))
+    })
+    .await
+    .map_err(ProblemDto::other)?
+}
+
+/// Opens a `.replay` file sent as the raw request body (no JSON array of 32 MiB numbers).
+#[tauri::command]
+pub async fn replay_open(
+    state: State<'_, AppState>,
+    request: Request<'_>,
+) -> CmdResult<ReplayStateDto> {
+    let InvokeBody::Raw(bytes) = request.body() else {
+        return Err(ProblemDto::other(
+            "the replay file must be sent as raw bytes",
+        ));
+    };
+    let bytes = bytes.clone();
+    let st = blocking(&state, move |e| e.replay_open(&bytes)).await?;
+    Ok(to_replay_state_dto(st)?)
+}
+
+#[tauri::command]
+pub fn replay_exit(state: State<'_, AppState>) {
+    state.engine.replay_exit();
 }
 
 #[cfg(test)]
