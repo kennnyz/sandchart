@@ -5,7 +5,9 @@
 //! * [`Engine::import_csv`] loads local files as the `csv` source.
 //! * [`Engine::drawings`] and [`Engine::save_drawing`] keep the chart drawings.
 //! * [`Engine::replay_start`] and the other `replay_*` methods run one replay session.
+//! * [`Engine::set_alert`] and [`Engine::run_alerts`] keep price and line alerts.
 
+mod alerts;
 mod chart;
 mod csv_import;
 mod drawings;
@@ -23,6 +25,7 @@ use sandchart_indicators::{Limits, Runtime};
 use sandchart_store::{Store, StoreError};
 use tokio::sync::watch;
 
+pub use alerts::{AlertEvent, MAX_LIVE_STREAMS};
 pub use chart::ChartPage;
 pub use indicators::{
     Computed, FailedIndicator, IndicatorInfo, IndicatorList, IndicatorStats, Inspection, Instance,
@@ -68,6 +71,9 @@ pub enum EngineError {
     /// A replay command, file or request was refused.
     #[error("{0}")]
     Replay(String),
+    /// An alert the UI sent breaks a rule, or cannot be armed.
+    #[error("{0}")]
+    Alert(String),
 }
 
 type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
@@ -91,6 +97,9 @@ pub(crate) struct Shared {
     bars: Arc<Mutex<indicators::BarState>>,
     /// The open replay, if any; its instrument's live events are held back.
     replay: Arc<Mutex<Option<replay::Session>>>,
+    /// Armed alerts and the live streams that feed them.
+    alerts: Arc<alerts::Hub>,
+    clock: Clock,
 }
 
 pub struct Engine {
@@ -98,6 +107,10 @@ pub struct Engine {
     providers: HashMap<String, Arc<dyn Provider>>,
     clock: Clock,
     indicators: indicators::Service,
+    /// A second process has no live stream to bring the newest stored candle up to date: it
+    /// may be one that was still forming when it was stored, so a load of the newest page
+    /// always asks the provider (one request).
+    refresh_newest: bool,
 }
 
 /// Locks the store; a poisoned lock is safe to reuse because every store write is a transaction.
@@ -201,19 +214,47 @@ impl Engine {
     ) -> Result<Engine, EngineError> {
         let runtime = Runtime::new(Limits::default(), cache_dir.map(Path::to_path_buf))
             .map_err(|e| format!("the indicator runtime could not start: {e}"));
-        Self::open_with_runtime(data_dir, providers, clock, runtime)
+        Self::open_with_runtime(data_dir, providers, clock, runtime, true)
+    }
+
+    /// Like [`Engine::open`] for a second process next to the app on the same data folder,
+    /// such as the MCP server: it reads and writes the same database and loads the same
+    /// indicators, but never deletes module files or prunes the compiled-module cache,
+    /// because the app may be installing a module at that moment. A database an older app
+    /// left at an older schema version is refused, not upgraded. With no live stream of its
+    /// own, a load of the newest candles always asks the provider. It does not need
+    /// [`Engine::run_alerts`]: the app evaluates the alerts.
+    pub fn open_secondary(
+        data_dir: &Path,
+        cache_dir: Option<&Path>,
+        providers: Vec<Arc<dyn Provider>>,
+    ) -> Result<Engine, EngineError> {
+        let runtime = Runtime::new(Limits::default(), cache_dir.map(Path::to_path_buf))
+            .map_err(|e| format!("the indicator runtime could not start: {e}"));
+        Self::open_with_runtime(data_dir, providers, Arc::new(system_now_ms), runtime, false)
     }
 
     /// Opens the engine with an indicator runtime that may have failed to start: then
-    /// charts still work and every indicator method returns that error.
+    /// charts still work and every indicator method returns that error. `housekeeping`
+    /// lets the indicator loader delete unused module files and compiled modules.
     fn open_with_runtime(
         data_dir: &Path,
         providers: Vec<Arc<dyn Provider>>,
         clock: Clock,
         runtime: Result<Runtime, String>,
+        housekeeping: bool,
     ) -> Result<Engine, EngineError> {
-        let store = Arc::new(Mutex::new(Store::open(&data_dir.join("sandchart.db"))?));
-        let indicators = indicators::Service::start(data_dir, runtime, Arc::clone(&store));
+        let path = data_dir.join("sandchart.db");
+        // A second process never upgrades the app's database: an older app could then no
+        // longer open it.
+        let store = if housekeeping {
+            Store::open(&path)?
+        } else {
+            Store::open_existing(&path)?
+        };
+        let store = Arc::new(Mutex::new(store));
+        let indicators =
+            indicators::Service::start(data_dir, runtime, Arc::clone(&store), housekeeping);
         let (connection, _) = watch::channel(ConnectionState::Connecting);
         Ok(Engine {
             shared: Shared {
@@ -222,6 +263,8 @@ impl Engine {
                 inputs: Arc::default(),
                 bars: Arc::default(),
                 replay: Arc::default(),
+                alerts: Arc::default(),
+                clock: clock.clone(),
             },
             providers: providers
                 .into_iter()
@@ -229,6 +272,7 @@ impl Engine {
                 .collect(),
             clock,
             indicators,
+            refresh_newest: !housekeeping,
         })
     }
 
@@ -254,7 +298,9 @@ impl Engine {
         };
         self.shared.note_ok();
         let n = items.len();
-        blocking(&self.shared.store, move |s| s.upsert_instruments(&items)).await?;
+        // A new tick size changes the levels of armed alerts: they are armed again from it.
+        self.store_and_reload(move |s| s.upsert_instruments(&items))
+            .await?;
         Ok(n)
     }
 
@@ -339,6 +385,7 @@ mod tests {
             vec![],
             Arc::new(|| 0),
             Err("the indicator runtime could not start: injected".into()),
+            true,
         )
         .unwrap();
         assert!(engine.indicators_ready());

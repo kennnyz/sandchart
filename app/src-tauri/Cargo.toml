@@ -23,14 +23,16 @@ thiserror.workspace = true
 tauri = { version = "2", features = [] }
 # The native save panel for replay files, shown from Rust.
 tauri-plugin-dialog = "2"
+# OS notifications for fired alerts, sent from Rust; its JavaScript API is not exposed.
+tauri-plugin-notification = "2"
 # Pinned to the minor: `configure_client` hands us its reqwest builder, which may change in a minor.
 tauri-plugin-updater = "~2.14"
 # Already in the tree through the updater (same 0.13); names the builder for the timeouts.
 reqwest = { version = "0.13", default-features = false }
 # Already in the tree through the updater; formats the release date as RFC 3339.
 time = { version = "0.3", features = ["formatting"] }
-# Already in the tree through Tauri; used for the sync retry delay.
-tokio = { version = "1", features = ["time"] }
+# Already in the tree through Tauri; the sync retry delay and the alert events.
+tokio = { version = "1", features = ["sync", "time"] }
 
 [dev-dependencies]
 # Already in the tree through the updater, which installs this crypto provider in `check()`;

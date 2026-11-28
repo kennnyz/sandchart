@@ -14,3 +14,8 @@ sha2 = "0.10"
 # Already in the tree; reads and writes replay files.
 serde_json = "1"
 thiserror.workspace = true
+# JSON schemas of the wire types for the MCP server's tools; off for everything else.
+schemars = { version = "1", optional = true }
+
+[features]
+schema = ["dep:schemars"]

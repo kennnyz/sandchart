@@ -42,6 +42,8 @@ export interface ChartDebug {
   replayHandles: { stop: { x: number; y: number }; take: { x: number; y: number } } | null;
   /** Closed replay trades painted at the last base frame. */
   replayClosed: number;
+  /** Price alert levels painted at the last base frame, with their y in CSS px of the chart. */
+  alertLevels: { id: string; y: number }[];
 }
 
 let debug: ChartDebug | null = null;
@@ -70,6 +72,7 @@ export function enableChartDebug(): void {
     indicatorLastTimes: [],
     replayHandles: null,
     replayClosed: 0,
+    alertLevels: [],
   };
   (window as unknown as { __sandchartDebug: ChartDebug }).__sandchartDebug = debug;
 }

@@ -1048,3 +1048,21 @@ async fn starts_connecting_until_first_contact() {
     engine.sync_instruments("fake").await.unwrap();
     assert_eq!(*engine.connection().borrow(), ConnectionState::Connected);
 }
+
+#[tokio::test]
+async fn a_second_process_refuses_an_older_apps_database_and_sets_up_a_new_one() {
+    let dir = tempfile::tempdir().unwrap();
+    Store::open(&dir.path().join("sandchart.db"))
+        .unwrap()
+        .migrate_down_to(3)
+        .unwrap();
+    let err = Engine::open_secondary(dir.path(), None, vec![])
+        .err()
+        .expect("refused");
+    assert!(
+        err.to_string().contains("update the Sandchart app first"),
+        "{err}"
+    );
+    let fresh = tempfile::tempdir().unwrap();
+    Engine::open_secondary(fresh.path(), None, vec![]).unwrap();
+}

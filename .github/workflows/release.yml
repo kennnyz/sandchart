@@ -83,8 +83,8 @@ jobs:
           projectPath: app
           tauriScript: node ui/node_modules/@tauri-apps/cli/tauri.js
           args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --config src-tauri/tauri.release.conf.json
-      - name: Build the indicator author CLI
-        run: cargo build --release --locked -p sandchart-indicator-cli --target ${{ matrix.target }}
+      - name: Build the indicator author CLI and the MCP server
+        run: cargo build --release --locked -p sandchart-indicator-cli -p sandchart-mcp --target ${{ matrix.target }}
       - name: Collect bundles
         shell: bash
         run: |
@@ -107,14 +107,16 @@ jobs:
             echo "no updater signature in $bundle" >&2
             exit 1
           fi
-          # The author CLI, one archive per platform.
+          # The author CLI and the MCP server, one archive each per platform.
           root="$PWD"
           bin=target/${{ matrix.target }}/release
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            (cd "$bin" && 7z a -tzip "$root/dist-release/sandchart-indicator-${{ matrix.target }}.zip" sandchart-indicator.exe)
-          else
-            tar -czf "dist-release/sandchart-indicator-${{ matrix.target }}.tar.gz" -C "$bin" sandchart-indicator
-          fi
+          for tool in sandchart-indicator sandchart-mcp; do
+            if [ "${{ runner.os }}" = "Windows" ]; then
+              (cd "$bin" && 7z a -tzip "$root/dist-release/$tool-${{ matrix.target }}.zip" "$tool.exe")
+            else
+              tar -czf "dist-release/$tool-${{ matrix.target }}.tar.gz" -C "$bin" "$tool"
+            fi
+          done
           ls -l dist-release
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

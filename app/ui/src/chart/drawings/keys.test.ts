@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { drawingKeyAction, MAGNET_CODE, RULER_CODE, type KeyLike } from "./keys";
+import { ALERT_CODE, alertKey, drawingKeyAction, MAGNET_CODE, RULER_CODE, type KeyLike } from "./keys";
 import { TOOLS } from "./registry";
 
 const key = (code: string, mods: Partial<KeyLike> = {}): KeyLike => ({
@@ -33,6 +33,15 @@ describe("drawingKeyAction", () => {
     // No tool takes the ruler's or the magnet's key.
     expect(TOOLS.map((t) => t.code)).not.toContain(RULER_CODE);
     expect(TOOLS.map((t) => t.code)).not.toContain(MAGNET_CODE);
+  });
+
+  it("leaves Alt+A to the price alert", () => {
+    expect(TOOLS.map((t) => t.code)).not.toContain(ALERT_CODE);
+    expect(drawingKeyAction(key("KeyA", { altKey: true }), TOOLS)).toBeNull();
+    expect(alertKey(key("KeyA", { altKey: true }))).toBe(true);
+    expect(alertKey(key("KeyA"))).toBe(false);
+    expect(alertKey(key("KeyA", { altKey: true, metaKey: true }))).toBe(false);
+    expect(alertKey(key("KeyA", { altKey: true, target: { tagName: "TEXTAREA" } }))).toBe(false);
   });
 
   it("undoes and redoes with ⌘Z / ⇧⌘Z or Ctrl", () => {

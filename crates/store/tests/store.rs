@@ -1,8 +1,10 @@
+use sandchart_core::alert::{Alert, AlertKind, Direction};
 use sandchart_core::{
     Anchor, Candle, Drawing, DrawingBody, Instrument, InstrumentId, Style, Timeframe,
 };
 use sandchart_store::{
-    MAX_DRAWINGS_PER_INSTRUMENT, Store, StoreError, StoredInstance, StoredModule,
+    MAX_ACTIVE_ALERTS, MAX_ALERT_PAIRS, MAX_ALERTS, MAX_DRAWINGS_PER_INSTRUMENT, Store, StoreError,
+    StoredInstance, StoredModule,
 };
 
 fn id(symbol: &str) -> InstrumentId {
@@ -200,12 +202,12 @@ fn migrations_go_down_and_up() {
     {
         let mut store = Store::open(&path).unwrap();
         store.upsert_instruments(&[instrument("BTCUSDT")]).unwrap();
-        assert_eq!(table_count(&path), 7);
+        assert_eq!(table_count(&path), 8);
         store.migrate_down_to(0).unwrap();
         assert_eq!(table_count(&path), 0);
     }
     let store = Store::open(&path).unwrap();
-    assert_eq!(table_count(&path), 7);
+    assert_eq!(table_count(&path), 8);
     assert_eq!(store.instrument(&id("BTCUSDT")).unwrap(), None);
 }
 
@@ -240,7 +242,7 @@ fn indicator_migration_goes_down_to_1_and_up_again() {
         assert_eq!(rusqlite_count(&path), 4);
     }
     let store = Store::open(&path).unwrap();
-    assert_eq!(rusqlite_count(&path), 7);
+    assert_eq!(rusqlite_count(&path), 8);
     assert!(store.indicator_modules().unwrap().is_empty());
 }
 
@@ -317,7 +319,7 @@ fn drawing_migration_goes_down_to_2_and_up_again() {
         assert_eq!(store.indicator_modules().unwrap().len(), 1);
     }
     let store = Store::open(&path).unwrap();
-    assert_eq!(rusqlite_count(&path), 7);
+    assert_eq!(rusqlite_count(&path), 8);
     assert!(store.drawings(&id("BTCUSDT")).unwrap().is_empty());
 }
 
@@ -390,7 +392,9 @@ fn upsert_replaces_a_drawing_and_delete_removes_it() {
     moved.body = DrawingBody::Hline { p: 555 };
     moved.price_scale = 4;
     store.upsert_drawing(&moved).unwrap();
-    assert_eq!(store.drawings(&id("BTCUSDT")).unwrap(), vec![moved]);
+    assert_eq!(store.drawings(&id("BTCUSDT")).unwrap(), vec![moved.clone()]);
+    assert_eq!(store.drawing("a").unwrap(), Some(moved));
+    assert_eq!(store.drawing("nope").unwrap(), None);
 
     store.delete_drawing("a").unwrap();
     assert!(store.drawings(&id("BTCUSDT")).unwrap().is_empty());
@@ -466,4 +470,543 @@ fn rusqlite_count(path: &std::path::Path) -> i64 {
         |row| row.get(0),
     )
     .unwrap()
+}
+
+fn alert(alert_id: &str, symbol: &str, kind: AlertKind) -> Alert {
+    Alert {
+        id: alert_id.into(),
+        instrument: id(symbol),
+        price_scale: 2,
+        kind,
+        direction: Direction::Cross,
+        active: true,
+        created_at: 1_700_000_000_000,
+        triggered_at: None,
+        triggered_price: None,
+    }
+}
+
+fn fire(a: Alert, at: i64, p: i64, scale: u8) -> Alert {
+    Alert {
+        active: false,
+        triggered_at: Some(at),
+        triggered_price: Some(p),
+        price_scale: scale,
+        ..a
+    }
+}
+
+fn price(p: i64) -> AlertKind {
+    AlertKind::Price { price: p }
+}
+
+fn on_drawing(drawing_id: &str) -> AlertKind {
+    AlertKind::Drawing {
+        drawing_id: drawing_id.into(),
+    }
+}
+
+#[test]
+fn alert_migration_goes_down_to_3_and_up_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sandchart.db");
+    {
+        let mut store = Store::open(&path).unwrap();
+        store.upsert_drawing(&drawing("d", "BTCUSDT", 0)).unwrap();
+        store
+            .upsert_alert(&alert("a", "BTCUSDT", price(100)))
+            .unwrap();
+        store.migrate_down_to(3).unwrap();
+        assert_eq!(rusqlite_count(&path), 7);
+        assert_eq!(store.drawings(&id("BTCUSDT")).unwrap().len(), 1);
+    }
+    let store = Store::open(&path).unwrap();
+    assert_eq!(rusqlite_count(&path), 8);
+    assert!(store.alerts().unwrap().is_empty());
+}
+
+#[test]
+fn alerts_round_trip_and_replace_by_id() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.upsert_drawing(&drawing("d1", "ETHUSDT", 0)).unwrap();
+    let mut fired = alert("b", "ETHUSDT", on_drawing("d1"));
+    fired.direction = Direction::Below;
+    fired.active = false;
+    fired.created_at = 5;
+    fired.triggered_at = Some(9);
+    fired.triggered_price = Some(-3);
+    let first = alert("a", "BTCUSDT", price(100));
+    store.upsert_alert(&fired).unwrap();
+    store.upsert_alert(&first).unwrap();
+    // Oldest first.
+    assert_eq!(store.alerts().unwrap(), vec![fired.clone(), first.clone()]);
+    assert_eq!(store.alert("b").unwrap(), Some(fired));
+    assert_eq!(store.alert("zz").unwrap(), None);
+
+    let mut moved = first.clone();
+    moved.kind = price(200);
+    moved.direction = Direction::Above;
+    store.upsert_alert(&moved).unwrap();
+    assert_eq!(store.alert("a").unwrap(), Some(moved));
+
+    store.delete_alert("a").unwrap();
+    store.delete_alert("a").unwrap();
+    assert_eq!(store.alerts().unwrap().len(), 1);
+}
+
+#[test]
+fn an_unreadable_alert_row_is_left_out() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sandchart.db");
+    let mut store = Store::open(&path).unwrap();
+    store
+        .upsert_alert(&alert("a", "BTCUSDT", price(100)))
+        .unwrap();
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute(
+        "INSERT INTO alerts (id, source, symbol, price_scale, kind, price, drawing_id,
+                             direction, active, created_at)
+         VALUES ('b', 'binance', 'BTCUSDT', 2, 'price', 5, NULL, 'sideways', 1, 0)",
+        [],
+    )
+    .unwrap();
+    let ids: Vec<String> = store.alerts().unwrap().into_iter().map(|a| a.id).collect();
+    assert_eq!(ids, ["a"]);
+}
+
+#[test]
+fn firing_happens_once_and_rearming_clears_it() {
+    let mut store = Store::open_in_memory().unwrap();
+    store
+        .upsert_alert(&alert("a", "BTCUSDT", price(100)))
+        .unwrap();
+    // Fired at another price scale: the stored price moves to it too.
+    let fired = fire(alert("a", "BTCUSDT", price(1_000)), 3, 1_005, 3);
+    assert!(store.fire_alert(&fired).unwrap());
+    assert!(!store.fire_alert(&fire(fired.clone(), 4, 2_000, 3)).unwrap());
+    let gone = fire(alert("gone", "BTCUSDT", price(1)), 4, 2_000, 3);
+    assert!(!store.fire_alert(&gone).unwrap());
+    let got = store.alert("a").unwrap().unwrap();
+    assert_eq!(got, fired);
+    assert!(!got.active);
+    assert_eq!(got.triggered_at, Some(3));
+    assert_eq!(got.triggered_price, Some(1_005));
+    assert_eq!(got.price_scale, 3);
+    assert_eq!(got.kind, price(1_000));
+
+    let mut armed = got;
+    armed.active = true;
+    armed.triggered_at = None;
+    armed.triggered_price = None;
+    store.upsert_alert(&armed).unwrap();
+    assert_eq!(store.alert("a").unwrap(), Some(armed));
+}
+
+#[test]
+fn a_firing_of_an_alert_that_was_replaced_meanwhile_is_ignored() {
+    let mut store = Store::open_in_memory().unwrap();
+    let old = alert("a", "BTCUSDT", price(100));
+    store.upsert_alert(&old).unwrap();
+    // Another process replaces it (a new created_at) before the firing of the old one lands.
+    let mut new = alert("a", "BTCUSDT", price(300));
+    new.created_at = old.created_at + 1;
+    store.upsert_alert(&new).unwrap();
+    assert!(!store.fire_alert(&fire(old, 3, 101, 2)).unwrap());
+    assert_eq!(store.alert("a").unwrap(), Some(new.clone()));
+    assert!(store.fire_alert(&fire(new, 4, 301, 2)).unwrap());
+}
+
+#[test]
+fn a_line_alert_fires_without_touching_its_drawing_id() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.upsert_drawing(&drawing("d1", "BTCUSDT", 0)).unwrap();
+    store
+        .upsert_alert(&alert("a", "BTCUSDT", on_drawing("d1")))
+        .unwrap();
+    let fired = fire(alert("a", "BTCUSDT", on_drawing("d1")), 3, 7, 2);
+    assert!(store.fire_alert(&fired).unwrap());
+    assert_eq!(store.alert("a").unwrap(), Some(fired));
+}
+
+#[test]
+fn deleting_a_drawing_deletes_its_alerts() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.upsert_drawing(&drawing("d1", "BTCUSDT", 0)).unwrap();
+    store.upsert_drawing(&drawing("d2", "BTCUSDT", 0)).unwrap();
+    for (a, kind) in [
+        ("a1", on_drawing("d1")),
+        ("a2", on_drawing("d1")),
+        ("a3", on_drawing("d2")),
+        ("a4", price(5)),
+    ] {
+        store.upsert_alert(&alert(a, "BTCUSDT", kind)).unwrap();
+    }
+    // Saving the drawing again (a move) keeps its alerts.
+    store.upsert_drawing(&drawing("d1", "BTCUSDT", 3)).unwrap();
+    assert_eq!(store.alerts().unwrap().len(), 4);
+    assert_eq!(store.delete_drawing("d1").unwrap(), 2);
+    assert_eq!(store.delete_drawing("d1").unwrap(), 0);
+    let ids: Vec<String> = store.alerts().unwrap().into_iter().map(|a| a.id).collect();
+    assert_eq!(ids, ["a3", "a4"]);
+}
+
+#[test]
+fn at_most_100_alerts_are_active() {
+    let mut store = Store::open_in_memory().unwrap();
+    for i in 0..MAX_ACTIVE_ALERTS {
+        store
+            .upsert_alert(&alert(&format!("a{i}"), "BTCUSDT", price(i as i64)))
+            .unwrap();
+    }
+    let err = store
+        .upsert_alert(&alert("more", "BTCUSDT", price(1)))
+        .unwrap_err();
+    assert!(
+        matches!(err, StoreError::TooManyActiveAlerts { max: 100 }),
+        "{err:?}"
+    );
+    assert!(err.to_string().contains("100"));
+    // Changing one that is active works at the cap; an inactive one may be added.
+    store
+        .upsert_alert(&alert("a0", "BTCUSDT", price(-1)))
+        .unwrap();
+    let mut off = alert("off", "BTCUSDT", price(1));
+    off.active = false;
+    store.upsert_alert(&off).unwrap();
+    // Re-arming it is refused until one fires.
+    off.active = true;
+    assert!(store.upsert_alert(&off).is_err());
+    assert!(
+        store
+            .fire_alert(&fire(alert("a1", "BTCUSDT", price(1)), 1, 1, 2))
+            .unwrap()
+    );
+    store.upsert_alert(&off).unwrap();
+}
+
+#[test]
+fn at_most_30_pairs_have_active_alerts() {
+    let mut store = Store::open_in_memory().unwrap();
+    for i in 0..MAX_ALERT_PAIRS {
+        store
+            .upsert_alert(&alert(&format!("a{i}"), &format!("P{i}"), price(1)))
+            .unwrap();
+    }
+    // Another alert on a pair that has one is fine.
+    store.upsert_alert(&alert("b", "P0", price(2))).unwrap();
+    let err = store
+        .upsert_alert(&alert("c", "NEW", price(1)))
+        .unwrap_err();
+    assert!(
+        matches!(err, StoreError::TooManyAlertPairs { max: 30 }),
+        "{err:?}"
+    );
+    assert!(err.to_string().contains("30"));
+    // Moving the last alert of a pair to a new one keeps the count.
+    store.upsert_alert(&alert("a5", "NEW", price(1))).unwrap();
+    assert!(
+        store
+            .fire_alert(&fire(alert("a6", "P6", price(1)), 1, 1, 2))
+            .unwrap()
+    );
+    store.upsert_alert(&alert("c", "NEW2", price(1))).unwrap();
+}
+
+#[test]
+fn at_most_500_alerts_are_stored() {
+    let mut store = Store::open_in_memory().unwrap();
+    for i in 0..MAX_ALERTS {
+        let mut a = alert(&format!("a{i}"), "BTCUSDT", price(1));
+        a.active = false;
+        store.upsert_alert(&a).unwrap();
+    }
+    let mut a = alert("more", "BTCUSDT", price(1));
+    a.active = false;
+    let err = store.upsert_alert(&a).unwrap_err();
+    assert!(
+        matches!(err, StoreError::TooManyAlerts { max: 500 }),
+        "{err:?}"
+    );
+    store.delete_alert("a0").unwrap();
+    store.upsert_alert(&a).unwrap();
+}
+
+/// Holds the write lock of `path` from another connection, as the app or the MCP server
+/// would, and lets it go after `ms`.
+fn hold_write_lock(path: &std::path::Path, ms: u64) -> std::thread::JoinHandle<()> {
+    let conn = rusqlite::Connection::open(path).unwrap();
+    conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+        conn.execute_batch("COMMIT").unwrap();
+    })
+}
+
+#[test]
+fn a_write_waits_for_another_process_instead_of_failing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sandchart.db");
+    let mut store = Store::open(&path).unwrap();
+    store.upsert_instruments(&[instrument("BTCUSDT")]).unwrap();
+
+    let started = std::time::Instant::now();
+    let other = hold_write_lock(&path, 300);
+    // A read-then-write transaction (it counts the drawings first) and a single statement.
+    store.upsert_drawing(&drawing("a", "BTCUSDT", 0)).unwrap();
+    store.delete_alert("none").unwrap();
+    assert!(started.elapsed() >= std::time::Duration::from_millis(250));
+    other.join().unwrap();
+
+    // Reads never wait for a writer in WAL mode.
+    let other = hold_write_lock(&path, 300);
+    let started = std::time::Instant::now();
+    assert_eq!(store.drawings(&id("BTCUSDT")).unwrap().len(), 1);
+    assert!(started.elapsed() < std::time::Duration::from_millis(250));
+    other.join().unwrap();
+}
+
+#[test]
+fn two_processes_opening_an_old_file_migrate_it_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sandchart.db");
+    Store::open(&path).unwrap().migrate_down_to(1).unwrap();
+
+    // Both open while a third connection holds the write lock, so both read the old version
+    // before either can migrate.
+    let lock = hold_write_lock(&path, 300);
+    let opens: Vec<_> = (0..2)
+        .map(|_| {
+            let path = path.clone();
+            std::thread::spawn(move || Store::open(&path).map(|_| ()))
+        })
+        .collect();
+    lock.join().unwrap();
+    for open in opens {
+        open.join().unwrap().unwrap();
+    }
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let version: u32 = conn
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 4);
+}
+
+#[test]
+fn data_version_changes_only_with_another_connections_commits() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sandchart.db");
+    let mut app = Store::open(&path).unwrap();
+    let mut other = Store::open(&path).unwrap();
+    let v0 = app.data_version().unwrap();
+    app.upsert_instruments(&[instrument("BTCUSDT")]).unwrap();
+    assert_eq!(
+        app.data_version().unwrap(),
+        v0,
+        "its own writes do not count"
+    );
+    other.upsert_drawing(&drawing("a", "BTCUSDT", 0)).unwrap();
+    let v1 = app.data_version().unwrap();
+    assert_ne!(v1, v0);
+    assert_eq!(app.data_version().unwrap(), v1);
+}
+
+#[test]
+fn a_second_process_never_migrates_an_older_apps_database() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sandchart.db");
+    Store::open(&path).unwrap().migrate_down_to(3).unwrap();
+    let err = Store::open_existing(&path).err().expect("refused");
+    assert!(
+        matches!(
+            err,
+            StoreError::SchemaTooOld {
+                found: 3,
+                supported: 4
+            }
+        ),
+        "{err:?}"
+    );
+    assert_contains_text(&err.to_string(), "update the Sandchart app first");
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let version: u32 = conn
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 3, "left as it was");
+
+    // A brand-new file is set up, and one at the latest version opens.
+    let fresh = dir.path().join("new.db");
+    Store::open_existing(&fresh).unwrap();
+    Store::open(&path).unwrap();
+    Store::open_existing(&path).unwrap();
+}
+
+fn assert_contains_text(haystack: &str, needle: &str) {
+    assert!(haystack.contains(needle), "{needle:?} not in {haystack:?}");
+}
+
+fn with_body(mut d: Drawing, body: DrawingBody) -> Drawing {
+    d.body = body;
+    d
+}
+
+fn rect() -> DrawingBody {
+    DrawingBody::Rect {
+        a: Anchor { t: 1, p: 100 },
+        b: Anchor { t: 2, p: 200 },
+        extend_right: false,
+    }
+}
+
+fn alert_ids(store: &Store) -> Vec<String> {
+    store.alerts().unwrap().into_iter().map(|a| a.id).collect()
+}
+
+#[test]
+fn a_line_alert_needs_an_hline_or_trend_drawing_of_its_pair() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.upsert_drawing(&drawing("t", "BTCUSDT", 0)).unwrap();
+    store
+        .upsert_drawing(&with_body(
+            drawing("h", "BTCUSDT", 0),
+            DrawingBody::Hline { p: 5 },
+        ))
+        .unwrap();
+    store
+        .upsert_drawing(&with_body(drawing("r", "BTCUSDT", 0), rect()))
+        .unwrap();
+    store.upsert_drawing(&drawing("e", "ETHUSDT", 0)).unwrap();
+    store
+        .upsert_alert(&alert("a1", "BTCUSDT", on_drawing("t")))
+        .unwrap();
+    store
+        .upsert_alert(&alert("a2", "BTCUSDT", on_drawing("h")))
+        .unwrap();
+    for (drawing_id, want) in [
+        ("none", "drawing \"none\" does not exist"),
+        ("e", "drawing \"e\" is on another pair"),
+        ("r", "an alert can follow only a horizontal or a trend line"),
+    ] {
+        let err = store
+            .upsert_alert(&alert("x", "BTCUSDT", on_drawing(drawing_id)))
+            .unwrap_err();
+        assert!(matches!(err, StoreError::AlertDrawing(_)), "{err:?}");
+        assert_contains_text(&err.to_string(), want);
+    }
+    assert_eq!(alert_ids(&store), ["a1", "a2"]);
+}
+
+#[test]
+fn a_drawing_that_stops_being_a_line_or_moves_pair_loses_its_alerts() {
+    let mut store = Store::open_in_memory().unwrap();
+    for d in ["d1", "d2", "d3"] {
+        store.upsert_drawing(&drawing(d, "BTCUSDT", 0)).unwrap();
+    }
+    for (a, d) in [("a1", "d1"), ("a2", "d2"), ("a3", "d3")] {
+        store
+            .upsert_alert(&alert(a, "BTCUSDT", on_drawing(d)))
+            .unwrap();
+    }
+    // Moved or turned into an hline: still a line on the pair, the alerts stay.
+    assert_eq!(
+        store.upsert_drawing(&drawing("d1", "BTCUSDT", 4)).unwrap(),
+        0
+    );
+    let hline = with_body(drawing("d1", "BTCUSDT", 0), DrawingBody::Hline { p: 7 });
+    assert_eq!(store.upsert_drawing(&hline).unwrap(), 0);
+    // A rectangle now, and on another pair: their alerts go in the same write.
+    assert_eq!(
+        store
+            .upsert_drawing(&with_body(drawing("d2", "BTCUSDT", 0), rect()))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        store.upsert_drawing(&drawing("d3", "ETHUSDT", 0)).unwrap(),
+        1
+    );
+    assert_eq!(alert_ids(&store), ["a1"]);
+}
+
+#[test]
+fn two_processes_racing_on_a_drawing_and_its_alert_leave_no_orphan() {
+    for round in 0..10 {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sandchart.db");
+        Store::open(&path)
+            .unwrap()
+            .upsert_drawing(&drawing("d", "BTCUSDT", 0))
+            .unwrap();
+        // Both start while a third connection holds the write lock, then run in any order.
+        let lock = hold_write_lock(&path, 100);
+        let (p1, p2) = (path.clone(), path.clone());
+        let agent = std::thread::spawn(move || {
+            Store::open(&p1)
+                .unwrap()
+                .upsert_alert(&alert("a", "BTCUSDT", on_drawing("d")))
+                .is_ok()
+        });
+        let app = std::thread::spawn(move || {
+            let mut s = Store::open(&p2).unwrap();
+            if round % 2 == 0 {
+                s.upsert_drawing(&with_body(drawing("d", "BTCUSDT", 0), rect()))
+                    .unwrap();
+            } else {
+                s.delete_drawing("d").unwrap();
+            }
+        });
+        lock.join().unwrap();
+        let _ = agent.join().unwrap();
+        app.join().unwrap();
+        let store = Store::open(&path).unwrap();
+        assert!(
+            alert_ids(&store).is_empty(),
+            "round {round}: an orphan alert"
+        );
+    }
+}
+
+#[test]
+fn the_alerts_fingerprint_changes_only_with_what_alerts_depend_on() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.upsert_instruments(&[instrument("BTCUSDT")]).unwrap();
+    store.upsert_drawing(&drawing("d1", "BTCUSDT", 0)).unwrap();
+    store
+        .upsert_alert(&alert("a", "BTCUSDT", on_drawing("d1")))
+        .unwrap();
+    let mut seen = store.alerts_fingerprint().unwrap();
+    let mut changed = |store: &Store| {
+        let now = store.alerts_fingerprint().unwrap();
+        let differs = now != seen;
+        seen = now;
+        differs
+    };
+    // Candles, another drawing and the watchlist concern no alert.
+    store
+        .upsert_candles(&id("BTCUSDT"), Timeframe::H1, &series(3))
+        .unwrap();
+    store
+        .upsert_drawing(&drawing("other", "BTCUSDT", 0))
+        .unwrap();
+    store.set_watchlist(&[id("BTCUSDT")]).unwrap();
+    assert!(!changed(&store));
+    // The followed line, the pair's tick size and the alert itself do.
+    store.upsert_drawing(&drawing("d1", "BTCUSDT", 5)).unwrap();
+    assert!(!changed(&store), "z is not a level");
+    store
+        .upsert_drawing(&with_body(
+            drawing("d1", "BTCUSDT", 5),
+            DrawingBody::Hline { p: 9 },
+        ))
+        .unwrap();
+    assert!(changed(&store));
+    let mut finer = instrument("BTCUSDT");
+    finer.price_scale = 3;
+    store.upsert_instruments(&[finer]).unwrap();
+    assert!(changed(&store));
+    store
+        .upsert_alert(&alert("p", "BTCUSDT", price(1)))
+        .unwrap();
+    assert!(changed(&store));
+    store.delete_alert("p").unwrap();
+    assert!(changed(&store));
 }

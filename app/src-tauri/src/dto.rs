@@ -1,6 +1,7 @@
 //! Wire types of the Tauri commands and events. JSON is camelCase; candles are columnar
 //! so a 200 000-candle history is six flat arrays, not 200 000 objects.
 
+use sandchart_core::alert::{Alert, AlertKind, Direction};
 use sandchart_core::replay::{Stats, Trade};
 use sandchart_core::{
     Candle, Drawing, DrawingBody, Instrument, InstrumentId, JS_SAFE_MAX, Outcome, PositionBody,
@@ -546,6 +547,66 @@ impl From<DrawingInputDto> for Drawing {
     }
 }
 
+// Alerts. Kind and direction JSON come from core; see `sandchart_core::alert`.
+
+/// A stored alert, as the UI gets it; prices are ticks at `price_scale`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlertDto {
+    pub id: String,
+    pub instrument: InstrumentIdDto,
+    pub price_scale: u8,
+    pub kind: AlertKind,
+    pub direction: Direction,
+    pub active: bool,
+    pub created_at: i64,
+    pub triggered_at: Option<i64>,
+    pub triggered_price: Option<i64>,
+}
+
+impl From<Alert> for AlertDto {
+    fn from(a: Alert) -> Self {
+        Self {
+            id: a.id,
+            instrument: a.instrument.into(),
+            price_scale: a.price_scale,
+            kind: a.kind,
+            direction: a.direction,
+            active: a.active,
+            created_at: a.created_at,
+            triggered_at: a.triggered_at,
+            triggered_price: a.triggered_price,
+        }
+    }
+}
+
+/// An alert to arm; the engine sets the state and the times.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlertInputDto {
+    pub id: String,
+    pub instrument: InstrumentIdDto,
+    pub price_scale: u8,
+    pub kind: AlertKind,
+    pub direction: Direction,
+}
+
+impl From<AlertInputDto> for Alert {
+    fn from(a: AlertInputDto) -> Self {
+        Self {
+            id: a.id,
+            instrument: a.instrument.into(),
+            price_scale: a.price_scale,
+            kind: a.kind,
+            direction: a.direction,
+            active: true,
+            created_at: 0,
+            triggered_at: None,
+            triggered_price: None,
+        }
+    }
+}
+
 /// A position drawing to resolve, by its drawing id.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct PositionInputDto {
@@ -963,6 +1024,39 @@ mod tests {
             "locked": false, "z": 0
         });
         assert!(serde_json::from_value::<DrawingInputDto>(bad).is_err());
+    }
+
+    #[test]
+    fn alert_dtos_are_camel_case() {
+        let input = serde_json::json!({
+            "id": "a1",
+            "instrument": { "source": "binance", "symbol": "BTCUSDT" },
+            "priceScale": 2,
+            "kind": { "kind": "drawing", "drawingId": "d1" },
+            "direction": "below"
+        });
+        let mut a = Alert::from(serde_json::from_value::<AlertInputDto>(input).unwrap());
+        assert_eq!(a.direction, Direction::Below);
+        a.active = false;
+        a.created_at = 5;
+        a.triggered_at = Some(6);
+        a.triggered_price = Some(7);
+        assert_eq!(
+            serde_json::to_value(AlertDto::from(a)).unwrap(),
+            serde_json::json!({
+                "id": "a1",
+                "instrument": { "source": "binance", "symbol": "BTCUSDT" },
+                "priceScale": 2,
+                "kind": { "kind": "drawing", "drawingId": "d1" },
+                "direction": "below",
+                "active": false, "createdAt": 5, "triggeredAt": 6, "triggeredPrice": 7
+            })
+        );
+        let bad = serde_json::json!({
+            "id": "a1", "instrument": { "source": "b", "symbol": "s" }, "priceScale": 2,
+            "kind": { "kind": "price", "price": 1 }, "direction": "up"
+        });
+        assert!(serde_json::from_value::<AlertInputDto>(bad).is_err());
     }
 
     #[test]

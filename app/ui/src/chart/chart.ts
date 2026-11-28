@@ -1,6 +1,7 @@
-import type { CandleColumns, Candles, Drawing, Instrument, LiveCandle, PositionOutcome, TimeframeCode } from "../backend/types";
+import type { Alert, CandleColumns, Candles, Drawing, Instrument, LiveCandle, PositionOutcome, TimeframeCode } from "../backend/types";
+import { AlertLevelLayer } from "./alerts";
 import { chartDebug } from "./debug";
-import { Coords, type Step } from "./drawings/geometry";
+import { Coords, MAX_TICKS, type Step } from "./drawings/geometry";
 import { DrawingLayer, type DrawingCommand, type StyleAction, type StyleEdit, type TextEdit, type TextResult } from "./drawings/layer";
 import type { ToolId } from "./drawings/registry";
 import type { DrawingChange } from "./drawings/state";
@@ -136,6 +137,9 @@ export class Chart {
   private replayEditCb: ((stop: number, take: number) => void) | null = null;
   /** While a replay start is picked: called with the open time of the clicked bar. */
   private pickCb: ((time: number) => void) | null = null;
+  /** Active price alerts of the pair, on the base layer; a press on one selects it. */
+  private readonly alertLevels = new AlertLevelLayer();
+  private alertClickCb: ((id: string) => void) | null = null;
   /** Drawings: painted on both layers, and first in line for pointer input on the price plot. */
   private readonly drawings = new DrawingLayer({
     invalidate: () => this.invalidate(),
@@ -357,6 +361,17 @@ export class Chart {
     this.crosshairCb = cb;
   }
 
+  /** The pair and the price in whole ticks under the mouse on the price plot; null elsewhere. */
+  crosshairPrice(): { instrument: Instrument; price: number } | null {
+    const m = this.mouse;
+    const f = this.lastFrame;
+    if (!m || !f || !this.instrument || this.drag) return null;
+    if (!(m.x >= 0 && m.x < this.plot().plotW && m.y >= 0 && m.y < this.priceH())) return null;
+    const v = Math.round(f.scale.fromY(m.y));
+    const price = Math.min(MAX_TICKS, Math.max(f.scale.mode === "log" ? 1 : -MAX_TICKS, v));
+    return Number.isSafeInteger(price) ? { instrument: this.instrument, price } : null;
+  }
+
   /** The drawings of the instrument on the chart; selection and undo history start over. */
   setDrawings(list: Drawing[]): void {
     this.drawings.setDrawings(list);
@@ -420,6 +435,17 @@ export class Chart {
   /** The active tool changed on the chart (placed, cancelled). */
   onDrawingTool(cb: ((id: ToolId | null) => void) | null): void {
     this.drawingToolCb = cb;
+  }
+
+  /** Every alert; the active price alerts of the chart's pair are drawn as levels. */
+  setAlerts(alerts: readonly Alert[]): void {
+    this.alertLevels.set(alerts);
+    this.invalidate();
+  }
+
+  /** A press on an alert level: called with the alert's id. */
+  onAlertClick(cb: ((id: string) => void) | null): void {
+    this.alertClickCb = cb;
   }
 
   /** A replay's trades and where its revealed bars end, or none. */
@@ -730,6 +756,9 @@ export class Chart {
     // Months differ in length: 1M extrapolates by calendar months, not by 30 days.
     const step: Step = this.tf === "1M" ? "month" : (STEP_MS.get(this.tf) ?? 60 * MINUTE);
     const coords = new Coords(s.time, s.count, this.view, scale, plotW, priceH, step, decimals, s);
+    // Under the drawings: a line the user drew at the same price stays on top.
+    this.alertLevels.paintBase(this.ctx, coords, this.dpr, this.theme, this.instrument);
+    for (const p of this.alertLevels.axisPrices()) drawingTag(this.ctx, f, this.buffers, p, this.theme.muted);
     this.drawings.paintBase(this.ctx, coords, this.dpr, this.theme, (p, color) =>
       drawingTag(this.ctx, f, this.buffers, p, color),
     );
@@ -796,6 +825,9 @@ export class Chart {
     if (level) this.replay.startDrag(level);
     const onDrawing =
       !level && this.inPricePlot(p) && this.drawings.pointerDown(p.x, p.y, e.shiftKey, e.metaKey || e.ctrlKey);
+    // An alert level selects its alert; the press still pans, as on an empty plot.
+    const alert = !level && !onDrawing ? this.alertLevels.hit(p.x, p.y) : null;
+    if (alert) this.alertClickCb?.(alert);
     const kind = level ? "replay" : onDrawing ? "drawing" : onPriceAxis ? "price" : "pan";
     this.drag = { kind, pointerId: e.pointerId, lastX: e.clientX, lastY: e.clientY };
     this.canvas.setPointerCapture(e.pointerId);
@@ -814,7 +846,9 @@ export class Chart {
     }
     const onPriceAxis = p.x >= this.plot().plotW && p.y < this.priceH();
     const onLevel = this.replay.dragging || (this.inPricePlot(p) && this.replay.handleAt(p.x, p.y) !== null);
-    this.canvas.style.cursor = onPriceAxis || onLevel ? "ns-resize" : (this.drawings.cursor() ?? "crosshair");
+    const onAlert = !this.drag && this.alertLevels.hit(p.x, p.y) !== null;
+    this.canvas.style.cursor =
+      onPriceAxis || onLevel ? "ns-resize" : (this.drawings.cursor() ?? (onAlert ? "pointer" : "crosshair"));
   }
 
   private readonly onPointerMove = (e: PointerEvent): void => {

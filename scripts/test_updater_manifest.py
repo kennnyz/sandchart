@@ -32,6 +32,8 @@ class ManifestTest(unittest.TestCase):
         self.write("Sandchart_0.2.0_aarch64.dmg", "dmg")
         self.write("Sandchart_0.2.0_amd64.deb", "deb")
         self.write("sandchart-indicator-x86_64-apple-darwin.tar.gz", "cli")
+        self.write("sandchart-mcp-aarch64-apple-darwin.tar.gz", "mcp")
+        self.write("sandchart-mcp-x86_64-pc-windows-msvc.zip", "mcp")
 
     def tearDown(self):
         self.tmp.cleanup()

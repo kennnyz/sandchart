@@ -1,0 +1,712 @@
+//! Alerts (ADR 0007): stored in SQLite, armed in memory, evaluated on every live update of
+//! the stream that feeds their pair. A pair with an active alert always has a stream: the
+//! chart's when it shows that pair, else one the engine opens itself.
+
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
+
+use sandchart_core::alert::{Alert, AlertKind, Level, Update, fires, validate};
+use sandchart_core::drawing::validate_id;
+use sandchart_core::{Candle, InstrumentId, Timeframe};
+use sandchart_store::{MAX_ACTIVE_ALERTS, MAX_ALERT_PAIRS, Store, StoreError};
+use tokio::sync::{Notify, broadcast};
+use tokio::task::JoinHandle;
+
+use crate::{Engine, EngineError, blocking, lock};
+
+/// Most live streams at once, the chart's and the alerts' together.
+pub const MAX_LIVE_STREAMS: usize = 32;
+// The chart must always find a stream, even while one is being replaced by the next.
+const _: () = assert!(MAX_ALERT_PAIRS + 2 <= MAX_LIVE_STREAMS);
+
+/// The timeframe of the streams the engine opens for alerts: the shortest, so a new high
+/// or low of the bar is close to the moment it happened.
+const ALERT_TF: Timeframe = Timeframe::M1;
+
+/// How often the service looks for alerts another process (the MCP server) wrote, and
+/// tries again a stream that could not be opened.
+const CHECK: Duration = Duration::from_secs(2);
+
+/// Alert events a receiver may fall behind by. A lagging receiver loses the oldest ones,
+/// so the buffer holds a firing of every active alert at once, each with a `Changed`, twice
+/// over: a burst never drops a notification.
+const EVENT_BUFFER: usize = 4 * MAX_ACTIVE_ALERTS;
+
+/// What the alert service reports.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AlertEvent {
+    /// An alert fired; it is stored as inactive with when and at what price.
+    Fired(Alert),
+    /// Alerts were added, changed or removed (also by deleting a drawing).
+    Changed,
+}
+
+/// An active alert with the level it watches, at the instrument's current price scale.
+struct Armed {
+    alert: Alert,
+    level: Level,
+    /// Engine time it was armed in memory: an update from before cannot fire it.
+    armed_at: i64,
+}
+
+/// A live stream of a pair; `own` when the engine opened it for alerts. `scale` is the
+/// price scale its candles come in: the instrument's when it was opened.
+#[derive(Clone, Copy)]
+struct Stream {
+    key: u64,
+    own: bool,
+    scale: u8,
+}
+
+#[derive(Default)]
+struct State {
+    armed: HashMap<InstrumentId, Vec<Armed>>,
+    /// The last update of each armed pair and the stream it came from.
+    last: HashMap<InstrumentId, (u64, Update)>,
+    streams: HashMap<InstrumentId, Vec<Stream>>,
+    /// The streams the engine opened, by pair: a task that owns the `LiveHandle`.
+    own: HashMap<InstrumentId, JoinHandle<()>>,
+    /// Alerts that fired here (id, created_at) until their firing is written: a reload in
+    /// between still reads them as active and must not arm them again.
+    pending: HashSet<(String, i64)>,
+    /// Generation of the armed set that is applied (see `reload`).
+    applied: u64,
+    /// Running streams of every pair.
+    open: usize,
+}
+
+impl State {
+    /// The price scale the armed alerts of `id` compare at: the instrument's current one.
+    fn scale(&self, id: &InstrumentId) -> Option<u8> {
+        Some(self.armed.get(id)?.first()?.alert.price_scale)
+    }
+
+    /// The streams of `id` whose candles come at the armed alerts' scale; one opened before
+    /// the tick size changed cannot feed them.
+    fn matching(&self, id: &InstrumentId) -> impl Iterator<Item = &Stream> {
+        let scale = self.scale(id);
+        self.streams
+            .get(id)
+            .into_iter()
+            .flatten()
+            .filter(move |s| Some(s.scale) == scale)
+    }
+
+    /// The stream whose updates count for `id`: the chart's first, else the engine's own.
+    fn feeder(&self, id: &InstrumentId) -> Option<u64> {
+        self.matching(id)
+            .find(|s| !s.own)
+            .or_else(|| self.matching(id).next())
+            .map(|s| s.key)
+    }
+}
+
+pub(crate) struct Hub {
+    state: Mutex<State>,
+    /// Wakes the service loop: a stream closed, or the armed set changed.
+    wake: Notify,
+    events: broadcast::Sender<AlertEvent>,
+    next_key: AtomicU64,
+    reloads: AtomicU64,
+}
+
+impl Default for Hub {
+    fn default() -> Self {
+        Hub {
+            state: Mutex::default(),
+            wake: Notify::new(),
+            events: broadcast::channel(EVENT_BUFFER).0,
+            next_key: AtomicU64::new(1),
+            reloads: AtomicU64::new(0),
+        }
+    }
+}
+
+/// Registers a running stream for its pair and releases it on drop, so an aborted task
+/// frees its slot and lets the service open a replacement.
+pub(crate) struct StreamGuard {
+    hub: Arc<Hub>,
+    id: InstrumentId,
+    pub key: u64,
+}
+
+impl Drop for StreamGuard {
+    fn drop(&mut self) {
+        let mut st = self.hub.state();
+        if let Some(v) = st.streams.get_mut(&self.id) {
+            v.retain(|s| s.key != self.key);
+            if v.is_empty() {
+                st.streams.remove(&self.id);
+            }
+        }
+        st.open -= 1;
+        drop(st);
+        self.hub.wake.notify_one();
+    }
+}
+
+impl Hub {
+    fn state(&self) -> MutexGuard<'_, State> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Takes a slot under [`MAX_LIVE_STREAMS`] for a stream of `id`.
+    pub(crate) fn open_stream(
+        self: &Arc<Self>,
+        id: &InstrumentId,
+        own: bool,
+        scale: u8,
+    ) -> Result<StreamGuard, EngineError> {
+        let mut st = self.state();
+        if st.open >= MAX_LIVE_STREAMS {
+            return Err(EngineError::Alert(format!(
+                "too many live streams (max {MAX_LIVE_STREAMS})"
+            )));
+        }
+        st.open += 1;
+        let key = self.next_key.fetch_add(1, Ordering::Relaxed);
+        st.streams
+            .entry(id.clone())
+            .or_default()
+            .push(Stream { key, own, scale });
+        drop(st);
+        if !own {
+            self.wake.notify_one(); // the engine's own stream of this pair can go
+        }
+        Ok(StreamGuard {
+            hub: Arc::clone(self),
+            id: id.clone(),
+            key,
+        })
+    }
+
+    /// Checks the armed alerts of `id` against a live update of stream `key` at engine time
+    /// `now`; the ones that fire are disarmed and returned with their trigger filled in.
+    pub(crate) fn evaluate(
+        &self,
+        id: &InstrumentId,
+        key: u64,
+        candle: &Candle,
+        now: i64,
+    ) -> Vec<Alert> {
+        let mut guard = self.state();
+        let st = &mut *guard;
+        if !st.armed.contains_key(id) || st.feeder(id) != Some(key) {
+            return Vec::new();
+        }
+        let cur = Update {
+            t: now,
+            open_time: candle.open_time,
+            high: candle.high,
+            low: candle.low,
+            close: candle.close,
+        };
+        let Some((prev_key, prev)) = st.last.insert(id.clone(), (key, cur)) else {
+            return Vec::new();
+        };
+        let mut fired = Vec::new();
+        let Some(armed) = st.armed.get_mut(id) else {
+            return fired;
+        };
+        armed.retain(|a| {
+            if prev.t < a.armed_at {
+                return true;
+            }
+            match fires(a.alert.direction, &a.level, &prev, &cur, prev_key == key) {
+                Some(price) => {
+                    fired.push(Alert {
+                        active: false,
+                        triggered_at: Some(now),
+                        triggered_price: Some(price),
+                        ..a.alert.clone()
+                    });
+                    false
+                }
+                None => true,
+            }
+        });
+        for a in &fired {
+            st.pending.insert((a.id.clone(), a.created_at));
+        }
+        if armed.is_empty() {
+            st.armed.remove(id);
+            st.last.remove(id);
+            self.wake.notify_one(); // its own stream can go
+        }
+        fired
+    }
+
+    /// The firings of `fired` are written (or given up): reloads may arm them again.
+    pub(crate) fn settled(&self, fired: &[Alert]) {
+        let mut st = self.state();
+        for a in fired {
+            st.pending.remove(&(a.id.clone(), a.created_at));
+        }
+    }
+
+    pub(crate) fn events(&self) -> broadcast::Receiver<AlertEvent> {
+        self.events.subscribe()
+    }
+
+    fn send(&self, e: AlertEvent) {
+        // No receiver (no UI yet) is fine: the store has the state.
+        let _ = self.events.send(e);
+    }
+
+    /// Whether a drawing has an armed alert, so a change of it must re-arm.
+    fn follows(&self, drawing_id: &str) -> bool {
+        self.state().armed.values().flatten().any(
+            |a| matches!(&a.alert.kind, AlertKind::Drawing { drawing_id: d } if d == drawing_id),
+        )
+    }
+
+    /// Re-reads the active alerts from the store and arms them. Each call takes a
+    /// generation after the write it follows; only a newer one replaces the armed set,
+    /// so two reloads that finish out of order cannot leave the older one armed.
+    fn reload(&self, store: &Mutex<Store>, now: i64) -> Result<(), StoreError> {
+        let generation = self.reloads.fetch_add(1, Ordering::AcqRel) + 1;
+        let fresh = read_armed(&lock(store))?;
+        let mut st = self.state();
+        if generation <= st.applied {
+            return Ok(());
+        }
+        st.applied = generation;
+        let old: HashMap<String, (i64, i64)> = st
+            .armed
+            .values()
+            .flatten()
+            .map(|a| (a.alert.id.clone(), (a.alert.created_at, a.armed_at)))
+            .collect();
+        let mut armed: HashMap<InstrumentId, Vec<Armed>> = HashMap::new();
+        for (alert, level) in fresh {
+            if st.pending.contains(&(alert.id.clone(), alert.created_at)) {
+                continue;
+            }
+            let armed_at = match old.get(&alert.id) {
+                Some(&(created, at)) if created == alert.created_at => at,
+                _ => now,
+            };
+            armed
+                .entry(alert.instrument.clone())
+                .or_default()
+                .push(Armed {
+                    alert,
+                    level,
+                    armed_at,
+                });
+        }
+        // A price from before a change of tick size is in other ticks than the new levels.
+        let scale = |a: &HashMap<InstrumentId, Vec<Armed>>, id: &InstrumentId| {
+            a.get(id)?.first().map(|a| a.alert.price_scale)
+        };
+        let old = std::mem::take(&mut st.armed);
+        st.last
+            .retain(|id, _| scale(&armed, id).is_some() && scale(&armed, id) == scale(&old, id));
+        st.armed = armed;
+        drop(st);
+        self.wake.notify_one();
+        Ok(())
+    }
+}
+
+/// The active alerts with their levels at their instrument's current price scale. An alert
+/// whose instrument, drawing or price no longer works is left out and logged.
+fn read_armed(s: &Store) -> Result<Vec<(Alert, Level)>, StoreError> {
+    let mut out = Vec::new();
+    for a in s.alerts()?.into_iter().filter(|a| a.active) {
+        match armed_level(s, &a)? {
+            Ok(armed) => out.push(armed),
+            Err(e) => eprintln!("alert {} is not armed: {e}", a.id),
+        }
+    }
+    Ok(out)
+}
+
+fn armed_level(s: &Store, a: &Alert) -> Result<Result<(Alert, Level), String>, StoreError> {
+    let Some(inst) = s.instrument(&a.instrument)? else {
+        return Ok(Err("its instrument is unknown".into()));
+    };
+    let Some(a) = a.rescaled(inst.price_scale) else {
+        return Ok(Err("its price does not fit the new tick size".into()));
+    };
+    let level = match &a.kind {
+        AlertKind::Price { price } => Level::Flat { p: *price },
+        AlertKind::Drawing { drawing_id } => match drawing_level(s, &a, drawing_id)? {
+            Ok(l) => l,
+            Err(e) => return Ok(Err(e)),
+        },
+    };
+    Ok(Ok((a, level)))
+}
+
+fn drawing_level(
+    s: &Store,
+    a: &Alert,
+    drawing_id: &str,
+) -> Result<Result<Level, String>, StoreError> {
+    let Some(d) = s.drawing(drawing_id)? else {
+        return Ok(Err(format!("drawing {drawing_id} does not exist")));
+    };
+    if d.instrument != a.instrument {
+        return Ok(Err(format!("drawing {drawing_id} is on another pair")));
+    }
+    let Some(d) = d.rescaled(a.price_scale) else {
+        return Ok(Err("the line does not fit the new tick size".into()));
+    };
+    Ok(Level::of_drawing(&d.body)
+        .ok_or_else(|| "an alert can follow only a horizontal or a trend line".to_owned()))
+}
+
+impl Engine {
+    /// Every alert, oldest first, at its instrument's current price scale.
+    pub async fn alerts(&self) -> Result<Vec<Alert>, EngineError> {
+        blocking(&self.shared.store, |s| {
+            let mut out = Vec::new();
+            for a in s.alerts()? {
+                let scale = s.instrument(&a.instrument)?.map(|i| i.price_scale);
+                out.push(match scale {
+                    Some(to) if to != a.price_scale => a.rescaled(to).unwrap_or(a),
+                    _ => a,
+                });
+            }
+            Ok(out)
+        })
+        .await
+    }
+
+    /// Validates, stores and arms an alert (insert or replace by id). It is active from now
+    /// on, with no trigger. A line alert must follow an `hline` or `trend` drawing of the
+    /// same pair. Refused past the caps, and when the pair would need a live stream while
+    /// all [`MAX_LIVE_STREAMS`] are open.
+    pub async fn set_alert(&self, mut a: Alert) -> Result<Alert, EngineError> {
+        a.active = true;
+        a.created_at = self.now_ms();
+        a.triggered_at = None;
+        a.triggered_price = None;
+        validate(&a).map_err(EngineError::Alert)?;
+        self.arm(a).await
+    }
+
+    /// Arms a fired alert again; it fires on the next crossing from now on.
+    pub async fn rearm_alert(&self, id: &str) -> Result<Alert, EngineError> {
+        let key = id.to_owned();
+        let mut a = blocking(&self.shared.store, move |s| s.alert(&key))
+            .await?
+            .ok_or_else(|| EngineError::Alert(format!("no alert {id:?}")))?;
+        a.active = true;
+        a.triggered_at = None;
+        a.triggered_price = None;
+        self.arm(a).await
+    }
+
+    async fn arm(&self, a: Alert) -> Result<Alert, EngineError> {
+        let full = {
+            let st = self.shared.alerts.state();
+            !st.streams.contains_key(&a.instrument) && st.open >= MAX_LIVE_STREAMS
+        };
+        if full {
+            return Err(EngineError::Alert(format!(
+                "too many live streams (max {MAX_LIVE_STREAMS}) for an alert on another pair"
+            )));
+        }
+        let now = self.now_ms();
+        let store = Arc::clone(&self.shared.store);
+        let hub = Arc::clone(&self.shared.alerts);
+        let saved = crate::spawn_blocking(move || {
+            let a = {
+                let mut s = lock(&store);
+                let inst = s
+                    .instrument(&a.instrument)?
+                    .ok_or_else(|| EngineError::UnknownInstrument(a.instrument.clone()))?;
+                let a = a.rescaled(inst.price_scale).ok_or_else(|| {
+                    EngineError::Alert("the price does not fit the tick size".into())
+                })?;
+                // The same checks as arming from the store, so what is saved can be armed.
+                armed_level(&s, &a)?.map_err(EngineError::Alert)?;
+                s.upsert_alert(&a)?;
+                a
+            };
+            hub.reload(&store, now)?;
+            Ok(a)
+        })
+        .await?;
+        self.shared.alerts.send(AlertEvent::Changed);
+        Ok(saved)
+    }
+
+    pub async fn delete_alert(&self, id: &str) -> Result<(), EngineError> {
+        validate_id(id).map_err(|_| EngineError::Alert(format!("no alert {id:?}")))?;
+        let id = id.to_owned();
+        self.store_and_reload(move |s| s.delete_alert(&id)).await?;
+        self.shared.alerts.send(AlertEvent::Changed);
+        Ok(())
+    }
+
+    /// Alert events, for the UI and the OS notification.
+    pub fn alert_events(&self) -> broadcast::Receiver<AlertEvent> {
+        self.shared.alerts.events()
+    }
+
+    /// Runs `f` on the store, then re-arms the alerts from what it left.
+    pub(crate) async fn store_and_reload<T, F>(&self, f: F) -> Result<T, EngineError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut Store) -> Result<T, StoreError> + Send + 'static,
+    {
+        let now = self.now_ms();
+        let store = Arc::clone(&self.shared.store);
+        let hub = Arc::clone(&self.shared.alerts);
+        crate::spawn_blocking(move || {
+            let out = f(&mut lock(&store))?;
+            hub.reload(&store, now)?;
+            Ok(out)
+        })
+        .await
+    }
+
+    /// A drawing was saved: its armed alerts follow its new place, and `removed` says the
+    /// store deleted alerts that could no longer follow it.
+    pub(crate) async fn drawing_saved(
+        &self,
+        drawing_id: &str,
+        removed: bool,
+    ) -> Result<(), EngineError> {
+        if removed || self.shared.alerts.follows(drawing_id) {
+            self.store_and_reload(|_| Ok(())).await?;
+            self.shared.alerts.send(AlertEvent::Changed);
+        }
+        Ok(())
+    }
+
+    /// Deletes a drawing and its alerts in one transaction, then disarms them.
+    pub(crate) async fn delete_drawing_and_alerts(&self, id: String) -> Result<(), EngineError> {
+        let removed = self
+            .store_and_reload(move |s| s.delete_drawing(&id))
+            .await?;
+        if removed > 0 {
+            self.shared.alerts.send(AlertEvent::Changed);
+        }
+        Ok(())
+    }
+
+    /// The alert service: arms the stored alerts and keeps a live stream open for every
+    /// pair with an active one. Runs until the engine's runtime stops; spawn it once.
+    pub async fn run_alerts(&self) {
+        let hub = Arc::clone(&self.shared.alerts);
+        // Read first, so a write by another process during the first arming is not missed.
+        let mut seen = self.data_version().await;
+        let mut fingerprint = self.alerts_fingerprint().await;
+        if let Err(e) = self.store_and_reload(|_| Ok(())).await {
+            eprintln!("cannot arm the alerts: {e}");
+        }
+        let mut failing: HashSet<InstrumentId> = HashSet::new();
+        loop {
+            let notified = hub.wake.notified();
+            self.reconcile(&mut failing);
+            let _ = tokio::time::timeout(CHECK, notified).await;
+            // Another process may have added, changed or removed alerts or their drawings;
+            // most of its commits (candles, other drawings) concern no alert.
+            let version = self.data_version().await;
+            if version != seen {
+                seen = version;
+                let now = self.alerts_fingerprint().await;
+                if now.is_some() && now == fingerprint {
+                    continue;
+                }
+                fingerprint = now;
+                match self.store_and_reload(|_| Ok(())).await {
+                    Ok(()) => self.shared.alerts.send(AlertEvent::Changed),
+                    Err(e) => eprintln!("cannot re-arm the alerts: {e}"),
+                }
+            }
+        }
+    }
+
+    /// The store's [`Store::alerts_fingerprint`], `None` when it cannot be read.
+    async fn alerts_fingerprint(&self) -> Option<String> {
+        blocking(&self.shared.store, |s| s.alerts_fingerprint())
+            .await
+            .ok()
+    }
+
+    /// The store's `data_version`, `None` when it cannot be read.
+    async fn data_version(&self) -> Option<u32> {
+        blocking(&self.shared.store, |s| s.data_version())
+            .await
+            .ok()
+    }
+
+    /// Opens the engine's own stream for every armed pair without one and closes the ones
+    /// no longer needed. A stream that cannot be opened is tried again on the next call.
+    fn reconcile(&self, failing: &mut HashSet<InstrumentId>) {
+        let hub = &self.shared.alerts;
+        let (start, stop) = {
+            let mut st = hub.state();
+            st.own.retain(|_, task| !task.is_finished());
+            let chart = |st: &State, id: &InstrumentId| st.matching(id).any(|s| !s.own);
+            // An own stream opened before the tick size changed is opened again.
+            let stop: Vec<InstrumentId> = st
+                .own
+                .keys()
+                .filter(|id| chart(&st, id) || !st.matching(id).any(|s| s.own))
+                .cloned()
+                .collect();
+            let stop: Vec<JoinHandle<()>> =
+                stop.iter().filter_map(|id| st.own.remove(id)).collect();
+            let start: Vec<InstrumentId> = st
+                .armed
+                .keys()
+                .filter(|id| !st.own.contains_key(*id) && !chart(&st, id))
+                .cloned()
+                .collect();
+            (start, stop)
+        };
+        for task in stop {
+            task.abort();
+        }
+        failing.retain(|id| start.contains(id));
+        for id in start {
+            match self.open_live(&id, ALERT_TF, true) {
+                Ok(mut handle) => {
+                    failing.remove(&id);
+                    // Nobody reads the events of this stream; its updates are evaluated
+                    // in the stream task itself.
+                    let task =
+                        tokio::spawn(
+                            async move { while handle.receiver().recv().await.is_some() {} },
+                        );
+                    hub.state().own.insert(id, task);
+                }
+                Err(e) => {
+                    if failing.insert(id.clone()) {
+                        eprintln!(
+                            "no live stream for the alerts of {}/{}: {e}",
+                            id.source, id.symbol
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Wait before the one retry of a firing that could not be stored.
+const FIRE_RETRY: Duration = Duration::from_millis(500);
+
+/// Stores alerts that fired in the stream task of their pair, then reports them. Runs as a
+/// task of its own: the stream may be stopped right after (its last alert fired), and that
+/// must not cancel the write. A write that fails is reported all the same (the price did
+/// reach the level) and tried once more; if that fails too, the alert stays active in the
+/// store and the next reload arms it again.
+pub(crate) async fn record_fired(shared: crate::Shared, fired: Vec<Alert>) {
+    let store = |a: &Alert| {
+        let a = a.clone();
+        blocking(&shared.store, move |s| s.fire_alert(&a))
+    };
+    for a in fired {
+        match store(&a).await {
+            Ok(true) => {
+                shared.alerts.settled(std::slice::from_ref(&a));
+                shared.alerts.send(AlertEvent::Fired(a));
+            }
+            // Deleted, replaced or fired meanwhile.
+            Ok(false) => shared.alerts.settled(std::slice::from_ref(&a)),
+            Err(e) => {
+                eprintln!(
+                    "alert {} fired but cannot be stored, trying again: {e}",
+                    a.id
+                );
+                shared.alerts.send(AlertEvent::Fired(a.clone()));
+                tokio::time::sleep(FIRE_RETRY).await;
+                if let Err(e) = store(&a).await {
+                    eprintln!("alert {} fired but cannot be stored: {e}", a.id);
+                }
+                shared.alerts.settled(std::slice::from_ref(&a));
+                // Whatever the store holds now is what must be armed.
+                let (st, hub, now) = (
+                    shared.store.clone(),
+                    shared.alerts.clone(),
+                    (shared.clock)(),
+                );
+                let reloaded = crate::spawn_blocking(move || Ok(hub.reload(&st, now)?)).await;
+                if let Err(e) = reloaded {
+                    eprintln!("cannot re-arm the alerts: {e}");
+                }
+                shared.alerts.send(AlertEvent::Changed);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sandchart_core::Instrument;
+    use sandchart_core::alert::Direction;
+
+    fn bar(high: i64, close: i64) -> Candle {
+        Candle {
+            open_time: 0,
+            open: close,
+            high,
+            low: close,
+            close,
+            volume: 1,
+        }
+    }
+
+    fn armed_ids(hub: &Hub) -> Vec<String> {
+        hub.state()
+            .armed
+            .values()
+            .flatten()
+            .map(|a| a.alert.id.clone())
+            .collect()
+    }
+
+    #[test]
+    fn an_alert_that_fired_is_not_armed_again_before_its_firing_is_stored() {
+        let id = InstrumentId {
+            source: "fake".into(),
+            symbol: "BTCUSDT".into(),
+        };
+        let mut s = Store::open_in_memory().unwrap();
+        s.upsert_instruments(&[Instrument {
+            id: id.clone(),
+            base: "BTC".into(),
+            quote: "USDT".into(),
+            price_scale: 2,
+            qty_scale: 3,
+        }])
+        .unwrap();
+        let alert = Alert {
+            id: "a".into(),
+            instrument: id.clone(),
+            price_scale: 2,
+            kind: AlertKind::Price { price: 100 },
+            direction: Direction::Above,
+            active: true,
+            created_at: 1,
+            triggered_at: None,
+            triggered_price: None,
+        };
+        s.upsert_alert(&alert).unwrap();
+        let store = Mutex::new(s);
+        let hub = Arc::new(Hub::default());
+        let stream = hub.open_stream(&id, true, 2).unwrap();
+        hub.reload(&store, 1).unwrap();
+        assert!(hub.evaluate(&id, stream.key, &bar(90, 90), 2).is_empty());
+        let fired = hub.evaluate(&id, stream.key, &bar(101, 101), 3);
+        assert_eq!(fired.len(), 1);
+
+        // A reload before the firing is written reads it as active: it stays disarmed.
+        hub.reload(&store, 4).unwrap();
+        assert!(armed_ids(&hub).is_empty());
+        // The write failed for good: the store still says active, so it is armed again.
+        hub.settled(&fired);
+        hub.reload(&store, 5).unwrap();
+        assert_eq!(armed_ids(&hub), ["a"]);
+    }
+}

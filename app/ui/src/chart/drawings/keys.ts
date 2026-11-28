@@ -16,6 +16,13 @@ export type DrawingKeyAction = { tool: ToolId } | { command: DrawingCommand } | 
 /** Alt + these keys: the ruler (not a stored drawing, so not in the registry) and the magnet. */
 export const RULER_CODE = "KeyR";
 export const MAGNET_CODE = "KeyM";
+/** Alt + this key sets a price alert at the crosshair price (not a drawing, so not in the registry). */
+export const ALERT_CODE = "KeyA";
+
+/** Alt+A outside a text field: a price alert at the crosshair price. */
+export function alertKey(e: KeyLike): boolean {
+  return e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey && e.code === ALERT_CODE && !typing(e.target);
+}
 
 /** Input types that take no typed text: a checkbox in a popover leaves ⌘Z to the chart. */
 const NOT_TEXT = new Set(["checkbox", "radio", "button"]);

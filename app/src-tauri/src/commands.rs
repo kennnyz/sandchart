@@ -13,23 +13,27 @@ use sandchart_engine::{Engine, EngineError};
 use tauri::async_runtime::{JoinHandle, spawn, spawn_blocking};
 use tauri::ipc::Channel;
 use tauri::ipc::{InvokeBody, Request};
+use tauri::plugin::PermissionState;
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_notification::NotificationExt;
 
 use sandchart_indicators::MAX_MODULE_BYTES;
 
 use crate::dto::{
-    CandlesDto, DayChangeDto, DrawingDto, DrawingInputDto, IndicatorInfoDto, IndicatorListDto,
-    InspectionDto, InstanceDto, InstanceResultDto, InstrumentDto, InstrumentIdDto, LiveDto,
-    PositionInputDto, PositionOutcomeDto, ProblemDto, ReplayStateDto, connection_name,
-    to_candles_dto, to_day_change_dto, to_live_dto, to_replay_state_dto,
+    AlertDto, AlertInputDto, CandlesDto, DayChangeDto, DrawingDto, DrawingInputDto,
+    IndicatorInfoDto, IndicatorListDto, InspectionDto, InstanceDto, InstanceResultDto,
+    InstrumentDto, InstrumentIdDto, LiveDto, PositionInputDto, PositionOutcomeDto, ProblemDto,
+    ReplayStateDto, connection_name, to_candles_dto, to_day_change_dto, to_live_dto,
+    to_replay_state_dto,
 };
 
 /// Most results one search returns.
 const SEARCH_LIMIT: usize = 50;
 
-/// Most live subscriptions at once; a runaway UI cannot open unbounded Binance streams.
-const MAX_SUBSCRIPTIONS: usize = 32;
+/// Most live subscriptions at once; a runaway UI cannot open unbounded Binance streams. The
+/// engine keeps the same cap over these and the streams it opens for alerts together.
+const MAX_SUBSCRIPTIONS: usize = sandchart_engine::MAX_LIVE_STREAMS;
 
 type Tasks = Arc<Mutex<HashMap<u32, JoinHandle<()>>>>;
 
@@ -89,14 +93,24 @@ pub struct AppState {
     pub subscriptions: Subscriptions,
     /// Set once the instrument list was synced; the `instruments-synced` event follows.
     pub instruments_ready: Arc<AtomicBool>,
+    /// The UI is in Russian: OS notifications follow its language.
+    pub russian: Arc<AtomicBool>,
+    /// The notification permission was asked for in this run.
+    asked_permission: AtomicBool,
 }
 
 impl AppState {
-    pub fn new(engine: Arc<Engine>, instruments_ready: Arc<AtomicBool>) -> Self {
+    pub fn new(
+        engine: Arc<Engine>,
+        instruments_ready: Arc<AtomicBool>,
+        russian: Arc<AtomicBool>,
+    ) -> Self {
         Self {
             engine,
             subscriptions: Subscriptions::default(),
             instruments_ready,
+            russian,
+            asked_permission: AtomicBool::new(false),
         }
     }
 }
@@ -439,6 +453,51 @@ pub async fn replay_open(
 #[tauri::command]
 pub fn replay_exit(state: State<'_, AppState>) {
     state.engine.replay_exit();
+}
+
+#[tauri::command]
+pub async fn get_alerts(state: State<'_, AppState>) -> CmdResult<Vec<AlertDto>> {
+    let alerts = state.engine.alerts().await?;
+    Ok(alerts.into_iter().map(Into::into).collect())
+}
+
+/// Arms an alert (insert or replace by id). The first one asks for the permission to show
+/// notifications, not the app's start: most users never set an alert.
+#[tauri::command]
+pub async fn set_alert(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    alert: AlertInputDto,
+) -> CmdResult<AlertDto> {
+    let saved = state.engine.set_alert(alert.into()).await?;
+    if !state.asked_permission.swap(true, Ordering::AcqRel) {
+        let n = app.notification();
+        let asked = match n.permission_state() {
+            Ok(PermissionState::Granted | PermissionState::Denied) => Ok(()),
+            Ok(_) => n.request_permission().map(|_| ()),
+            Err(e) => Err(e),
+        };
+        if let Err(e) = asked {
+            eprintln!("cannot ask for the notification permission: {e}");
+        }
+    }
+    Ok(saved.into())
+}
+
+#[tauri::command]
+pub async fn rearm_alert(state: State<'_, AppState>, id: String) -> CmdResult<AlertDto> {
+    Ok(state.engine.rearm_alert(&id).await?.into())
+}
+
+#[tauri::command]
+pub async fn delete_alert(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    Ok(state.engine.delete_alert(&id).await?)
+}
+
+/// The UI's language, for the text of OS notifications (`en` unless `ru`).
+#[tauri::command]
+pub fn set_language(state: State<'_, AppState>, lang: String) {
+    state.russian.store(lang == "ru", Ordering::Release);
 }
 
 #[cfg(test)]

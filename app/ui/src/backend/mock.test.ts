@@ -377,3 +377,84 @@ describe("mock backend", () => {
     expect(kinds).toEqual(["started", ...Array<string>(5).fill("chunk")]);
   });
 });
+
+describe("mock alerts", () => {
+  const candle = (time: number, low: number, high: number, close: number) =>
+    ({ kind: "candle", time, open: close, high, low, close, volume: 1, closed: false }) as const;
+  const hline = (drawingId: string, p: number): DrawingInput => ({
+    id: drawingId,
+    instrument: id,
+    priceScale: 2,
+    body: { kind: "hline", p },
+    style: { color: 0, width: 1, dash: false },
+    locked: false,
+    z: 0,
+  });
+
+  it("fires an alert once from the live feed of its pair and reports it", async () => {
+    const b = createMockBackend({ candles: 1 });
+    const fired: string[] = [];
+    let changed = 0;
+    await b.onAlertFired((a) => fired.push(`${a.id}@${a.triggeredPrice}`));
+    await b.onAlertsChanged(() => changed++);
+    const set = await b.setAlert({ id: "a1", instrument: id, priceScale: 2, kind: { kind: "price", price: 10_000 }, direction: "above" });
+    expect(set.active).toBe(true);
+    expect(changed).toBe(1);
+    // Fed only while the pair is subscribed.
+    b.emitLive(candle(0, 9_000, 9_990, 9_990));
+    const stop = await b.subscribeLive(id, "1h", () => {});
+    b.emitLive(candle(0, 9_000, 9_990, 9_990));
+    b.emitLive(candle(0, 9_000, 10_010, 10_005));
+    b.emitLive(candle(0, 9_000, 10_100, 9_000));
+    expect(fired).toEqual(["a1@10005"]);
+    const [stored] = await b.getAlerts();
+    expect(stored).toMatchObject({ active: false, triggeredPrice: 10_005 });
+    await b.rearmAlert("a1");
+    expect((await b.getAlerts())[0]!.active).toBe(true);
+    stop();
+  });
+
+  it("follows hlines only, and deleting the drawing deletes its alerts", async () => {
+    const b = createMockBackend({ candles: 1 });
+    await b.saveDrawing(hline("h1", 10_000));
+    await b.saveDrawing({ ...hline("n1", 1), body: { kind: "note", t: 0, text: "x" } });
+    await expect(
+      b.setAlert({ id: "a", instrument: id, priceScale: 2, kind: { kind: "drawing", drawingId: "n1" }, direction: "cross" }),
+    ).rejects.toMatchObject({ message: "an alert can follow only a horizontal or a trend line" });
+    await expect(
+      b.setAlert({ id: "a", instrument: id, priceScale: 2, kind: { kind: "drawing", drawingId: "zz" }, direction: "cross" }),
+    ).rejects.toMatchObject({ message: "drawing zz does not exist" });
+    await b.setAlert({ id: "a", instrument: id, priceScale: 2, kind: { kind: "drawing", drawingId: "h1" }, direction: "cross" });
+    await b.setAlert({ id: "p", instrument: id, priceScale: 2, kind: { kind: "price", price: 1 }, direction: "cross" });
+    let changed = 0;
+    await b.onAlertsChanged(() => changed++);
+    await b.deleteDrawing("h1");
+    expect((await b.getAlerts()).map((a) => a.id)).toEqual(["p"]);
+    expect(changed).toBe(1);
+    await b.deleteAlert("p");
+    expect(await b.getAlerts()).toEqual([]);
+  });
+
+  it("deletes the alerts of a drawing saved as a shape that is not a line", async () => {
+    const b = createMockBackend({ candles: 1 });
+    await b.saveDrawing(hline("h1", 10_000));
+    await b.setAlert({ id: "a", instrument: id, priceScale: 2, kind: { kind: "drawing", drawingId: "h1" }, direction: "cross" });
+    await b.saveDrawing(hline("h1", 10_500));
+    expect((await b.getAlerts()).map((a) => a.id)).toEqual(["a"]);
+    let changed = 0;
+    await b.onAlertsChanged(() => changed++);
+    await b.saveDrawing({ ...hline("h1", 1), body: { kind: "note", t: 0, text: "x" } });
+    expect(await b.getAlerts()).toEqual([]);
+    expect(changed).toBe(1);
+  });
+
+  it("refuses past 100 active alerts", async () => {
+    const b = createMockBackend({ candles: 1 });
+    for (let i = 0; i < 100; i++) {
+      await b.setAlert({ id: `a${i}`, instrument: id, priceScale: 2, kind: { kind: "price", price: i }, direction: "cross" });
+    }
+    await expect(
+      b.setAlert({ id: "more", instrument: id, priceScale: 2, kind: { kind: "price", price: 1 }, direction: "cross" }),
+    ).rejects.toMatchObject({ message: expect.stringContaining("at most 100 alerts can be active") });
+  });
+});

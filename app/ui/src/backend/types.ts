@@ -294,6 +294,29 @@ export interface ReplayState {
   stats: ReplayStats;
 }
 
+// Alerts (dto.rs, sandchart_core::alert). Prices are ticks at `priceScale`; times are ms.
+/** A fixed price, or an `hline` / `trend` drawing of the same pair. */
+export type AlertKind = { kind: "price"; price: number } | { kind: "drawing"; drawingId: string };
+/** `above`: from below the level to it or above; `below` the mirror; `cross` either. */
+export type AlertDirection = "above" | "below" | "cross";
+/** An alert to arm. `id` is made by the UI, with the same rule as a drawing id. */
+export interface AlertInput {
+  id: string;
+  instrument: InstrumentId;
+  /** The scale `kind`'s price is ticks at; the engine rescales to the instrument's current one. */
+  priceScale: number;
+  kind: AlertKind;
+  direction: AlertDirection;
+}
+/** A stored alert. It fires once, then `active` is false with when and at what price it fired. */
+export interface Alert extends AlertInput {
+  active: boolean;
+  createdAt: number;
+  triggeredAt: number | null;
+  /** The close when it was past the level, else the level (only a wick reached it). */
+  triggeredPrice: number | null;
+}
+
 // Updates (dto.rs).
 /** Why this copy cannot update itself; the UI links to the release page instead. */
 export type InstallBlocker = "not_appimage" | "translocated";
@@ -375,6 +398,23 @@ export interface Backend {
   /** Checks a `.replay` file and opens it as the session; resolves to the state with every revealed bar. */
   replayOpen(bytes: Uint8Array): Promise<ReplayState>;
   replayExit(): Promise<void>;
+  /** Every alert, oldest first, at its pair's current price scale. */
+  getAlerts(): Promise<Alert[]>;
+  /**
+   * Arms an alert (insert or replace by id): active from now on. Rejects past 100 active alerts,
+   * 30 pairs with active alerts, or a line alert on anything but an hline or trend line of the pair.
+   */
+  setAlert(a: AlertInput): Promise<Alert>;
+  /** Arms a fired alert again. */
+  rearmAlert(id: string): Promise<Alert>;
+  /** Removes an alert; an unknown id is not an error. */
+  deleteAlert(id: string): Promise<void>;
+  /** Called with each alert that fired (it is already stored as fired). Resolves to the function that stops listening. */
+  onAlertFired(cb: (a: Alert) => void): Promise<() => void>;
+  /** Called when alerts were added, changed or removed (also by deleting a drawing). */
+  onAlertsChanged(cb: () => void): Promise<() => void>;
+  /** The UI's language, for the text of OS notifications. */
+  setLanguage(lang: "en" | "ru"): Promise<void>;
   /** A newer version than this one, or null. Also remembers it for `installUpdate`. */
   checkUpdate(): Promise<UpdateInfo | null>;
   /**

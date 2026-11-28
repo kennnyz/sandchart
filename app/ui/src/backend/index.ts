@@ -1,10 +1,11 @@
 import { enableChartDebug } from "../chart/debug";
 import { createMockBackend } from "./mock";
 import { resetSubscriptions, tauriBackend } from "./tauri";
-import type { Backend, ConnectionState, Drawing, InstrumentId, Problem, ProblemCode, UpdateInfo } from "./types";
+import type { Alert, Backend, ConnectionState, Drawing, InstrumentId, LiveEvent, Problem, ProblemCode, UpdateInfo } from "./types";
 
 const MOCK_WATCHLIST_KEY = "sandchart.mock.watchlist";
 const MOCK_DRAWINGS_KEY = "sandchart.mock.drawings";
+const MOCK_ALERTS_KEY = "sandchart.mock.alerts";
 
 /** A value kept in localStorage as JSON; without storage it lasts for this page load. */
 function localStore<T>(key: string): { load(): T | null; save(v: T): void } {
@@ -47,9 +48,10 @@ if (inTauri) void resetSubscriptions();
  * `mockIndicatorProblems=1` (a module that failed to load and a service error), `mockUpdate` (the version
  * `checkUpdate` finds; `0.3.0` when only the next two are set), `mockUpdateError=check|install` (every check
  * fails, or every download fails halfway), `mockUpdateBlocker=translocated|not_appimage` (the update cannot be
- * installed here) and `mockUpdateDelay` (ms until the first automatic check). The watchlist and the drawings are kept in
- * localStorage (`sandchart.mock.drawings`), so a reload sees the same ones. Calls are counted in `window.__sandchartMock`
- * (whose `replayFile()` returns the text of the last replay save), and the chart
+ * installed here) and `mockUpdateDelay` (ms until the first automatic check). The watchlist, the drawings and the alerts
+ * are kept in localStorage (`sandchart.mock.drawings`, `sandchart.mock.alerts`), so a reload sees the same ones. Calls
+ * are counted in `window.__sandchartMock` (whose `replayFile()` returns the text of the last replay save and
+ * `emitLive(event)` pushes a live event into the open subscriptions, which also feeds the alerts), and the chart
  * reports draw times and axis layout into `window.__sandchartDebug` (see
  * chart/debug.ts). None of this exists inside Tauri.
  */
@@ -102,9 +104,15 @@ function browserMock(): Backend {
     watchlist: list === null ? undefined : list.split(",").filter(Boolean),
     watchlistStore: localStore<InstrumentId[]>(MOCK_WATCHLIST_KEY),
     drawingStore: localStore<Drawing[]>(MOCK_DRAWINGS_KEY),
+    alertStore: localStore<Alert[]>(MOCK_ALERTS_KEY),
   });
   enableChartDebug();
-  const stats = { getCandles: 0, checkUpdate: 0, replayFile: () => mock.replayFile() };
+  const stats = {
+    getCandles: 0,
+    checkUpdate: 0,
+    replayFile: () => mock.replayFile(),
+    emitLive: (e: LiveEvent) => mock.emitLive(e),
+  };
   (window as unknown as { __sandchartMock: typeof stats }).__sandchartMock = stats;
   return {
     ...mock,

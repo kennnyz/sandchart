@@ -10,6 +10,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
+use crate::alerts::{StreamGuard, record_fired};
 use crate::chart::{Fetched, fetch_catch_up};
 use crate::{Engine, EngineError, Shared, blocking};
 
@@ -30,7 +31,7 @@ pub enum ConnectionState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LiveEvent {
-    /// A candle update; closed ones are already stored.
+    /// A candle update; closed ones are already stored (unless the write failed).
     Candle(LiveCandle),
     /// Candles missed while the stream was down, ascending and already stored. With
     /// `reset` the cached series was replaced, so these candles replace the chart.
@@ -64,10 +65,25 @@ impl Engine {
     /// Closed candles are stored. Any stream error marks the connection as reconnecting;
     /// on the next good message the gap is filled over REST and reported once as
     /// [`LiveEvent::Backfilled`], however many errors came in between.
+    ///
+    /// It also feeds the alerts of `id` (ADR 0007) and counts toward [`MAX_LIVE_STREAMS`],
+    /// together with the streams the engine opens for alerts.
+    ///
+    /// [`MAX_LIVE_STREAMS`]: crate::MAX_LIVE_STREAMS
     pub fn subscribe_live(
         &self,
         id: &InstrumentId,
         tf: Timeframe,
+    ) -> Result<LiveHandle, EngineError> {
+        self.open_live(id, tf, false)
+    }
+
+    /// `subscribe_live`; `own` marks a stream the engine opened for alerts.
+    pub(crate) fn open_live(
+        &self,
+        id: &InstrumentId,
+        tf: Timeframe,
+        own: bool,
     ) -> Result<LiveHandle, EngineError> {
         let runtime = tokio::runtime::Handle::try_current().map_err(|_| EngineError::NoRuntime)?;
         let provider = self
@@ -76,8 +92,20 @@ impl Engine {
         let instrument = crate::lock(&self.shared.store)
             .instrument(id)?
             .ok_or_else(|| EngineError::UnknownInstrument(id.clone()))?;
+        let guard = self
+            .shared
+            .alerts
+            .open_stream(id, own, instrument.price_scale)?;
         let (tx, events) = mpsc::channel(EVENT_BUFFER);
-        let task = runtime.spawn(run(self.shared.clone(), provider, instrument, tf, tx));
+        let task = runtime.spawn(run(
+            self.shared.clone(),
+            provider,
+            instrument,
+            tf,
+            tx,
+            guard,
+            own,
+        ));
         Ok(LiveHandle { events, task })
     }
 }
@@ -136,12 +164,18 @@ impl Backoff {
     }
 }
 
+/// Runs one live stream. A stream the engine opened for alerts (`own`) only evaluates
+/// them: nothing reads its candles, so it stores none, feeds no indicator bars, sends no
+/// events and fills no gaps (the alert rule compares the update after a gap with the last
+/// one before, which is what a gap needs).
 async fn run(
     shared: Shared,
     provider: Arc<dyn Provider>,
     inst: Instrument,
     tf: Timeframe,
     tx: mpsc::Sender<LiveEvent>,
+    stream_slot: StreamGuard,
+    own: bool,
 ) {
     let mut stream = provider.live(&inst, tf);
     let mut gap = GapGuard {
@@ -150,6 +184,13 @@ async fn run(
     };
     let mut backoff = Backoff::default();
     while let Some(item) = stream.next().await {
+        if own {
+            if let Ok(live) = item {
+                shared.note_ok();
+                evaluate(&shared, &inst.id, stream_slot.key, &live.candle);
+            }
+            continue;
+        }
         let event = match item {
             Err(_) => {
                 if gap.open {
@@ -190,15 +231,20 @@ async fn run(
                 }
                 if live.closed {
                     let (id, candle) = (inst.id.clone(), live.candle);
-                    if blocking(&shared.store, move |s| s.upsert_candles(&id, tf, &[candle]))
-                        .await
-                        .is_err()
+                    // The cache misses this candle (a later page load fetches it again), but
+                    // the price still counts for the chart and the alerts.
+                    if let Err(e) =
+                        blocking(&shared.store, move |s| s.upsert_candles(&id, tf, &[candle])).await
                     {
-                        continue;
+                        eprintln!(
+                            "a closed candle of {}/{} cannot be stored: {e}",
+                            inst.id.source, inst.id.symbol
+                        );
                     }
                 }
                 // Forming candles reach the indicator bars too, in memory only.
                 shared.live_bar(&inst, tf, &live.candle);
+                evaluate(&shared, &inst.id, stream_slot.key, &live.candle);
                 LiveEvent::Candle(live)
             }
         };
@@ -209,6 +255,19 @@ async fn run(
         if tx.send(event).await.is_err() {
             return;
         }
+    }
+}
+
+/// Checks the alerts of `id` against an update of stream `key` and stores the ones that
+/// fired. A replayed pair's alerts wait: the first update after the replay is compared with
+/// the last one before it.
+fn evaluate(shared: &Shared, id: &InstrumentId, key: u64, candle: &Candle) {
+    if shared.replaying(id) {
+        return;
+    }
+    let fired = shared.alerts.evaluate(id, key, candle, (shared.clock)());
+    if !fired.is_empty() {
+        tokio::spawn(record_fired(shared.clone(), fired));
     }
 }
 

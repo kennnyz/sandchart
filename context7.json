@@ -1,7 +1,7 @@
 {
   "$schema": "https://context7.com/schema/context7.json",
   "projectTitle": "Sandchart",
-  "description": "Open-source desktop chart app (Rust + Tauri). Indicators are sandboxed WebAssembly components written with the sandchart-indicator Rust SDK and built and tested with the sandchart-indicator CLI.",
+  "description": "Open-source desktop chart app (Rust + Tauri). Indicators are sandboxed WebAssembly components written with the sandchart-indicator Rust SDK and built and tested with the sandchart-indicator CLI. The sandchart-mcp server gives AI agents the app's charts, indicators, drawings, replays and alerts over MCP.",
   "folders": ["docs", "indicators/sdk", "crates/indicator-cli/template"],
   "excludeFolders": ["target", "indicators/target", "indicators/testguests", "app/ui/node_modules", "app/ui/e2e"],
   "rules": [
@@ -12,6 +12,7 @@
     "Line and Histogram series return exactly one value per candle; use NaN where there is no value.",
     "Read parameters through `Params::new(params)` and its `int`, `float`, `boolean` and `choice` getters; use the helpers in `sandchart_indicator::ta` (sma, ema, rma, stdev, highest, lowest).",
     "Series colours are palette slots 0 to 7, never RGB values. A Markers series must be on Pane::Price; Band(a, b) names two Line series of the same module on the same pane.",
-    "Indicators have no files, network, environment or real clock; use the candle `time` field (Unix milliseconds) for time."
+    "Indicators have no files, network, environment or real clock; use the candle `time` field (Unix milliseconds) for time.",
+    "The sandchart-mcp MCP server (docs/mcp.md) runs over stdio: `claude mcp add sandchart -- sandchart-mcp`. Prices are integer ticks at the pair's priceScale and outputs also give decimal strings; times are Unix ms. Get priceScale from search_instruments first. Alerts fire only while the Sandchart app runs."
   ]
 }

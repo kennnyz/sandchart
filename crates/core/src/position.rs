@@ -6,6 +6,7 @@ use crate::Candle;
 use crate::decimal::JS_SAFE_MAX;
 use crate::drawing::Anchor;
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Side {
@@ -35,6 +36,7 @@ pub struct Outcome {
 }
 
 /// A position: entry anchor, stop and take in price ticks, and the time it ends.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PositionBody {

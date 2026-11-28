@@ -7,12 +7,14 @@ import type { ChartTheme } from "../chart/theme";
 import { t, useLanguage } from "../i18n";
 import { bannerText, sourceName } from "../labels";
 import { ChartSession, type SessionState } from "../state/chartSession";
+import { alertKey } from "../chart/drawings/keys";
 import type { DrawingPatch } from "../chart/drawings/state";
+import type { AlertStore } from "../state/alerts";
 import type { DrawingStore } from "../state/drawings";
 import type { IndicatorStore } from "../state/indicators";
 import type { ReplayStore } from "../state/replay";
 import { Banner } from "./Banner";
-import { DrawingStyle } from "./DrawingStyle";
+import { DrawingStyle, type LineAlert } from "./DrawingStyle";
 import { IndicatorLegend } from "./IndicatorLegend";
 import { IndicatorSettings } from "./IndicatorSettings";
 import { Legend } from "./Legend";
@@ -31,6 +33,7 @@ export interface ChartViewProps {
   indicators: IndicatorStore;
   drawings: DrawingStore;
   replay: ReplayStore;
+  alerts: AlertStore;
 }
 
 const NO_VALUES = new Map<string, Map<string, number>>();
@@ -51,7 +54,7 @@ export function Loading({ symbol, tf, source }: { symbol: string; tf: string; so
 }
 
 /** The chart column: banner, canvas with legend and states; a `ChartSession` feeds it. */
-export function ChartView({ backend, id, tf, theme, priceMode, connection, indicators, drawings, replay }: ChartViewProps) {
+export function ChartView({ backend, id, tf, theme, priceMode, connection, indicators, drawings, replay, alerts }: ChartViewProps) {
   const lang = useLanguage();
   const hostRef = useRef<HTMLDivElement>(null);
   const [parts, setParts] = useState<{ chart: Chart; session: ChartSession } | null>(null);
@@ -65,6 +68,7 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
   useSyncExternalStore(indicators.subscribe, indicators.version);
   useSyncExternalStore(drawings.subscribe, drawings.version);
   useSyncExternalStore(replay.subscribe, replay.version);
+  useSyncExternalStore(alerts.subscribe, alerts.version);
   const rp = replay.state;
   /** The chart the props ask for, read when a replay ends. */
   const wanted = useRef({ id, tf });
@@ -215,6 +219,46 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
     // `state` is read for its id and tf, which change only together with `version`.
   }, [chart, drawings, version, state?.status]);
 
+  // Active price alerts as levels on the chart, not over a replay's past bars; a press on
+  // one picks it in the panel.
+  const alertList = alerts.state.list;
+  const replaying = rp.phase !== "off";
+  useEffect(() => {
+    if (!chart) return;
+    chart.setAlerts(replaying ? [] : alertList);
+    chart.onAlertClick((alertId) => alerts.state.select(alertId));
+    return () => chart.onAlertClick(null);
+  }, [chart, alerts, alertList, replaying]);
+
+  // Alt+A: a price alert at the crosshair price, on the pair the chart shows.
+  useEffect(() => {
+    if (!chart) return;
+    const onKey = (e: KeyboardEvent) => {
+      // A replay shows past bars: the crosshair price is no price to watch now.
+      if (!alertKey(e) || replay.state.phase !== "off") return;
+      const at = chart.crosshairPrice();
+      if (!at) return;
+      e.preventDefault();
+      void alerts.state.createPrice(at.instrument.id, at.instrument.priceScale, at.price);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [chart, alerts, replay]);
+
+  const styled = styleEdit?.drawing;
+  const lineAlert: LineAlert | undefined =
+    styled && (styled.body.kind === "hline" || styled.body.kind === "trend")
+      ? {
+          current: alerts.state.forDrawing(styled.id),
+          // The drawing may still be on its way to the engine; the alert waits for it.
+          onSet: (direction) => void alerts.state.setForDrawing(styled, direction, drawings.state.settled()),
+          onRemove: () => {
+            const a = alerts.state.forDrawing(styled.id);
+            if (a) void alerts.state.remove(a.id);
+          },
+        }
+      : undefined;
+
   const saveText = useCallback((text: string) => drawings.state.saveText(text), [drawings]);
   const cancelText = useCallback(() => drawings.state.cancelText(), [drawings]);
   const deleteText = useCallback(() => drawings.state.deleteText(), [drawings]);
@@ -280,6 +324,15 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
           detail={drawingError.message}
         />
       )}
+      {alerts.state.error !== null && (
+        <Banner
+          testId="alert-error"
+          text={t("alerts.error", { error: alerts.state.error })}
+          retryAt={null}
+          retryLabel={() => ""}
+          dismiss={{ label: t("alerts.errorClose"), onDismiss: () => alerts.state.dismissError() }}
+        />
+      )}
       {rp.error !== null && (
         <Banner
           testId="replay-error"
@@ -342,6 +395,7 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
           <DrawingStyle
             key={styleEdit.drawing.id}
             edit={styleEdit}
+            alert={lineAlert}
             palette={theme.indicatorPalette}
             hostWidth={hostWidth}
             hostHeight={hostHeight}

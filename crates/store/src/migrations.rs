@@ -2,7 +2,7 @@
 
 use rusqlite::Connection;
 
-use crate::StoreError;
+use crate::{StoreError, write};
 
 struct Migration {
     up: &'static str,
@@ -23,6 +23,10 @@ const MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0003_drawings.up.sql"),
         down: include_str!("../migrations/0003_drawings.down.sql"),
     },
+    Migration {
+        up: include_str!("../migrations/0004_alerts.up.sql"),
+        down: include_str!("../migrations/0004_alerts.down.sql"),
+    },
 ];
 
 fn user_version(conn: &Connection) -> Result<u32, StoreError> {
@@ -40,21 +44,33 @@ fn latest() -> u32 {
     u32::try_from(MIGRATIONS.len()).unwrap_or(u32::MAX)
 }
 
-/// Applies every pending migration, each in its own transaction.
-pub(crate) fn up(conn: &mut Connection) -> Result<(), StoreError> {
-    let current = user_version(conn)?;
+/// Applies every pending migration in one write transaction. The version is read inside
+/// it, so a second process opening the same old file at the same time waits and then finds
+/// the work done instead of applying a migration twice. With `upgrade` false only a
+/// brand-new file (version 0) is migrated; an older schema is refused and left as it is.
+pub(crate) fn up(conn: &mut Connection, upgrade: bool) -> Result<(), StoreError> {
+    let tx = write(conn)?;
+    let current = user_version(&tx)?;
     if current > latest() {
         return Err(StoreError::SchemaTooNew {
             found: current,
             supported: latest(),
         });
     }
-    for (index, migration) in MIGRATIONS.iter().enumerate().skip(current as usize) {
-        let tx = conn.transaction()?;
-        tx.execute_batch(migration.up)?;
-        set_user_version(&tx, index as u32 + 1)?;
-        tx.commit()?;
+    if current == latest() {
+        return Ok(());
     }
+    if !upgrade && current != 0 {
+        return Err(StoreError::SchemaTooOld {
+            found: current,
+            supported: latest(),
+        });
+    }
+    for migration in &MIGRATIONS[current as usize..] {
+        tx.execute_batch(migration.up)?;
+    }
+    set_user_version(&tx, latest())?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -68,7 +84,7 @@ pub(crate) fn down_to(conn: &mut Connection, target: u32) -> Result<(), StoreErr
         });
     }
     for index in (target as usize..current as usize).rev() {
-        let tx = conn.transaction()?;
+        let tx = write(conn)?;
         tx.execute_batch(MIGRATIONS[index].down)?;
         set_user_version(&tx, index as u32)?;
         tx.commit()?;
