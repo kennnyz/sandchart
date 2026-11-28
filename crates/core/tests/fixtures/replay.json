@@ -1068,6 +1068,16 @@
       "tf": "15m",
       "candles": [],
       "error": "15m candles cannot be built from 1h candles"
+    },
+    {
+      "name": "a summed volume above 2^53 - 1 is refused with what to do, not cut off",
+      "base": "1m",
+      "tf": "5m",
+      "candles": [
+        [0, 100, 101, 99, 100, 9007199254740991],
+        [60000, 100, 101, 99, 100, 1]
+      ],
+      "error": "the 5m candle at 0 sums a volume above 2^53 - 1; show a lower timeframe"
     }
   ],
   "views": [

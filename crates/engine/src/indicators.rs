@@ -826,7 +826,7 @@ impl Engine {
                         (Some(b), _) => Arc::clone(b),
                         (None, Some(r)) => {
                             let b = spawn_blocking(move || {
-                                let candles = r.revealed();
+                                let candles = r.revealed()?;
                                 let newest =
                                     &candles[candles.len().saturating_sub(MAX_INDICATOR_BARS)..];
                                 Ok(Arc::new(to_bars(newest, &r.instrument)))
@@ -909,7 +909,7 @@ impl Engine {
         let bars = match self.shared.replay_bars(id, tf)? {
             Some(r) => {
                 spawn_blocking(move || {
-                    let candles = r.revealed();
+                    let candles = r.revealed()?;
                     let newest = &candles[candles.len().saturating_sub(MAX_INDICATOR_BARS)..];
                     Ok(Arc::new(to_bars(newest, &r.instrument)))
                 })

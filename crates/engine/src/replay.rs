@@ -121,18 +121,23 @@ pub(crate) struct ReplayBars {
 
 impl ReplayBars {
     /// The revealed bars of the snapshot's timeframe; aggregation runs here, off the lock.
-    pub fn revealed(&self) -> Cow<'_, [Candle]> {
+    pub fn revealed(&self) -> Result<Cow<'_, [Candle]>, EngineError> {
         bars_of(&self.candles[..self.len], self.base, self.tf)
     }
 }
 
-/// `tf` bars from revealed base candles; `tf` was checked with [`check_view`].
-fn bars_of(shown: &[Candle], base: Timeframe, tf: Timeframe) -> Cow<'_, [Candle]> {
-    if tf == base {
+/// `tf` bars from revealed base candles; `tf` was checked with [`check_view`]. Fails only
+/// for a summed volume the UI cannot hold.
+fn bars_of(
+    shown: &[Candle],
+    base: Timeframe,
+    tf: Timeframe,
+) -> Result<Cow<'_, [Candle]>, EngineError> {
+    Ok(if tf == base {
         Cow::Borrowed(shown)
     } else {
-        Cow::Owned(aggregate(shown, base, tf).unwrap_or_default())
-    }
+        Cow::Owned(aggregate(shown, base, tf).map_err(EngineError::Replay)?)
+    })
 }
 
 /// Whether a replay stepping `base` can show `tf`.
@@ -237,7 +242,7 @@ impl Session {
             None => self.simulate(&self.commands)?,
         };
         let shown = revealed(self.base, &self.candles, self.cut);
-        let bars = bars_of(shown, self.base, tf);
+        let bars = bars_of(shown, self.base, tf)?;
         // The base candle that closes at the start (the session simulated, so it exists).
         let first = revealed(self.base, &self.candles, self.start)
             .last()

@@ -39,6 +39,7 @@ export function mockAggregate(candles: MockCandle[], base: TimeframeCode, tf: Ti
       b.low = Math.min(b.low, c.low);
       b.close = c.close;
       b.volume += c.volume;
+      if (b.volume > SAFE) throw new Error(`the ${tf} candle at ${start} sums a volume above 2^53 - 1; show a lower timeframe`);
     } else {
       out.push({ ...c, time: start });
     }

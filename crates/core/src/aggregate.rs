@@ -1,5 +1,6 @@
 //! Candles of a higher timeframe built from base candles, as a replay shows them (ADR 0008).
 
+use crate::decimal::JS_SAFE_MAX;
 use crate::model::Candle;
 use crate::timeframe::Timeframe;
 
@@ -8,7 +9,8 @@ use crate::timeframe::Timeframe;
 /// high, the lowest low, the close of the last and the summed volume, stamped with the
 /// bucket's start. The last bucket may be partial (the forming bar); a bucket without base
 /// candles gives none. `tf == base` returns the candles unchanged. Fails when `tf` does
-/// not build from `base` ([`Timeframe::builds_from`]).
+/// not build from `base` ([`Timeframe::builds_from`]), and when a summed volume passes
+/// 2^53 - 1, the most the UI can hold.
 pub fn aggregate(
     candles: &[Candle],
     base: Timeframe,
@@ -32,7 +34,16 @@ pub fn aggregate(
                 b.high = b.high.max(c.high);
                 b.low = b.low.min(c.low);
                 b.close = c.close;
-                b.volume = b.volume.saturating_add(c.volume);
+                b.volume = b
+                    .volume
+                    .checked_add(c.volume)
+                    .filter(|v| *v <= JS_SAFE_MAX)
+                    .ok_or_else(|| {
+                        format!(
+                            "the {} candle at {start} sums a volume above 2^53 - 1; show a lower timeframe",
+                            tf.code()
+                        )
+                    })?;
             }
             _ => out.push(Candle {
                 open_time: start,
