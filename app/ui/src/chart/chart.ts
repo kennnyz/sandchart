@@ -1,7 +1,7 @@
 import type { CandleColumns, Candles, Drawing, Instrument, LiveCandle, PositionOutcome, TimeframeCode } from "../backend/types";
 import { chartDebug } from "./debug";
 import { Coords } from "./drawings/geometry";
-import { DrawingLayer, type DrawingCommand, type TextEdit, type TextResult } from "./drawings/layer";
+import { DrawingLayer, type DrawingCommand, type StyleAction, type StyleEdit, type TextEdit, type TextResult } from "./drawings/layer";
 import type { ToolId } from "./drawings/registry";
 import type { DrawingChange } from "./drawings/state";
 import { alignOffset, hasOwnPane, layoutPanes, overlayRange, paneRange, seriesValues, type IndicatorLayer } from "./indicators";
@@ -126,6 +126,7 @@ export class Chart {
   private drawingCommitCb: ((c: DrawingChange) => void) | null = null;
   private drawingToolCb: ((id: ToolId | null) => void) | null = null;
   private drawingTextCb: ((edit: TextEdit | null) => void) | null = null;
+  private drawingStyleCb: ((edit: StyleEdit | null) => void) | null = null;
   /** Drawings: painted on both layers, and first in line for pointer input on the price plot. */
   private readonly drawings = new DrawingLayer({
     invalidate: () => this.invalidate(),
@@ -133,6 +134,7 @@ export class Chart {
     commit: (c) => this.drawingCommitCb?.(c),
     tool: (k) => this.drawingToolCb?.(k),
     text: (e) => this.drawingTextCb?.(e),
+    style: (e) => this.drawingStyleCb?.(e),
   });
 
   constructor(
@@ -374,6 +376,21 @@ export class Chart {
     this.drawings.finishText(result);
   }
 
+  /** The style popover of a drawing opens or shows a change (where, in CSS px of the chart), or closes (null). */
+  onDrawingStyle(cb: ((edit: StyleEdit | null) => void) | null): void {
+    this.drawingStyleCb = cb;
+  }
+
+  /** Changes or deletes the drawing of the open style popover, or closes it (null). */
+  drawingStyle(action: StyleAction): void {
+    this.drawings.styleAction(action);
+  }
+
+  /** Hide all drawings for this session (painting and hit-testing), or show them again. */
+  setDrawingsHidden(on: boolean): void {
+    this.drawings.setHiddenAll(on);
+  }
+
   /** Undo, redo, delete the selection, cancel, arm the ruler, or edit the text of the selection; false when there was nothing to do. */
   drawingCommand(cmd: DrawingCommand): boolean {
     return this.drawings.command(cmd);
@@ -432,6 +449,7 @@ export class Chart {
     this.drawingCommitCb = null;
     this.drawingToolCb = null;
     this.drawingTextCb = null;
+    this.drawingStyleCb = null;
   }
 
   // ---- Internals ----

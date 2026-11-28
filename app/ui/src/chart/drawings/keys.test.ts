@@ -66,5 +66,9 @@ describe("drawingKeyAction", () => {
       expect(drawingKeyAction(key("KeyT", { altKey: true, target }), TOOLS)).toBeNull();
     }
     expect(drawingKeyAction(key("Backspace", { target: { tagName: "BUTTON" } }), TOOLS)).toEqual({ command: "delete" });
+    // A checkbox takes no text: ⌘Z still undoes.
+    const box = { tagName: "INPUT", type: "checkbox" };
+    expect(drawingKeyAction(key("KeyZ", { metaKey: true, target: box }), TOOLS)).toEqual({ command: "undo" });
+    expect(drawingKeyAction(key("KeyZ", { metaKey: true, target: { tagName: "INPUT", type: "text" } }), TOOLS)).toBeNull();
   });
 });

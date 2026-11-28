@@ -8,9 +8,10 @@ import type {
   PositionOutcome,
   TimeframeCode,
 } from "../backend/types";
-import type { DrawingCommand, TextEdit, TextResult } from "../chart/drawings/layer";
+import { toProblem } from "../backend/types";
+import type { DrawingCommand, StyleAction, StyleEdit, TextEdit, TextResult } from "../chart/drawings/layer";
 import type { ToolId } from "../chart/drawings/registry";
-import type { DrawingChange } from "../chart/drawings/state";
+import type { DrawingChange, DrawingPatch } from "../chart/drawings/state";
 
 /** What the controller needs from the chart (`Chart` implements it). */
 export interface DrawingSurface {
@@ -20,9 +21,12 @@ export interface DrawingSurface {
   drawingCommand(cmd: DrawingCommand): boolean;
   setPositionOutcomes(outcomes: ReadonlyMap<string, PositionOutcome>): void;
   finishDrawingText(result: TextResult): void;
+  drawingStyle(action: StyleAction): void;
+  setDrawingsHidden(on: boolean): void;
   onDrawingCommit(cb: ((c: DrawingChange) => void) | null): void;
   onDrawingTool(cb: ((id: ToolId | null) => void) | null): void;
   onDrawingText(cb: ((edit: TextEdit | null) => void) | null): void;
+  onDrawingStyle(cb: ((edit: StyleEdit | null) => void) | null): void;
 }
 
 type DrawingBackend = Pick<Backend, "getDrawings" | "saveDrawing" | "deleteDrawing" | "getPositionOutcomes">;
@@ -72,7 +76,8 @@ const sameId = (a: InstrumentId, b: InstrumentId) => a.source === b.source && a.
  * Keeps the chart's drawings and the backend in step: loads the instrument's drawings,
  * stores every change the chart reports (undo and redo included) one after another, and
  * mirrors the chart's active tool and the magnet switch for the toolbar. A change that cannot be stored makes
- * it reload the list, so the chart never shows what the backend does not have.
+ * it reload the list, so the chart never shows what the backend does not have, and keeps
+ * the error to show until a later change is stored or another instrument opens.
  *
  * It also asks the engine for the outcome of every position, all in one call: after a
  * load, after a position changes, and when the candles of the timeframe change (another
@@ -82,8 +87,14 @@ export class DrawingController {
   tool: ToolId | null = null;
   /** The text editor the chart has open, for the popover; null when closed. */
   textEdit: TextEdit | null = null;
+  /** The style popover the chart has open; null when closed. */
+  styleEdit: StyleEdit | null = null;
   /** Points snap to bar prices; kept across sessions. */
   magnet: boolean;
+  /** Hide all: for this session only, the drawings are not changed. */
+  hidden = false;
+  /** Why the last store failed; null once a store succeeds or another instrument opens. */
+  error: string | null = null;
   private surface: DrawingSurface | null = null;
   private id: InstrumentId | null = null;
   /** Token of the latest load. */
@@ -120,14 +131,21 @@ export class DrawingController {
       this.textEdit = edit;
       this.onChange();
     });
+    surface.onDrawingStyle((edit) => {
+      this.styleEdit = edit;
+      this.onChange();
+    });
+    surface.setDrawingsHidden(this.hidden);
     return () => {
       surface.onDrawingCommit(null);
       surface.onDrawingTool(null);
       surface.onDrawingText(null);
+      surface.onDrawingStyle(null);
       if (this.surface !== surface) return;
       this.surface = null;
       this.tool = null;
       this.textEdit = null;
+      this.styleEdit = null;
       this.onChange();
     };
   }
@@ -136,6 +154,7 @@ export class DrawingController {
   async open(id: InstrumentId): Promise<void> {
     this.id = id;
     this.candlesKey = "";
+    this.setError(null);
     await this.load(id, true);
   }
 
@@ -155,12 +174,40 @@ export class DrawingController {
     void this.refreshOutcomes();
   }
 
+  /** Picking a tool shows hidden drawings again: a new one should not be placed unseen. */
   toggleTool(id: ToolId): void {
+    if (this.tool !== id) this.setHidden(false);
     this.surface?.setDrawingTool(this.tool === id ? null : id);
   }
 
   setTool(id: ToolId | null): void {
+    if (id !== null) this.setHidden(false);
     this.surface?.setDrawingTool(id);
+  }
+
+  toggleHidden(): void {
+    this.setHidden(!this.hidden);
+  }
+
+  private setHidden(on: boolean): void {
+    if (on === this.hidden) return;
+    this.hidden = on;
+    this.surface?.setDrawingsHidden(on);
+    this.onChange();
+  }
+
+  /** Changes style, lock or options of the drawing in the style popover: one stored change. */
+  restyle(patch: DrawingPatch): void {
+    this.surface?.drawingStyle({ patch });
+  }
+
+  /** Deletes the drawing of the style popover. */
+  deleteStyled(): void {
+    this.surface?.drawingStyle({ delete: true });
+  }
+
+  closeStyle(): void {
+    this.surface?.drawingStyle(null);
   }
 
   /** Saves the text of the open editor (empty: no note). */
@@ -260,15 +307,28 @@ export class DrawingController {
     if (after) void this.refreshOutcomes();
   }
 
+  private setError(error: string | null): void {
+    if (error === this.error) return;
+    this.error = error;
+    this.onChange();
+  }
+
   private store(c: DrawingChange): void {
     this.trackPosition(c);
+    const id = this.id;
     const run = c.after
       ? () => this.backend.saveDrawing(toInput(c.after!)).then(() => undefined)
       : () => this.backend.deleteDrawing(c.before!.id);
-    this.saving = this.saving.then(run).catch((e: unknown) => {
-      console.error("storing a drawing failed", e);
-      if (this.id) void this.load(this.id, false);
-    });
+    this.saving = this.saving.then(run).then(
+      () => {
+        if (this.id === id) this.setError(null);
+      },
+      (e: unknown) => {
+        console.error("storing a drawing failed", e);
+        if (this.id === id) this.setError(toProblem(e).message);
+        if (this.id) void this.load(this.id, false);
+      },
+    );
   }
 }
 

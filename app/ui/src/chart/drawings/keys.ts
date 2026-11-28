@@ -17,11 +17,15 @@ export type DrawingKeyAction = { tool: ToolId } | { command: DrawingCommand } | 
 export const RULER_CODE = "KeyR";
 export const MAGNET_CODE = "KeyM";
 
+/** Input types that take no typed text: a checkbox in a popover leaves ⌘Z to the chart. */
+const NOT_TEXT = new Set(["checkbox", "radio", "button"]);
+
 /** Focus is in a text field, where keys type instead. */
 function typing(target: unknown): boolean {
   if (typeof target !== "object" || target === null) return false;
-  const el = target as { tagName?: string; isContentEditable?: boolean };
-  return el.isContentEditable === true || el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT";
+  const el = target as { tagName?: string; type?: string; isContentEditable?: boolean };
+  if (el.tagName === "INPUT") return !NOT_TEXT.has(el.type ?? "");
+  return el.isContentEditable === true || el.tagName === "TEXTAREA" || el.tagName === "SELECT";
 }
 
 /**

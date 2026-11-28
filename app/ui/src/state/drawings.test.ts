@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Drawing, DrawingBody, DrawingInput, InstrumentId, PositionBody, PositionOutcome, TimeframeCode } from "../backend/types";
-import type { DrawingCommand, TextEdit, TextResult } from "../chart/drawings/layer";
+import type { DrawingCommand, StyleAction, StyleEdit, TextEdit, TextResult } from "../chart/drawings/layer";
 import type { ToolId } from "../chart/drawings/registry";
 import type { DrawingChange } from "../chart/drawings/state";
 import { DrawingController, type DrawingSurface, type MagnetPref } from "./drawings";
@@ -30,6 +30,9 @@ function fakeSurface() {
   const magnets: boolean[] = [];
   const outcomes: Map<string, PositionOutcome>[] = [];
   const texts: TextResult[] = [];
+  const styles: StyleAction[] = [];
+  const hidden: boolean[] = [];
+  let style: ((e: StyleEdit | null) => void) | null = null;
   let commit: ((c: DrawingChange) => void) | null = null;
   let tool: ((k: ToolId | null) => void) | null = null;
   let text: ((e: TextEdit | null) => void) | null = null;
@@ -52,6 +55,9 @@ function fakeSurface() {
     onDrawingCommit: (cb) => (commit = cb),
     onDrawingTool: (cb) => (tool = cb),
     onDrawingText: (cb) => (text = cb),
+    drawingStyle: (a) => styles.push(a),
+    setDrawingsHidden: (on) => hidden.push(on),
+    onDrawingStyle: (cb) => (style = cb),
   };
   return {
     surface,
@@ -61,6 +67,9 @@ function fakeSurface() {
     magnets,
     outcomes,
     texts,
+    styles,
+    hidden,
+    openStyle: (e: StyleEdit | null) => style!(e),
     commit: (c: DrawingChange) => commit!(c),
     openText: (e: TextEdit | null) => text!(e),
     hasListeners: () => commit !== null || text !== null,
@@ -172,6 +181,71 @@ describe("DrawingController", () => {
     // No blank frame before a reload: the list is replaced at once.
     expect(s.sets).toEqual([[], [], [drawing("y")]]);
     expect(console.error).toHaveBeenCalled();
+  });
+
+  it("keeps the error of a failed store until a later one succeeds or another instrument opens", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const b = fakeBackend([]);
+    const s = fakeSurface();
+    const c = new DrawingController(b.backend, () => {});
+    c.attach(s.surface);
+    void c.open(BTC);
+    await flush();
+    b.loads[0]!.resolve([]);
+    s.commit({ before: drawing("x"), after: null });
+    await flush();
+    b.pending[0]!.reject({ code: "other", message: "disk full" });
+    await flush();
+    expect(c.error).toBe("disk full");
+    b.loads[1]!.resolve([]);
+    s.commit({ before: null, after: drawing("y") });
+    await flush();
+    b.pending[1]!.resolve();
+    await flush();
+    expect(c.error).toBeNull();
+
+    s.commit({ before: null, after: drawing("z") });
+    await flush();
+    b.pending[2]!.reject(new Error("locked"));
+    await flush();
+    expect(c.error).toBe("locked");
+    void c.open(ETH);
+    expect(c.error).toBeNull();
+  });
+
+  it("mirrors the style popover and passes its actions to the chart", () => {
+    const s = fakeSurface();
+    let changes = 0;
+    const c = new DrawingController(fakeBackend([]).backend, () => changes++);
+    c.attach(s.surface);
+    const edit = { drawing: drawing("x"), x: 10, y: 20 };
+    s.openStyle(edit);
+    expect(c.styleEdit).toEqual(edit);
+    expect(changes).toBe(1);
+    c.restyle({ locked: true });
+    c.deleteStyled();
+    c.closeStyle();
+    expect(s.styles).toEqual([{ patch: { locked: true } }, { delete: true }, null]);
+    s.openStyle(null);
+    expect(c.styleEdit).toBeNull();
+  });
+
+  it("hides all for the session, and picking a tool shows them again", () => {
+    const s = fakeSurface();
+    const c = new DrawingController(fakeBackend([]).backend, () => {});
+    c.attach(s.surface);
+    expect(s.hidden).toEqual([false]);
+    c.toggleHidden();
+    expect(c.hidden).toBe(true);
+    c.toggleTool("trend");
+    expect(c.hidden).toBe(false);
+    expect(s.hidden).toEqual([false, true, false]);
+    expect(s.tools).toEqual(["trend"]);
+    // A chart attached later starts hidden too.
+    c.toggleHidden();
+    const t = fakeSurface();
+    c.attach(t.surface);
+    expect(t.hidden).toEqual([true]);
   });
 
   it("mirrors the chart's tool, toggles it and passes commands on", () => {

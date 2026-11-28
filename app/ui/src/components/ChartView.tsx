@@ -7,9 +7,11 @@ import type { ChartTheme } from "../chart/theme";
 import { t, useLanguage } from "../i18n";
 import { bannerText, sourceName } from "../labels";
 import { ChartSession, type SessionState } from "../state/chartSession";
+import type { DrawingPatch } from "../chart/drawings/state";
 import type { DrawingStore } from "../state/drawings";
 import type { IndicatorStore } from "../state/indicators";
 import { Banner } from "./Banner";
+import { DrawingStyle } from "./DrawingStyle";
 import { IndicatorLegend } from "./IndicatorLegend";
 import { IndicatorSettings } from "./IndicatorSettings";
 import { Legend } from "./Legend";
@@ -60,6 +62,8 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
   useSyncExternalStore(drawings.subscribe, drawings.version);
   const ind = indicators.state;
   const textEdit = drawings.state.textEdit;
+  const styleEdit = drawings.state.styleEdit;
+  const drawingError = drawings.state.error;
   /** Chart and first bar time of the last recompute; a change of either recomputes at once. */
   const computedFor = useRef<{ key: string; first: number } | null>(null);
 
@@ -146,6 +150,9 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
   const saveText = useCallback((text: string) => drawings.state.saveText(text), [drawings]);
   const cancelText = useCallback(() => drawings.state.cancelText(), [drawings]);
   const deleteText = useCallback(() => drawings.state.deleteText(), [drawings]);
+  const restyle = useCallback((patch: DrawingPatch) => drawings.state.restyle(patch), [drawings]);
+  const closeStyle = useCallback(() => drawings.state.closeStyle(), [drawings]);
+  const deleteStyled = useCallback(() => drawings.state.deleteStyled(), [drawings]);
 
   const openSettings = useCallback((instance: string, row: HTMLElement) => {
     const host = hostRef.current;
@@ -192,6 +199,15 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
   return (
     <>
       {banner}
+      {drawingError !== null && (
+        <Banner
+          testId="drawing-error"
+          text={t("drawings.saveError")}
+          retryAt={null}
+          retryLabel={() => ""}
+          detail={drawingError}
+        />
+      )}
       <div
         ref={hostRef}
         data-testid="chart"
@@ -237,6 +253,18 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
             onSave={saveText}
             onCancel={cancelText}
             onDelete={deleteText}
+          />
+        )}
+        {styleEdit && (
+          <DrawingStyle
+            key={styleEdit.drawing.id}
+            edit={styleEdit}
+            palette={theme.indicatorPalette}
+            hostWidth={hostWidth}
+            hostHeight={hostHeight}
+            onChange={restyle}
+            onDelete={deleteStyled}
+            onClose={closeStyle}
           />
         )}
         {loading && <Loading symbol={symbol} tf={tfLabel(tf)} source={sourceLabel} />}

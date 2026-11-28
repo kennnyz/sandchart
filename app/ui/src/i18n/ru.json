@@ -123,5 +123,20 @@
   "note.save": "Сохранить",
   "note.saveHint": "Сохранить ({shortcut})",
   "note.cancel": "Отмена",
-  "note.delete": "Удалить"
+  "note.delete": "Удалить",
+  "tools.hideAll": "Скрыть все рисунки",
+  "tools.showAll": "Показать все рисунки",
+  "drawingStyle.title": "Стиль рисунка",
+  "drawingStyle.close": "Закрыть",
+  "drawingStyle.color": "Цвет",
+  "drawingStyle.swatch": "Цвет {n}",
+  "drawingStyle.width": "Толщина",
+  "drawingStyle.widthN": "{n} px",
+  "drawingStyle.dash": "Пунктир",
+  "drawingStyle.extendLeft": "Продлить влево",
+  "drawingStyle.extendRight": "Продлить вправо",
+  "drawingStyle.levels": "Уровни",
+  "drawingStyle.lock": "Закреплён",
+  "drawingStyle.delete": "Удалить",
+  "drawings.saveError": "Не удалось сохранить рисунок. На графике то, что сохранено."
 }

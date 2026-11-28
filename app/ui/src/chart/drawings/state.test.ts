@@ -187,6 +187,22 @@ describe("edits and history", () => {
     expect(s.redo()).toBe(false);
   });
 
+  it("updates style, lock and body as one undo step, also on a locked drawing", () => {
+    const { s, commits } = setup();
+    const l = stored("l", 1, 60, true);
+    s.reset([l]);
+    expect(s.update("l", { style: { ...l.style } })).toBe(false);
+    expect(s.update("nope", { locked: false })).toBe(false);
+    expect(s.update("l", { style: { color: 3, width: 4, dash: true } })).toBe(true);
+    expect(s.update("l", { locked: false })).toBe(true);
+    expect(s.byId("l")).toEqual({ ...l, style: { color: 3, width: 4, dash: true }, locked: false });
+    expect(commits).toHaveLength(2);
+    expect(s.undo()).toBe(true);
+    expect(s.byId("l")!.locked).toBe(true);
+    expect(s.undo()).toBe(true);
+    expect(s.byId("l")).toEqual(l);
+  });
+
   it("keeps at most HISTORY_LIMIT steps", () => {
     const { s } = setup();
     s.reset([stored("x", 1)]);

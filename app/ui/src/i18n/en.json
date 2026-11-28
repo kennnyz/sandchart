@@ -123,5 +123,20 @@
   "note.save": "Save",
   "note.saveHint": "Save ({shortcut})",
   "note.cancel": "Cancel",
-  "note.delete": "Delete"
+  "note.delete": "Delete",
+  "tools.hideAll": "Hide all drawings",
+  "tools.showAll": "Show all drawings",
+  "drawingStyle.title": "Drawing style",
+  "drawingStyle.close": "Close",
+  "drawingStyle.color": "Colour",
+  "drawingStyle.swatch": "Colour {n}",
+  "drawingStyle.width": "Width",
+  "drawingStyle.widthN": "{n} px",
+  "drawingStyle.dash": "Dashed",
+  "drawingStyle.extendLeft": "Extend left",
+  "drawingStyle.extendRight": "Extend right",
+  "drawingStyle.levels": "Levels",
+  "drawingStyle.lock": "Locked",
+  "drawingStyle.delete": "Delete",
+  "drawings.saveError": "A drawing could not be saved. The chart shows what is stored."
 }

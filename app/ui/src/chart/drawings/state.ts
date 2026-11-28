@@ -8,6 +8,9 @@ export interface DrawingChange {
   after: Drawing | null;
 }
 
+/** What the style popover changes: the look, the lock, or the tool's options in the body. */
+export type DrawingPatch = Partial<Pick<Drawing, "style" | "locked" | "body">>;
+
 /** The part of a drawing under the pointer: its body or the handle with this index. */
 export type Part = "body" | number;
 
@@ -171,6 +174,25 @@ export class DrawingState {
     const d = this.byId(id);
     if (!d || d.locked || sameBody(d.body, body)) return false;
     this.record({ before: d, after: { ...d, body } });
+    return true;
+  }
+
+  /**
+   * Changes style, lock or body of a drawing as one undo step, locked or not (the lock
+   * only keeps it from being dragged); false when it is unknown or nothing changes.
+   */
+  update(id: string, patch: DrawingPatch): boolean {
+    const d = this.byId(id);
+    if (!d) return false;
+    const next: Drawing = { ...d, ...patch };
+    const same =
+      next.locked === d.locked &&
+      next.style.color === d.style.color &&
+      next.style.width === d.style.width &&
+      next.style.dash === d.style.dash &&
+      sameBody(next.body, d.body);
+    if (same) return false;
+    this.record({ before: d, after: next });
     return true;
   }
 

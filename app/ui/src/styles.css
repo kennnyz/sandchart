@@ -162,6 +162,9 @@ select:focus-visible {
   margin: 4px 0;
   background: var(--line);
 }
+.tools-bottom {
+  margin-top: auto;
+}
 
 /* ---- Top bar ---- */
 
@@ -1069,6 +1072,57 @@ button:disabled {
   font-size: 11px;
   white-space: pre-wrap;
   user-select: text;
+}
+
+/* ---- Drawing style popover (on .ind-settings) ---- */
+
+.dstyle-widths {
+  display: flex;
+  gap: 4px;
+}
+.dstyle-width {
+  width: 26px;
+  height: 22px;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.dstyle-width span {
+  width: 14px;
+  background: var(--muted);
+}
+.dstyle-width[aria-checked="true"] {
+  border-color: var(--fg);
+}
+.dstyle-width[aria-checked="true"] span {
+  background: var(--fg);
+}
+.dstyle-levels {
+  margin: 4px 0;
+  padding: 0;
+  border: 0;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px 8px;
+}
+.dstyle-levels legend {
+  padding: 4px 0;
+  color: var(--muted);
+}
+.dstyle-levels label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+.dstyle-levels input {
+  accent-color: var(--fg);
+}
+.dstyle-footer {
+  justify-content: flex-end;
+  padding-top: 4px;
 }
 
 /* ---- Note editor ---- */

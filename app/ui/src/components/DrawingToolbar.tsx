@@ -1,4 +1,4 @@
-import { Magnet } from "lucide-react";
+import { Eye, EyeOff, Magnet } from "lucide-react";
 import { useEffect, useSyncExternalStore } from "react";
 import { drawingKeyAction, MAGNET_CODE } from "../chart/drawings/keys";
 import { TOOLS } from "../chart/drawings/registry";
@@ -9,7 +9,7 @@ import type { DrawingStore } from "../state/drawings";
 /** "KeyT" -> "T". */
 const keyName = (code: string) => code.replace(/^Key/, "");
 
-/** The tools rail left of the chart, built from the tool registry, the magnet switch, and the drawing shortcuts. */
+/** The tools rail left of the chart, built from the tool registry, the magnet switch, hide all, and the drawing shortcuts. */
 export function DrawingToolbar({ store }: { store: DrawingStore }) {
   useSyncExternalStore(store.subscribe, store.version);
   const s = store.state;
@@ -56,6 +56,16 @@ export function DrawingToolbar({ store }: { store: DrawingStore }) {
         onClick={() => s.toggleMagnet()}
       >
         <Magnet size={18} strokeWidth={1.75} />
+      </button>
+      <button
+        className="tool-button tools-bottom"
+        data-testid="tool-hide-all"
+        aria-label={t("tools.hideAll")}
+        aria-pressed={s.hidden}
+        title={t(s.hidden ? "tools.showAll" : "tools.hideAll")}
+        onClick={() => s.toggleHidden()}
+      >
+        {s.hidden ? <EyeOff size={18} strokeWidth={1.75} /> : <Eye size={18} strokeWidth={1.75} />}
       </button>
     </nav>
   );

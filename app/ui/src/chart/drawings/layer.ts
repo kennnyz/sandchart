@@ -5,7 +5,7 @@ import type { Coords } from "./geometry";
 import { snapToBar } from "./magnet";
 import { toolById, toolFor, type Look, type Mover, type Point, type ToolDef, type ToolId } from "./registry";
 import { paintRuler } from "./ruler";
-import { DEFAULT_STYLE, DrawingState, type DrawingChange, type Owner, type Part } from "./state";
+import { DEFAULT_STYLE, DrawingState, type DrawingChange, type DrawingPatch, type Owner, type Part } from "./state";
 
 /** Distance in CSS px within which the pointer hits a drawing or a handle. */
 export const HIT_TOLERANCE = 6;
@@ -20,7 +20,7 @@ const NO_DASH: number[] = [];
 
 /**
  * `ruler` arms the ruler for the next drag, whatever the tool (pressed again, disarms it);
- * `edit` opens the text editor of the selected drawing when it holds text.
+ * `edit` opens the text editor of the selected drawing when it holds text, else its style popover.
  */
 export type DrawingCommand = "undo" | "redo" | "delete" | "cancel" | "ruler" | "edit";
 
@@ -37,6 +37,16 @@ export interface TextEdit {
 /** How the text editor was closed: saved with this text, deleted, or cancelled (null). */
 export type TextResult = { text: string } | { delete: true } | null;
 
+/** The style popover of a drawing is open: the drawing as it is now, and where (CSS px of the price plot). */
+export interface StyleEdit {
+  drawing: Drawing;
+  x: number;
+  y: number;
+}
+
+/** What the style popover does: changes the drawing (it stays open), deletes it, or closes (null). */
+export type StyleAction = { patch: DrawingPatch } | { delete: true } | null;
+
 /** What the layer needs from the chart. */
 export interface LayerHost {
   /** Redraw both canvas layers. */
@@ -46,6 +56,8 @@ export interface LayerHost {
   tool(id: ToolId | null): void;
   /** Open (or move) the text editor, or close it with null. */
   text(edit: TextEdit | null): void;
+  /** Open or refresh the style popover, or close it with null. */
+  style(edit: StyleEdit | null): void;
 }
 
 /** Draws a price tag on the axis of the given canvas: price in ticks, background colour. */
@@ -90,9 +102,19 @@ export class DrawingLayer {
   private outcomes: ReadonlyMap<string, PositionOutcome> = new Map();
   /** The drawing whose text editor is open. */
   private textEdit: { id: string; isNew: boolean } | null = null;
+  /** The drawing whose style popover is open, and where it opened. */
+  private styleEdit: { id: string; at: Point } | null = null;
+  /** Hide all: nothing is painted or hit; the drawings themselves are unchanged. */
+  private hiddenAll = false;
 
   constructor(private readonly host: LayerHost) {
-    this.state = new DrawingState({ commit: (c) => host.commit(c), tool: (k) => host.tool(k) });
+    this.state = new DrawingState({
+      commit: (c) => {
+        host.commit(c);
+        this.syncStyle();
+      },
+      tool: (k) => host.tool(k),
+    });
   }
 
   // ---- Commands from the chart's owner ----
@@ -102,6 +124,7 @@ export class DrawingLayer {
     this.press = null;
     this.ruler = null;
     this.closeText();
+    this.closeStyle();
     this.state.reset(list);
     this.cache.clear();
     this.host.invalidate();
@@ -114,6 +137,7 @@ export class DrawingLayer {
   setTool(id: ToolId | null): void {
     this.abort();
     this.finishText(null);
+    this.closeStyle();
     this.state.setTool(id);
     this.host.invalidateOverlay();
   }
@@ -154,12 +178,51 @@ export class DrawingLayer {
     this.host.invalidate();
   }
 
-  /** A double-click on the price plot: opens the text editor of a drawing with text; false when none is there. */
+  /**
+   * A double-click on the price plot: opens the text editor of a drawing with text, the
+   * style popover of any other; false when no drawing is there.
+   */
   doubleClick(x: number, y: number): boolean {
     const hit = this.state.tool ? null : this.hitAt(x, y);
     if (!hit) return false;
     this.state.select(hit.id);
-    return this.openText(hit.id);
+    return this.openText(hit.id) || this.openStyle(hit.id, { x, y });
+  }
+
+  /** Runs what the style popover asked for (see `StyleAction`). */
+  styleAction(action: StyleAction): void {
+    const se = this.styleEdit;
+    if (!se) return;
+    if (!action) {
+      this.closeStyle();
+      return;
+    }
+    const s = this.state;
+    if ("delete" in action) {
+      s.select(se.id);
+      s.deleteSelected();
+    } else {
+      s.update(se.id, action.patch);
+    }
+    this.host.invalidate();
+  }
+
+  /**
+   * Hide all: no drawing is painted or hit until shown again (for this session; the
+   * drawings are not changed). Hiding drops the selection, the tool, a drag and open editors.
+   */
+  setHiddenAll(on: boolean): void {
+    if (on === this.hiddenAll) return;
+    this.hiddenAll = on;
+    if (on) {
+      this.abort();
+      this.finishText(null);
+      this.closeStyle();
+      this.state.setTool(null);
+      this.state.select(null);
+      this.state.hover = null;
+    }
+    this.host.invalidate();
   }
 
   /** Snaps placed and dragged points to bar prices (see `snapToBar`). */
@@ -175,6 +238,7 @@ export class DrawingLayer {
       this.rulerArmed = false;
       this.abort();
       this.closeText();
+      this.closeStyle();
       const any = this.state.cancel() || ruler;
       this.host.invalidateOverlay();
       return any;
@@ -184,9 +248,12 @@ export class DrawingLayer {
       this.rulerArmed = !this.rulerArmed;
       return true;
     }
-    if (cmd === "edit") return this.state.selected !== null && !this.edit && this.openText(this.state.selected);
-    // Not in the middle of a drag: the history would change under it.
-    if (this.edit || this.press) return false;
+    if (cmd === "edit") {
+      const id = this.state.selected;
+      return id !== null && !this.edit && (this.openText(id) || this.openStyle(id, null));
+    }
+    // Not in the middle of a drag, nor on hidden drawings: the history would change unseen.
+    if (this.edit || this.press || this.hiddenAll) return false;
     const done = cmd === "undo" ? this.state.undo() : cmd === "redo" ? this.state.redo() : this.state.deleteSelected();
     if (done) this.host.invalidate();
     return done;
@@ -312,6 +379,7 @@ export class DrawingLayer {
     const s = this.state;
     // A press on the chart while a text editor is open closes it without saving.
     this.finishText(null);
+    this.closeStyle();
     // Any press puts a shown ruler away.
     if (this.ruler) {
       this.ruler = null;
@@ -500,10 +568,40 @@ export class DrawingLayer {
     this.host.text(null);
   }
 
+  /**
+   * Opens the style popover of drawing `id` at `at`, or (null) at its last handle, else at
+   * the mouse, else in the middle of the plot; false when it is not shown or has text.
+   */
+  private openStyle(id: string, at: Point | null): boolean {
+    const c = this.coords;
+    const d = this.state.byId(id);
+    const tool = d && this.visibleTool(d);
+    if (!c || !d || !tool || tool.text) return false;
+    const where = at ?? tool.handles(this.geom(tool, d)).at(-1) ?? this.mouse ?? { x: c.plotW / 2, y: c.priceH / 2 };
+    this.styleEdit = { id, at: { x: where.x, y: where.y } };
+    this.host.style({ drawing: d, x: where.x, y: where.y });
+    this.host.invalidateOverlay();
+    return true;
+  }
+
+  /** After a stored change: the open popover shows the drawing as it is now, or closes when it is gone. */
+  private syncStyle(): void {
+    const se = this.styleEdit;
+    if (!se) return;
+    const d = this.state.byId(se.id);
+    if (d) this.host.style({ drawing: d, x: se.at.x, y: se.at.y });
+    else this.closeStyle();
+  }
+
+  private closeStyle(): void {
+    if (!this.styleEdit) return;
+    this.styleEdit = null;
+    this.host.style(null);
+  }
 
   /** The tool of a drawing that is shown and inside the visible times. */
   private visibleTool(d: Drawing): ToolDef | undefined {
-    if (d.hidden) return undefined;
+    if (d.hidden || this.hiddenAll) return undefined;
     const tool = toolFor(d.body.kind);
     if (!tool) return undefined;
     const [lo, hi] = tool.timeSpan(d.body);
