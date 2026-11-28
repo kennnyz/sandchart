@@ -215,6 +215,15 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // Another pair ends the replay: with trades it waits for the replay bar's question first.
+  const openPair = useCallback(
+    (id: InstrumentId) => {
+      if (current && sameId(current, id)) return;
+      replay.state.requestSwitch(() => setCurrent(id));
+    },
+    [current, replay],
+  );
+
   const theme = themeName === "dark" ? dark : light;
   return (
     <div className="app">
@@ -233,7 +242,7 @@ export function App() {
         onReplay={() => {
           const r = replay.state;
           if (r.phase === "off") r.pick();
-          else void r.exit();
+          else void r.requestExit();
         }}
         watchlistHidden={!watchlistVisible}
         onShowWatchlist={() => showWatchlist(true)}
@@ -267,12 +276,12 @@ export function App() {
               savedVersion={savedVersion}
               current={current}
               replaying={replaying}
-              onOpen={setCurrent}
+              onOpen={openPair}
               onChange={saveWatchlist}
               onAdd={() => setSearchMode("add")}
               onHide={() => showWatchlist(false)}
             />
-            <AlertsPanel store={alerts} onOpen={setCurrent} />
+            <AlertsPanel store={alerts} onOpen={openPair} />
           </div>
         )}
         <AlertToast store={alerts} />
@@ -285,7 +294,7 @@ export function App() {
         <SymbolSearch
           backend={backend}
           mode={searchMode}
-          onOpen={(i) => setCurrent(i.id)}
+          onOpen={(i) => openPair(i.id)}
           onAdd={addToWatchlist}
           onClose={() => setSearchMode(null)}
         />

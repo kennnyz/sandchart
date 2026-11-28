@@ -92,7 +92,7 @@ export function ReplayBar({ replay: r, range, onDate }: ReplayBarProps) {
       if (e.key !== "Escape") return;
       e.preventDefault();
       setWantDate(false);
-      r.cancelSelectBar();
+      r.cancelConfirm();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -272,6 +272,45 @@ export function ReplayBar({ replay: r, range, onDate }: ReplayBarProps) {
   }
   const intervalLabel = t("replay.interval.value", { tf: v ? tfLabel(v.base) : "" });
 
+  const confirmTitle =
+    confirming === "exit" ? "replay.confirm.exit.title" : confirming === "switch" ? "replay.confirm.switch.title" : "replay.confirm.title";
+  // Select bar asks over its button, exit and a pair switch over the X.
+  const confirmBox = confirming && (
+    <div
+      className={confirming === "select" ? "replay-confirm" : "replay-confirm at-exit"}
+      role="alertdialog"
+      aria-labelledby="replay-confirm-title"
+      aria-describedby="replay-confirm-text"
+      data-testid="replay-confirm"
+      data-kind={confirming}
+    >
+      <div id="replay-confirm-title" className="replay-confirm-title">
+        {t(confirmTitle)}
+      </div>
+      <div id="replay-confirm-text" className="replay-confirm-text">
+        {t("replay.confirm.text")}
+      </div>
+      <div className="replay-confirm-actions">
+        <button
+          className="text-button"
+          data-testid="replay-confirm-cancel"
+          onClick={() => {
+            setWantDate(false);
+            r.cancelConfirm();
+          }}
+        >
+          {t("replay.cancel")}
+        </button>
+        <button className="text-button bordered" data-testid="replay-confirm-ok" onClick={() => void r.confirm()}>
+          {t("replay.confirm.ok")}
+        </button>
+        <button className="text-button bordered" data-testid="replay-confirm-save" autoFocus onClick={() => void r.saveFirst()}>
+          {t("replay.confirm.save")}
+        </button>
+      </div>
+    </div>
+  );
+
   return (
     <div
       className="replay-bar"
@@ -294,42 +333,7 @@ export function ReplayBar({ replay: r, range, onDate }: ReplayBarProps) {
             {t("replay.selectBar")}
             <ChevronDown size={12} />
           </button>
-          {confirming && (
-            <div
-              className="replay-confirm"
-              role="alertdialog"
-              aria-labelledby="replay-confirm-title"
-              aria-describedby="replay-confirm-text"
-              data-testid="replay-confirm"
-            >
-              <div id="replay-confirm-title" className="replay-confirm-title">
-                {t("replay.confirm.title")}
-              </div>
-              <div id="replay-confirm-text" className="replay-confirm-text">
-                {t("replay.confirm.text")}
-              </div>
-              <div className="replay-confirm-actions">
-                <button
-                  className="text-button"
-                  data-testid="replay-confirm-cancel"
-                  onClick={() => {
-                    setWantDate(false);
-                    r.cancelSelectBar();
-                  }}
-                >
-                  {t("replay.cancel")}
-                </button>
-                <button
-                  className="text-button bordered"
-                  data-testid="replay-confirm-ok"
-                  autoFocus
-                  onClick={() => void r.confirmSelectBar()}
-                >
-                  {t("replay.confirm.ok")}
-                </button>
-              </div>
-            </div>
-          )}
+          {confirming === "select" && confirmBox}
         </div>
         <div className="divider" />
         <button
@@ -440,10 +444,11 @@ export function ReplayBar({ replay: r, range, onDate }: ReplayBarProps) {
         data-testid="replay-exit"
         aria-label={t("replay.exit")}
         title={t("replay.exit")}
-        onClick={() => void r.exit()}
+        onClick={() => void r.requestExit()}
       >
         <X size={16} />
       </button>
+      {confirming && confirming !== "select" && confirmBox}
       {menu && items.length > 0 && (
         <Menu
           key={menu.id}

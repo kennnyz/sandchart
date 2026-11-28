@@ -36,7 +36,7 @@ The replay bar sits centred under the chart, with the results under it:
 
 | Control | What it does |
 | --- | --- |
-| Select bar ▾ | Start again from another bar: **Pick a bar on the chart** or **Pick a date**. With trades in this replay it asks first, since a new start drops them (save the replay to keep them). The live chart comes back to pick on. |
+| Select bar ▾ | Start again from another bar: **Pick a bar on the chart** or **Pick a date**. With trades not saved yet it asks first, since a new start drops them (see below). The live chart comes back to pick on. |
 | Play / Pause | Reveals one step after another at the chosen speed. |
 | Step | Reveals the next step. |
 | 1x 2x 3x 5x 10x | Speed of Play, in steps per second. |
@@ -47,13 +47,15 @@ The replay bar sits centred under the chart, with the results under it:
 | Close trade | Closes the open trade at the close of the current step. |
 | Save | Saves the session as a `.replay` file. |
 | Open | Opens a `.replay` file. |
-| X | Ends the replay and goes back to the live chart. |
+| X | Ends the replay and goes back to the live chart; with trades not saved yet it asks first. |
 
 The round **+** at the left edge of the crosshair's price label opens a menu there too: **Buy** (Shift+B) and **Sell** (Shift+S), the same as the buttons, at the close of the current step, not at the price you point at, and **Draw horizontal line at <price>**. It has no alert item, since a replay's prices are from the past. Buy and Sell are off while a trade is open and once the replay has caught up ("Real time reached").
 
 Play stops by itself at the newest bar ("End of data"), when an action fails, and when the window is hidden or minimised. There is no step back: to try again, pick the same bar with **Select bar**.
 
 Opening another pair ends the replay. Another timeframe does not (see below).
+
+Select bar, X and opening another pair drop the replay's trades. When it has trades that are not in a file saved (or opened) as the replay stands now, a question opens over the bar first: **Cancel** keeps the replay (and the pair: the other one does not open), **Discard** goes on without saving, and **Save first** saves the file, then goes on; closing the save panel without saving keeps the replay. Esc answers Cancel.
 
 ## Update interval and timeframes
 
@@ -88,7 +90,7 @@ Changing the timeframe or the update interval keeps a caught-up replay finished.
 | Shift+B | Buy |
 | Shift+S | Sell |
 | Shift+C | Close the trade |
-| Esc | Cancel picking a start, close a dropdown, or answer no to Select bar's question |
+| Esc | Cancel picking a start, close a dropdown, or answer Cancel to the question before trades are dropped |
 
 The replay keys never use Alt, so they do not clash with the drawing tools (Alt plus a letter). They do nothing while you type in a text field. Space on a control you reached with Tab presses that control instead.
 

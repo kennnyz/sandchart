@@ -616,7 +616,7 @@ describe("replay select bar", () => {
     await c.step();
     const exit = vi.spyOn(backend, "replayExit");
     await c.selectBar();
-    expect(c.confirming).toBe(false);
+    expect(c.confirming).toBeNull();
     expect(c.phase).toBe("picking");
     expect(c.view).toBeNull();
     expect(exit).toHaveBeenCalledTimes(1);
@@ -631,15 +631,15 @@ describe("replay select bar", () => {
     await c.buy();
     const exit = vi.spyOn(backend, "replayExit");
     await c.selectBar();
-    expect(c.confirming).toBe(true);
+    expect(c.confirming).toBe("select");
     expect(c.phase).toBe("on");
     expect(exit).not.toHaveBeenCalled();
-    c.cancelSelectBar();
-    expect(c.confirming).toBe(false);
+    c.cancelConfirm();
+    expect(c.confirming).toBeNull();
     expect(c.view!.trades).toHaveLength(1);
     await c.selectBar();
-    await c.confirmSelectBar();
-    expect(c.confirming).toBe(false);
+    await c.confirm();
+    expect(c.confirming).toBeNull();
     expect(c.phase).toBe("picking");
     expect(exit).toHaveBeenCalledTimes(1);
     expect(feed.reloads).toBe(1);
@@ -650,8 +650,106 @@ describe("replay select bar", () => {
     await c.buy();
     await c.selectBar();
     await c.exit(false);
-    expect(c.confirming).toBe(false);
+    expect(c.confirming).toBeNull();
     expect(c.phase).toBe("off");
+  });
+});
+
+describe("replay exit and pair switch with trades", () => {
+  it("exits at once without trades", async () => {
+    const { c, feed } = await started();
+    await c.requestExit();
+    expect(c.confirming).toBeNull();
+    expect(c.phase).toBe("off");
+    expect(feed.reloads).toBe(1);
+  });
+
+  it("asks before an exit drops trades; cancel keeps them, discard exits", async () => {
+    const { c, backend, feed } = await started();
+    await c.buy();
+    const exit = vi.spyOn(backend, "replayExit");
+    await c.requestExit();
+    expect(c.confirming).toBe("exit");
+    expect(c.phase).toBe("on");
+    c.cancelConfirm();
+    expect(c.confirming).toBeNull();
+    expect(c.view!.trades).toHaveLength(1);
+    expect(exit).not.toHaveBeenCalled();
+    await c.requestExit();
+    await c.confirm();
+    expect(c.phase).toBe("off");
+    expect(exit).toHaveBeenCalledTimes(1);
+    expect(feed.reloads).toBe(1);
+  });
+
+  it("holds a pair switch until the answer: cancel never switches, discard does", async () => {
+    const { c } = await started();
+    await c.buy();
+    const go = vi.fn();
+    c.requestSwitch(go);
+    expect(c.confirming).toBe("switch");
+    expect(go).not.toHaveBeenCalled();
+    c.cancelConfirm();
+    expect(go).not.toHaveBeenCalled();
+    expect(c.phase).toBe("on");
+    c.requestSwitch(go);
+    await c.confirm();
+    expect(go).toHaveBeenCalledTimes(1);
+    expect(c.confirming).toBeNull();
+  });
+
+  it("switches at once without trades or without a replay", async () => {
+    const { c } = await started();
+    const go = vi.fn();
+    c.requestSwitch(go);
+    expect(go).toHaveBeenCalledTimes(1);
+    await c.exit(false);
+    c.requestSwitch(go);
+    expect(go).toHaveBeenCalledTimes(2);
+  });
+
+  it("save first saves, then goes on; a cancelled save panel keeps asking", async () => {
+    const { c, backend } = await started();
+    await c.buy();
+    const save = vi.spyOn(backend, "replaySave");
+    save.mockResolvedValueOnce(null);
+    await c.requestExit();
+    await c.saveFirst();
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(c.confirming).toBe("exit");
+    expect(c.phase).toBe("on");
+    await c.saveFirst();
+    expect(save).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(c.phase).toBe("off"));
+    expect(c.confirming).toBeNull();
+  });
+
+  it("does not ask while the trades are saved as they are, and asks again after a change", async () => {
+    const { c } = await started();
+    await c.buy();
+    await c.save();
+    await c.requestExit();
+    expect(c.confirming).toBeNull();
+    expect(c.phase).toBe("off");
+
+    const again = await started();
+    await again.c.buy();
+    await again.c.save();
+    await again.c.step();
+    await again.c.requestExit();
+    expect(again.c.confirming).toBe("exit");
+  });
+
+  it("a failed save keeps the replay and says why", async () => {
+    const { c, backend } = await started();
+    await c.buy();
+    vi.spyOn(backend, "replaySave").mockRejectedValueOnce(new Error("disk full"));
+    const go = vi.fn();
+    c.requestSwitch(go);
+    await c.saveFirst();
+    expect(go).not.toHaveBeenCalled();
+    expect(c.phase).toBe("on");
+    expect(c.error).toContain("disk full");
   });
 });
 

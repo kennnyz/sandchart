@@ -92,6 +92,9 @@ export interface ReplayView {
   open: ReplayTrade | null;
 }
 
+/** What a question about dropping the trades is for: a new start, an exit, or another pair. */
+export type ConfirmKind = "select" | "exit" | "switch";
+
 /** `off`: the live chart; `picking`: the next click on a bar starts; `on`: replaying. */
 export type ReplayPhase = "off" | "picking" | "on";
 
@@ -142,6 +145,11 @@ export function validLevels(side: Side, close: number, stop: number, take: numbe
   return inRange && (side === "long" ? stop < close && close < take : take < close && close < stop);
 }
 
+/** What a `.replay` file of the session holds that the UI sees: where it stands and its trades. */
+function sessionKey(v: ReplayView): string {
+  return JSON.stringify([v.instrument.id, v.base, v.cut, v.trades]);
+}
+
 /** One update interval the replay can step: `stepTo` is set when the cut must reach that time first. */
 export interface BaseChoice {
   tf: TimeframeCode;
@@ -181,8 +189,12 @@ export class ReplayController {
   view: ReplayView | null = null;
   /** The engine's message for the last call that failed; cleared by the next action. */
   error: string | null = null;
-  /** "Select bar" asked whether the trades so far may be dropped; waiting for the answer. */
-  confirming = false;
+  /** Select bar, exit or a pair switch asked whether the trades so far may be dropped; waiting for the answer. */
+  confirming: ConfirmKind | null = null;
+  /** The pair switch held until the answer. */
+  private pending: (() => void) | null = null;
+  /** The session as last saved or opened (`sessionKey`): leaving it then drops nothing. */
+  private savedKey: string | null = null;
   /** The results panel is folded to its header (remembered). */
   resultsCollapsed: boolean;
   private cursor = 0;
@@ -387,21 +399,75 @@ export class ReplayController {
    */
   selectBar(): Promise<void> {
     if (this.phase !== "on" || !this.view) return Promise.resolve();
-    if (this.view.trades.length > 0) {
-      this.set({ confirming: true });
+    if (this.unsaved()) {
+      this.ask("select");
       return Promise.resolve();
     }
     return this.repick();
   }
 
-  /** The trades may go: pick a new start. */
-  confirmSelectBar(): Promise<void> {
-    if (!this.confirming) return Promise.resolve();
-    return this.repick();
+  /** The X: ends the replay, asking first when that drops trades. */
+  requestExit(): Promise<void> {
+    if (this.unsaved()) {
+      this.ask("exit");
+      return Promise.resolve();
+    }
+    return this.exit();
   }
 
-  cancelSelectBar(): void {
-    if (this.confirming) this.set({ confirming: false });
+  /**
+   * Another pair is about to open, which ends the replay: `go` opens it, at once without trades,
+   * else only once the user lets them go (nothing switches on Cancel).
+   */
+  requestSwitch(go: () => void): void {
+    if (this.unsaved()) {
+      this.ask("switch", go);
+      return;
+    }
+    go();
+  }
+
+  /** The trades may go: do what was asked. */
+  confirm(): Promise<void> {
+    const kind = this.confirming;
+    const go = this.pending;
+    this.pending = null;
+    if (kind === null) return Promise.resolve();
+    if (kind === "select") return this.repick();
+    if (kind === "exit") return this.exit();
+    this.set({ confirming: null });
+    go?.();
+    return Promise.resolve();
+  }
+
+  /** Saves the replay first, then does what was asked; a cancelled save panel or a failed save keeps the replay. */
+  saveFirst(): Promise<void> {
+    const kind = this.confirming;
+    if (kind === null || this.phase !== "on") return Promise.resolve();
+    return this.run(async () => {
+      const where = await this.backend.replaySave();
+      if (where !== null) this.markSaved();
+      // Cancelled, or the question went away meanwhile: nothing more to do.
+      if (where === null || this.confirming !== kind) return;
+      void this.confirm();
+    }, () => this.cancelConfirm());
+  }
+
+  cancelConfirm(): void {
+    this.pending = null;
+    if (this.confirming !== null) this.set({ confirming: null });
+  }
+
+  /** The replay has trades that are not in a file saved or opened as it is now. */
+  private unsaved(): boolean {
+    const v = this.view;
+    return this.phase === "on" && v !== null && v.trades.length > 0 && this.savedKey !== sessionKey(v);
+  }
+
+  private ask(kind: ConfirmKind, go: (() => void) | null = null): void {
+    this.pause();
+    this.pending = go;
+    this.set({ confirming: kind });
   }
 
   toggleResults(): void {
@@ -465,7 +531,7 @@ export class ReplayController {
   save(): Promise<void> {
     if (this.phase !== "on") return Promise.resolve();
     return this.run(async () => {
-      await this.backend.replaySave();
+      if ((await this.backend.replaySave()) !== null) this.markSaved();
     });
   }
 
@@ -477,6 +543,7 @@ export class ReplayController {
       this.cursor = 0;
       this.phase = "on";
       this.show(st);
+      this.markSaved();
       this.switchTo?.(st.instrument.id, st.tf);
     });
   }
@@ -488,7 +555,8 @@ export class ReplayController {
   exit(reload = true): Promise<void> {
     this.pause();
     this.generation++;
-    this.confirming = false;
+    this.confirming = null;
+    this.pending = null;
     if (this.phase === "picking") {
       this.set({ phase: "off" });
       return Promise.resolve();
@@ -506,8 +574,13 @@ export class ReplayController {
     });
   }
 
+  private markSaved(): void {
+    if (this.view && !this.stale()) this.savedKey = sessionKey(this.view);
+  }
+
   /** Forgets the session at once and moves to `phase`. */
   private drop(phase: ReplayPhase): void {
+    this.savedKey = null;
     this.phase = phase;
     this.view = null;
     this.cursor = 0;
@@ -524,7 +597,7 @@ export class ReplayController {
   private repick(): Promise<void> {
     this.pause();
     this.generation++;
-    this.confirming = false;
+    this.confirming = null;
     if (this.phase !== "on") return Promise.resolve();
     this.drop("picking");
     return this.run(async () => {

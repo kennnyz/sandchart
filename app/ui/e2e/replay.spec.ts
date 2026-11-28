@@ -481,8 +481,53 @@ test("replay_keeps_its_session_across_timeframes", async ({ page }) => {
   await expect.poll(() => cutOf(page)).toBe(hour + 5 * H);
   await expect(page.getByTestId("replay-trade")).toHaveCount(1);
 
-  // Another pair ends the replay.
+  // Another pair ends the replay, once its trades may go.
   await page.locator('[data-testid="watchlist-row"][data-symbol="ETHUSDT"]').click();
+  await page.getByTestId("replay-confirm-ok").click();
+  await expect(page.getByTestId("chart")).toHaveAttribute("data-replay", "off");
+});
+
+test("replay_exit_and_pair_switch_ask_before_dropping_trades", async ({ page }) => {
+  const plot = await openChart(page);
+  await startAt(page, plot, plot.width * 0.5);
+  await page.getByTestId("replay-buy").click();
+  await expect(page.getByTestId("replay-trade")).toHaveCount(1);
+  const ask = page.getByTestId("replay-confirm");
+
+  // X asks; Cancel keeps the replay and its trade.
+  await page.getByTestId("replay-exit").click();
+  await expect(ask).toHaveAttribute("data-kind", "exit");
+  await expect(ask).toContainText("Exit the replay?");
+  await page.getByTestId("replay-confirm-cancel").click();
+  await expect(ask).toHaveCount(0);
+  await expect(page.getByTestId("chart")).toHaveAttribute("data-replay", "on");
+  await expect(page.getByTestId("replay-trade")).toHaveCount(1);
+
+  // Another pair waits for the answer; Cancel keeps the old pair and the replay.
+  const eth = page.locator('[data-testid="watchlist-row"][data-symbol="ETHUSDT"]');
+  await eth.click();
+  await expect(ask).toHaveAttribute("data-kind", "switch");
+  await expect(page.getByTestId("symbol-button")).toContainText("BTCUSDT");
+  await page.keyboard.press("Escape");
+  await expect(ask).toHaveCount(0);
+  await expect(page.getByTestId("symbol-button")).toContainText("BTCUSDT");
+  await expect(page.getByTestId("chart")).toHaveAttribute("data-replay", "on");
+
+  // Save first: the file is written, then the pair opens and the replay ends.
+  await eth.click();
+  await page.getByTestId("replay-confirm-save").click();
+  await expect(page.getByTestId("chart")).toHaveAttribute("data-replay", "off");
+  await expect(page.getByTestId("symbol-button")).toContainText("ETHUSDT");
+  const saved = await page.evaluate(() => (window as unknown as { __sandchartMock: { replayFile(): string | null } }).__sandchartMock.replayFile());
+  expect(saved).toContain('"kind":"open"');
+
+  // Discard on X ends it without a file.
+  const now = await plotOf(page);
+  await startAt(page, now, now.width * 0.5);
+  await page.getByTestId("replay-sell").click();
+  await expect(page.getByTestId("replay-trade")).toHaveCount(1);
+  await page.getByTestId("replay-exit").click();
+  await page.getByTestId("replay-confirm-ok").click();
   await expect(page.getByTestId("chart")).toHaveAttribute("data-replay", "off");
 });
 
@@ -538,6 +583,7 @@ test("replay_jumps_to_real_time_and_ends_the_backtest_there", async ({ page }) =
   await expect(page.getByTestId("replay-trade")).toHaveAttribute("data-reason", reason!);
 
   await page.getByTestId("replay-exit").click();
+  await page.getByTestId("replay-confirm-ok").click();
   await expect(page.getByTestId("chart")).toHaveAttribute("data-replay", "off");
 });
 

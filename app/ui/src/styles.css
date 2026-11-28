@@ -1268,12 +1268,17 @@ button:disabled {
   bottom: calc(100% + 8px);
   left: 0;
   z-index: 30;
-  width: 280px;
+  width: 320px;
   padding: 12px;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 8px;
   box-shadow: var(--shadow);
+}
+.replay-confirm.at-exit {
+  left: auto;
+  right: 8px;
+  bottom: calc(100% + 4px);
 }
 .replay-confirm-title {
   color: var(--fg);
