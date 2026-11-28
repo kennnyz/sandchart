@@ -67,6 +67,8 @@ A trend line's level at a moment is read off the line between its two points, in
 
 Alerts are checked inside the app. **While Sandchart is closed nothing is checked and nothing fires.** When the app starts again, its alerts start again from the current price; a level crossed while it was closed does not fire. A computer that sleeps checks nothing until it wakes up; then the first new price is compared with the last one before, so a level crossed meanwhile fires then. Keep the app open (it can be in the background) to be alerted.
 
+Alerts an AI agent sets or deletes through the [MCP server](mcp.md) follow the same rule: a running app arms or disarms them within a few seconds; while it is closed they wait for it.
+
 ## Limits
 
 - At most **100 alerts active** at once and **500 alerts kept** in all. Delete fired alerts you no longer need.
