@@ -1,18 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Drawing, DrawingInput, DrawingKind, InstrumentId } from "../backend/types";
-import type { DrawingCommand } from "../chart/drawings/layer";
+import type { Drawing, DrawingBody, DrawingInput, InstrumentId, PositionBody, PositionOutcome, TimeframeCode } from "../backend/types";
+import type { DrawingCommand, TextEdit, TextResult } from "../chart/drawings/layer";
+import type { ToolId } from "../chart/drawings/registry";
 import type { DrawingChange } from "../chart/drawings/state";
 import { DrawingController, type DrawingSurface, type MagnetPref } from "./drawings";
 
 const BTC = { source: "mock", symbol: "BTCUSDT" };
 const ETH = { source: "mock", symbol: "ETHUSDT" };
 
-function drawing(id: string, p = 100, instrument: InstrumentId = BTC): Drawing {
+function drawing(id: string, p = 100, instrument: InstrumentId = BTC, body?: DrawingBody): Drawing {
   return {
     id,
     instrument,
     priceScale: 2,
-    body: { kind: "hline", p },
+    body: body ?? { kind: "hline", p },
     style: { color: 0, width: 2, dash: false },
     locked: false,
     hidden: false,
@@ -24,11 +25,14 @@ function drawing(id: string, p = 100, instrument: InstrumentId = BTC): Drawing {
 /** A chart stand-in that records what the controller sets on it. */
 function fakeSurface() {
   const sets: Drawing[][] = [];
-  const tools: (DrawingKind | null)[] = [];
+  const tools: (ToolId | null)[] = [];
   const commands: DrawingCommand[] = [];
   const magnets: boolean[] = [];
+  const outcomes: Map<string, PositionOutcome>[] = [];
+  const texts: TextResult[] = [];
   let commit: ((c: DrawingChange) => void) | null = null;
-  let tool: ((k: DrawingKind | null) => void) | null = null;
+  let tool: ((k: ToolId | null) => void) | null = null;
+  let text: ((e: TextEdit | null) => void) | null = null;
   const surface: DrawingSurface = {
     setDrawings: (list) => sets.push(list),
     setDrawingMagnet: (on) => magnets.push(on),
@@ -40,10 +44,27 @@ function fakeSurface() {
       commands.push(c);
       return c !== "redo";
     },
+    setPositionOutcomes: (m) => outcomes.push(new Map(m)),
+    finishDrawingText: (r) => {
+      texts.push(r);
+      text?.(null);
+    },
     onDrawingCommit: (cb) => (commit = cb),
     onDrawingTool: (cb) => (tool = cb),
+    onDrawingText: (cb) => (text = cb),
   };
-  return { surface, sets, tools, commands, magnets, commit: (c: DrawingChange) => commit!(c), hasListeners: () => commit !== null };
+  return {
+    surface,
+    sets,
+    tools,
+    commands,
+    magnets,
+    outcomes,
+    texts,
+    commit: (c: DrawingChange) => commit!(c),
+    openText: (e: TextEdit | null) => text!(e),
+    hasListeners: () => commit !== null || text !== null,
+  };
 }
 
 interface Pending {
@@ -56,6 +77,11 @@ function fakeBackend(stored: Drawing[]) {
   const calls: string[] = [];
   const pending: Pending[] = [];
   const loads: { id: InstrumentId; resolve: (l: Drawing[]) => void }[] = [];
+  const resolves: {
+    tf: TimeframeCode;
+    positions: { id: string; position: PositionBody }[];
+    resolve: (r: { id: string; outcome: PositionOutcome }[]) => void;
+  }[] = [];
   const wait = () => new Promise<void>((resolve, reject) => pending.push({ resolve, reject }));
   const backend = {
     getDrawings: (id: InstrumentId) => {
@@ -71,8 +97,10 @@ function fakeBackend(stored: Drawing[]) {
       calls.push(`delete ${id}`);
       await wait();
     },
+    getPositionOutcomes: (_id: InstrumentId, tf: TimeframeCode, positions: { id: string; position: PositionBody }[]) =>
+      new Promise<{ id: string; outcome: PositionOutcome }[]>((resolve) => resolves.push({ tf, positions, resolve })),
   };
-  return { backend, calls, pending, loads, stored };
+  return { backend, calls, pending, loads, stored, resolves };
 }
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
@@ -190,5 +218,130 @@ describe("DrawingController", () => {
     d.toggleMagnet();
     expect(d.magnet).toBe(true);
     expect(saved).toEqual([false, true]);
+  });
+
+  it("passes the chart's text editor to the popover and its answer back", () => {
+    const s = fakeSurface();
+    const changed = vi.fn();
+    const c = new DrawingController(fakeBackend([]).backend, changed);
+    c.attach(s.surface);
+    const edit: TextEdit = { id: "n", text: "", isNew: true, x: 1, y: 2 };
+    s.openText(edit);
+    expect(c.textEdit).toEqual(edit);
+    expect(changed).toHaveBeenCalled();
+    c.saveText("hello");
+    expect(c.textEdit).toBeNull();
+    s.openText(edit);
+    c.deleteText();
+    s.openText(edit);
+    c.cancelText();
+    expect(s.texts).toEqual([{ text: "hello" }, { delete: true }, null]);
+  });
+});
+
+describe("position outcomes", () => {
+  const H = 3_600_000;
+  const pos = (stop = 90, take = 130): DrawingBody => ({
+    kind: "position",
+    side: "long",
+    entry: { t: 10 * H, p: 100 },
+    stop,
+    take,
+    endT: 30 * H,
+  });
+  const TAKE: PositionOutcome = { status: "take", exitTime: 12 * H, ambiguous: false, r: 3 };
+  const STOP: PositionOutcome = { status: "stop", exitTime: 11 * H, ambiguous: false, r: -1 };
+
+  async function loaded(list: Drawing[]) {
+    const b = fakeBackend([]);
+    const s = fakeSurface();
+    const c = new DrawingController(b.backend, () => {});
+    c.attach(s.surface);
+    void c.open(BTC);
+    await flush();
+    b.loads[0]!.resolve(list);
+    await flush();
+    return { b, s, c };
+  }
+
+  it("asks for every position in one call once drawings and candles are there", async () => {
+    const { b, s, c } = await loaded([drawing("p1", 0, BTC, pos()), drawing("h"), drawing("p2", 0, BTC, pos(80))]);
+    // No timeframe yet: nothing to ask.
+    expect(b.resolves).toHaveLength(0);
+    c.candles(BTC, "1h", 0, 100 * H);
+    expect(b.resolves).toHaveLength(1);
+    expect(b.resolves[0]!.tf).toBe("1h");
+    expect(b.resolves[0]!.positions.map((p) => p.id)).toEqual(["p1", "p2"]);
+    expect(b.resolves[0]!.positions[0]!.position).toEqual({ side: "long", entry: { t: 10 * H, p: 100 }, stop: 90, take: 130, endT: 30 * H });
+    b.resolves[0]!.resolve([
+      { id: "p1", outcome: TAKE },
+      { id: "p2", outcome: STOP },
+    ]);
+    await flush();
+    expect(s.outcomes.at(-1)).toEqual(new Map([["p1", TAKE], ["p2", STOP]]));
+    // The same candles again (a live tick): no new call. A new bar, another timeframe or another instrument's candles:
+    c.candles(BTC, "1h", 0, 100 * H);
+    expect(b.resolves).toHaveLength(1);
+    c.candles(ETH, "1h", 0, 101 * H);
+    expect(b.resolves).toHaveLength(1);
+    c.candles(BTC, "1h", 0, 101 * H);
+    expect(b.resolves).toHaveLength(2);
+    c.candles(BTC, "4h", 0, 101 * H);
+    // Another timeframe: the old outcomes go at once.
+    expect(s.outcomes.at(-1)).toEqual(new Map());
+    expect(b.resolves.at(-1)!.tf).toBe("4h");
+  });
+
+  it("drops the outcome of a moved position at once and asks again", async () => {
+    const { b, s, c } = await loaded([drawing("p1", 0, BTC, pos()), drawing("p2", 0, BTC, pos(80))]);
+    c.candles(BTC, "1h", 0, 100 * H);
+    b.resolves[0]!.resolve([
+      { id: "p1", outcome: TAKE },
+      { id: "p2", outcome: STOP },
+    ]);
+    await flush();
+    const before = drawing("p1", 0, BTC, pos());
+    s.commit({ before, after: { ...before, body: pos(95) } });
+    expect(s.outcomes.at(-1)).toEqual(new Map([["p2", STOP]]));
+    expect(b.resolves).toHaveLength(2);
+    expect(b.resolves[1]!.positions.find((p) => p.id === "p1")!.position.stop).toBe(95);
+    b.resolves[1]!.resolve([
+      { id: "p1", outcome: STOP },
+      { id: "p2", outcome: STOP },
+    ]);
+    await flush();
+    expect(s.outcomes.at(-1)).toEqual(new Map([["p1", STOP], ["p2", STOP]]));
+  });
+
+  it("never shows an answer for a body that changed while it was asked for", async () => {
+    const { b, s, c } = await loaded([drawing("p1", 0, BTC, pos())]);
+    c.candles(BTC, "1h", 0, 100 * H);
+    const before = drawing("p1", 0, BTC, pos());
+    s.commit({ before, after: { ...before, body: pos(95) } });
+    // The first answer is for the old body and arrives late: dropped.
+    b.resolves[0]!.resolve([{ id: "p1", outcome: TAKE }]);
+    await flush();
+    expect(s.outcomes.at(-1)).toEqual(new Map());
+    b.resolves[1]!.resolve([{ id: "p1", outcome: STOP }]);
+    await flush();
+    expect(s.outcomes.at(-1)).toEqual(new Map([["p1", STOP]]));
+    // Deleted: its outcome goes, and there is nothing left to ask.
+    s.commit({ before: { ...before, body: pos(95) }, after: null });
+    expect(s.outcomes.at(-1)).toEqual(new Map());
+    expect(b.resolves).toHaveLength(2);
+  });
+
+  it("starts over on another instrument", async () => {
+    const { b, s, c } = await loaded([drawing("p1", 0, BTC, pos())]);
+    c.candles(BTC, "1h", 0, 100 * H);
+    b.resolves[0]!.resolve([{ id: "p1", outcome: TAKE }]);
+    await flush();
+    void c.open(ETH);
+    expect(s.outcomes.at(-1)).toEqual(new Map());
+    await flush();
+    b.loads[1]!.resolve([]);
+    await flush();
+    c.candles(ETH, "1h", 0, 100 * H);
+    expect(b.resolves).toHaveLength(1);
   });
 });

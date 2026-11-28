@@ -1,18 +1,31 @@
-import type { Backend, Drawing, DrawingInput, DrawingKind, InstrumentId } from "../backend/types";
-import type { DrawingCommand } from "../chart/drawings/layer";
+import type {
+  Backend,
+  Drawing,
+  DrawingBody,
+  DrawingInput,
+  InstrumentId,
+  PositionBody,
+  PositionOutcome,
+  TimeframeCode,
+} from "../backend/types";
+import type { DrawingCommand, TextEdit, TextResult } from "../chart/drawings/layer";
+import type { ToolId } from "../chart/drawings/registry";
 import type { DrawingChange } from "../chart/drawings/state";
 
 /** What the controller needs from the chart (`Chart` implements it). */
 export interface DrawingSurface {
   setDrawings(list: Drawing[]): void;
   setDrawingMagnet(on: boolean): void;
-  setDrawingTool(kind: DrawingKind | null): void;
+  setDrawingTool(id: ToolId | null): void;
   drawingCommand(cmd: DrawingCommand): boolean;
+  setPositionOutcomes(outcomes: ReadonlyMap<string, PositionOutcome>): void;
+  finishDrawingText(result: TextResult): void;
   onDrawingCommit(cb: ((c: DrawingChange) => void) | null): void;
-  onDrawingTool(cb: ((kind: DrawingKind | null) => void) | null): void;
+  onDrawingTool(cb: ((id: ToolId | null) => void) | null): void;
+  onDrawingText(cb: ((edit: TextEdit | null) => void) | null): void;
 }
 
-type DrawingBackend = Pick<Backend, "getDrawings" | "saveDrawing" | "deleteDrawing">;
+type DrawingBackend = Pick<Backend, "getDrawings" | "saveDrawing" | "deleteDrawing" | "getPositionOutcomes">;
 
 /** Where the magnet switch is kept between sessions. */
 export interface MagnetPref {
@@ -47,14 +60,28 @@ function toInput(d: Drawing): DrawingInput {
   return { id: d.id, instrument: d.instrument, body: d.body, style: d.style, locked: d.locked, hidden: d.hidden, z: d.z };
 }
 
+function positionOf(body: DrawingBody | undefined): PositionBody | null {
+  if (body?.kind !== "position") return null;
+  const { side, entry, stop, take, endT } = body;
+  return { side, entry, stop, take, endT };
+}
+
+const sameId = (a: InstrumentId, b: InstrumentId) => a.source === b.source && a.symbol === b.symbol;
+
 /**
  * Keeps the chart's drawings and the backend in step: loads the instrument's drawings,
  * stores every change the chart reports (undo and redo included) one after another, and
  * mirrors the chart's active tool and the magnet switch for the toolbar. A change that cannot be stored makes
  * it reload the list, so the chart never shows what the backend does not have.
+ *
+ * It also asks the engine for the outcome of every position, all in one call: after a
+ * load, after a position changes, and when the candles of the timeframe change (another
+ * timeframe, an older page, a new bar). A changed position loses its outcome at once.
  */
 export class DrawingController {
-  tool: DrawingKind | null = null;
+  tool: ToolId | null = null;
+  /** The text editor the chart has open, for the popover; null when closed. */
+  textEdit: TextEdit | null = null;
   /** Points snap to bar prices; kept across sessions. */
   magnet: boolean;
   private surface: DrawingSurface | null = null;
@@ -63,6 +90,14 @@ export class DrawingController {
   private token = 0;
   /** Stores run one after another, and a load waits for them. */
   private saving: Promise<void> = Promise.resolve();
+  /** The positions of the shown drawings, by id; a body is replaced, never changed in place. */
+  private positions = new Map<string, PositionBody>();
+  private outcomes = new Map<string, PositionOutcome>();
+  /** Timeframe and first and last bar time of the candles the outcomes are for. */
+  private tf: TimeframeCode | null = null;
+  private candlesKey = "";
+  /** Token of the latest outcome request. */
+  private outcomeToken = 0;
 
   constructor(
     private readonly backend: DrawingBackend,
@@ -77,16 +112,22 @@ export class DrawingController {
     this.surface = surface;
     surface.setDrawingMagnet(this.magnet);
     surface.onDrawingCommit((c) => this.store(c));
-    surface.onDrawingTool((kind) => {
-      this.tool = kind;
+    surface.onDrawingTool((id) => {
+      this.tool = id;
+      this.onChange();
+    });
+    surface.onDrawingText((edit) => {
+      this.textEdit = edit;
       this.onChange();
     });
     return () => {
       surface.onDrawingCommit(null);
       surface.onDrawingTool(null);
+      surface.onDrawingText(null);
       if (this.surface !== surface) return;
       this.surface = null;
       this.tool = null;
+      this.textEdit = null;
       this.onChange();
     };
   }
@@ -94,15 +135,47 @@ export class DrawingController {
   /** Shows the drawings of `id`: the chart is cleared at once, then filled when they arrive. */
   async open(id: InstrumentId): Promise<void> {
     this.id = id;
+    this.candlesKey = "";
     await this.load(id, true);
   }
 
-  toggleTool(kind: DrawingKind): void {
-    this.surface?.setDrawingTool(this.tool === kind ? null : kind);
+  /**
+   * The chart shows candles of `id` at `tf` from `first` to `last` (open times). Outcomes
+   * are asked for again when any of these changed, so on every new bar.
+   */
+  candles(id: InstrumentId, tf: TimeframeCode, first: number, last: number): void {
+    if (!this.id || !sameId(id, this.id)) return;
+    const key = `${tf}|${first}|${last}`;
+    if (key === this.candlesKey) return;
+    this.candlesKey = key;
+    if (tf !== this.tf) {
+      this.tf = tf;
+      this.setOutcomes(new Map());
+    }
+    void this.refreshOutcomes();
   }
 
-  setTool(kind: DrawingKind | null): void {
-    this.surface?.setDrawingTool(kind);
+  toggleTool(id: ToolId): void {
+    this.surface?.setDrawingTool(this.tool === id ? null : id);
+  }
+
+  setTool(id: ToolId | null): void {
+    this.surface?.setDrawingTool(id);
+  }
+
+  /** Saves the text of the open editor (empty: no note). */
+  saveText(text: string): void {
+    this.surface?.finishDrawingText({ text });
+  }
+
+  /** Deletes the drawing of the open editor. */
+  deleteText(): void {
+    this.surface?.finishDrawingText({ delete: true });
+  }
+
+  /** Closes the open editor without a change. */
+  cancelText(): void {
+    this.surface?.finishDrawingText(null);
   }
 
   toggleMagnet(): void {
@@ -119,7 +192,11 @@ export class DrawingController {
 
   private async load(id: InstrumentId, blank: boolean): Promise<void> {
     const token = ++this.token;
-    if (blank) this.surface?.setDrawings([]);
+    if (blank) {
+      this.surface?.setDrawings([]);
+      this.positions = new Map();
+      this.setOutcomes(new Map());
+    }
     await this.saving;
     let list: Drawing[];
     try {
@@ -128,10 +205,63 @@ export class DrawingController {
       console.error("loading the drawings failed", e);
       return;
     }
-    if (token === this.token) this.surface?.setDrawings(list);
+    if (token !== this.token) return;
+    this.surface?.setDrawings(list);
+    this.positions = new Map();
+    for (const d of list) {
+      const p = positionOf(d.body);
+      if (p) this.positions.set(d.id, p);
+    }
+    this.setOutcomes(new Map());
+    void this.refreshOutcomes();
+  }
+
+  private setOutcomes(outcomes: Map<string, PositionOutcome>): void {
+    this.outcomes = outcomes;
+    this.surface?.setPositionOutcomes(new Map(outcomes));
+  }
+
+  /** Asks for the outcome of every position in one call; an answer for a position that changed since is dropped. */
+  private async refreshOutcomes(): Promise<void> {
+    const id = this.id;
+    const tf = this.tf;
+    if (!id || !tf || this.positions.size === 0) return;
+    const token = ++this.outcomeToken;
+    const sent = [...this.positions].map(([drawingId, position]) => ({ id: drawingId, position }));
+    let answer: { id: string; outcome: PositionOutcome }[];
+    try {
+      answer = await this.backend.getPositionOutcomes(id, tf, sent);
+    } catch (e) {
+      console.error("resolving the positions failed", e);
+      return;
+    }
+    if (token !== this.outcomeToken || this.id !== id || this.tf !== tf) return;
+    const bodies = new Map(sent.map((s) => [s.id, s.position]));
+    const next = new Map<string, PositionOutcome>();
+    for (const { id: drawingId, outcome } of answer) {
+      const now = this.positions.get(drawingId);
+      if (now && now === bodies.get(drawingId)) next.set(drawingId, outcome);
+    }
+    this.setOutcomes(next);
+  }
+
+  /** Keeps the positions in step with a change; a changed one loses its outcome and all are asked for again. */
+  private trackPosition(c: DrawingChange): void {
+    const id = (c.after ?? c.before)!.id;
+    const after = positionOf(c.after?.body);
+    if (!after && !this.positions.has(id)) return;
+    if (after) this.positions.set(id, after);
+    else this.positions.delete(id);
+    if (this.outcomes.has(id)) {
+      const next = new Map(this.outcomes);
+      next.delete(id);
+      this.setOutcomes(next);
+    }
+    if (after) void this.refreshOutcomes();
   }
 
   private store(c: DrawingChange): void {
+    this.trackPosition(c);
     const run = c.after
       ? () => this.backend.saveDrawing(toInput(c.after!)).then(() => undefined)
       : () => this.backend.deleteDrawing(c.before!.id);
