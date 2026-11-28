@@ -4,12 +4,14 @@
 //! * [`Engine::subscribe_live`] streams live candles and backfills gaps after reconnects.
 //! * [`Engine::import_csv`] loads local files as the `csv` source.
 //! * [`Engine::drawings`] and [`Engine::save_drawing`] keep the chart drawings.
+//! * [`Engine::replay_start`] and the other `replay_*` methods run one replay session.
 
 mod chart;
 mod csv_import;
 mod drawings;
 mod indicators;
 mod live;
+mod replay;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -27,6 +29,7 @@ pub use indicators::{
     InstanceResult, MAX_INDICATOR_BARS,
 };
 pub use live::{ConnectionState, LiveEvent, LiveHandle};
+pub use replay::{REPLAY_CONTEXT, ReplayState};
 
 /// Candles per provider request and per chart page.
 pub(crate) const PAGE: u16 = 1000;
@@ -62,6 +65,9 @@ pub enum EngineError {
     /// A drawing or position the UI sent breaks a rule.
     #[error("{0}")]
     Drawing(String),
+    /// A replay command, file or request was refused.
+    #[error("{0}")]
+    Replay(String),
 }
 
 type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
@@ -83,6 +89,8 @@ pub(crate) struct Shared {
     inputs: Arc<Mutex<ConnectionInputs>>,
     /// Bars of the open chart for indicators; see `indicators.rs` for the lock order.
     bars: Arc<Mutex<indicators::BarState>>,
+    /// The open replay, if any; its instrument's live events are held back.
+    replay: Arc<Mutex<Option<replay::Session>>>,
 }
 
 pub struct Engine {
@@ -202,6 +210,7 @@ impl Engine {
                 connection: Arc::new(connection),
                 inputs: Arc::default(),
                 bars: Arc::default(),
+                replay: Arc::default(),
             },
             providers: providers
                 .into_iter()

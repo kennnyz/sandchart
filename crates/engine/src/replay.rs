@@ -1,0 +1,191 @@
+//! The replay session: one at a time, over cached candles held in memory. Only bars up to
+//! the current one ever leave the engine (ADR 0005).
+
+use std::sync::{MutexGuard, PoisonError};
+
+use sandchart_core::replay::{Command, MAX_CANDLES, ReplayFile, Simulation, simulate};
+use sandchart_core::{Candle, Instrument, InstrumentId, Timeframe};
+
+use crate::{Engine, EngineError, blocking};
+
+/// Bars shown before the start, for context.
+pub const REPLAY_CONTEXT: usize = 500;
+
+pub(crate) struct Session {
+    instrument: Instrument,
+    tf: Timeframe,
+    /// Context, then every bar from the start to the newest cached one.
+    candles: Vec<Candle>,
+    start: u32,
+    current: u32,
+    commands: Vec<Command>,
+}
+
+/// What the UI gets: the revealed bars from `from` on, never a bar after `current`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReplayState {
+    pub instrument: Instrument,
+    pub tf: Timeframe,
+    pub start: u32,
+    pub current: u32,
+    /// No bar is left to reveal.
+    pub at_end: bool,
+    /// Index of `bars[0]`.
+    pub from: u32,
+    pub bars: Vec<Candle>,
+    pub commands: Vec<Command>,
+    pub simulation: Simulation,
+}
+
+fn no_session() -> EngineError {
+    EngineError::Replay("no replay is open".into())
+}
+
+impl Session {
+    fn simulate(&self, commands: &[Command]) -> Result<Simulation, EngineError> {
+        simulate(&self.candles, self.start, self.current, commands).map_err(EngineError::Replay)
+    }
+
+    fn state(&self, cursor: u32) -> Result<ReplayState, EngineError> {
+        let from = cursor.min(self.current + 1);
+        Ok(ReplayState {
+            instrument: self.instrument.clone(),
+            tf: self.tf,
+            start: self.start,
+            current: self.current,
+            at_end: self.current as usize + 1 >= self.candles.len(),
+            from,
+            bars: self.candles[from as usize..=self.current as usize].to_vec(),
+            commands: self.commands.clone(),
+            simulation: self.simulate(&self.commands)?,
+        })
+    }
+}
+
+impl crate::Shared {
+    fn session(&self) -> MutexGuard<'_, Option<Session>> {
+        self.replay.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Live events of this instrument are held back while it is replayed.
+    pub(crate) fn replaying(&self, id: &InstrumentId) -> bool {
+        self.session()
+            .as_ref()
+            .is_some_and(|s| s.instrument.id == *id)
+    }
+}
+
+impl Engine {
+    fn with_session<T>(
+        &self,
+        f: impl FnOnce(&mut Session) -> Result<T, EngineError>,
+    ) -> Result<T, EngineError> {
+        f(self.shared.session().as_mut().ok_or_else(no_session)?)
+    }
+
+    /// Starts a replay at the cached bar that opens at `start_time`, with up to
+    /// [`REPLAY_CONTEXT`] bars before it and every cached bar after it (within the file
+    /// limit). Replaces any open replay. Returns the state with every revealed bar.
+    pub async fn replay_start(
+        &self,
+        id: &InstrumentId,
+        tf: Timeframe,
+        start_time: i64,
+    ) -> Result<ReplayState, EngineError> {
+        let key = id.clone();
+        let (instrument, context, rest) = blocking(&self.shared.store, move |s| {
+            let instrument = s.instrument(&key)?;
+            let context = s.candles_before(&key, tf, Some(start_time), REPLAY_CONTEXT)?;
+            let room = MAX_CANDLES - context.len();
+            let rest = s.scan_candles_between(&key, tf, start_time - 1, i64::MAX, |it| {
+                it.take(room).collect::<Vec<_>>()
+            })?;
+            Ok((instrument, context, rest))
+        })
+        .await?;
+        let instrument = instrument.ok_or_else(|| EngineError::UnknownInstrument(id.clone()))?;
+        if rest.first().is_none_or(|c| c.open_time != start_time) {
+            return Err(EngineError::Replay(format!(
+                "no cached {} bar opens at {start_time}",
+                tf.code()
+            )));
+        }
+        let start = context.len() as u32;
+        let mut candles = context;
+        candles.extend(rest);
+        let session = Session {
+            instrument,
+            tf,
+            candles,
+            start,
+            current: start,
+            commands: Vec::new(),
+        };
+        let state = session.state(0)?;
+        *self.shared.session() = Some(session);
+        Ok(state)
+    }
+
+    /// Reveals up to `n` more bars; returns the index of the current bar.
+    pub fn replay_step(&self, n: u32) -> Result<u32, EngineError> {
+        self.with_session(|s| {
+            let last = s.candles.len() as u32 - 1;
+            s.current = s.current.saturating_add(n).min(last);
+            Ok(s.current)
+        })
+    }
+
+    /// Appends a trade command if the session stays valid with it (bar order, revealed
+    /// bars only, one trade at a time, levels around the close).
+    pub fn replay_command(&self, cmd: Command) -> Result<(), EngineError> {
+        self.with_session(|s| {
+            let mut next = s.commands.clone();
+            next.push(cmd);
+            s.simulate(&next)?;
+            s.commands = next;
+            Ok(())
+        })
+    }
+
+    /// The session with the revealed bars from index `cursor` on (the UI passes how many
+    /// it already has), trades and statistics.
+    pub fn replay_state(&self, cursor: u32) -> Result<ReplayState, EngineError> {
+        self.with_session(|s| s.state(cursor))
+    }
+
+    /// The `.replay` file: context and revealed bars only, never a bar after the current one.
+    pub fn replay_export(&self) -> Result<Vec<u8>, EngineError> {
+        self.with_session(|s| {
+            let file = ReplayFile {
+                instrument: s.instrument.clone(),
+                timeframe: s.tf,
+                candles: s.candles[..=s.current as usize].to_vec(),
+                start: s.start,
+                current: s.current,
+                commands: s.commands.clone(),
+            };
+            Ok(file.to_json().into_bytes())
+        })
+    }
+
+    /// Checks a `.replay` file and opens it as the session, revealed up to its current bar.
+    pub fn replay_open(&self, bytes: &[u8]) -> Result<ReplayState, EngineError> {
+        let (file, _) = ReplayFile::from_json(bytes).map_err(EngineError::Replay)?;
+        let session = Session {
+            instrument: file.instrument,
+            tf: file.timeframe,
+            candles: file.candles,
+            start: file.start,
+            current: file.current,
+            commands: file.commands,
+        };
+        let state = session.state(0)?;
+        *self.shared.session() = Some(session);
+        Ok(state)
+    }
+
+    /// Closes the session; live updates of its instrument flow again.
+    pub fn replay_exit(&self) {
+        *self.shared.session() = None;
+    }
+}
