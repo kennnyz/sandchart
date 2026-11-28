@@ -290,7 +290,8 @@ Arms an alert ([Alerts](alerts.md)): a price alert, or an alert on an `hline` or
 | Input | |
 | --- | --- |
 | `id` | Optional; an existing id replaces that alert. |
-| `source`, `symbol`, `priceScale` | The pair and the scale of `kind.price`: the pair's. |
+| `source`, `symbol` | The pair. |
+| `priceScale` | The scale of `kind.price`: the pair's. Only a price alert needs it; a line alert takes its level from the drawing. |
 | `kind` | `{ "kind": "price", "price": ticks }` or `{ "kind": "drawing", "drawingId": "..." }`. |
 | `direction` | `above`, `below` or `cross`. |
 

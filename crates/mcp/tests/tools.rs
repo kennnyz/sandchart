@@ -741,12 +741,23 @@ async fn alerts_are_set_listed_and_deleted() {
         json!({ "id": "line", "symbol": "BTCUSDT", "priceScale": 2, "body": hline(12_000) }),
     )
     .await;
+    // A line alert has no price of its own, so it needs no priceScale; a price alert does.
     h.call(
         "set_alert",
-        json!({ "id": "on-line", "symbol": "BTCUSDT", "priceScale": 2,
+        json!({ "id": "on-line", "symbol": "BTCUSDT",
                 "kind": { "kind": "drawing", "drawingId": "line" }, "direction": "cross" }),
     )
     .await;
+    let e = h
+        .fail(
+            "set_alert",
+            json!({ "symbol": "BTCUSDT", "kind": { "kind": "price", "price": 1 }, "direction": "cross" }),
+        )
+        .await;
+    assert_eq!(
+        e,
+        "a price alert needs priceScale, the pair's (2 for binance/BTCUSDT)"
+    );
     h.call(
         "save_drawing",
         json!({ "id": "box", "symbol": "BTCUSDT", "priceScale": 2,

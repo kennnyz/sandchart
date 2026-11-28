@@ -17,7 +17,7 @@ use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Implementation, ServerCapabilities, ServerConfig};
 use rmcp::{ServerHandler, tool, tool_handler, tool_router};
-use sandchart_core::alert::Alert;
+use sandchart_core::alert::{Alert, AlertKind};
 use sandchart_core::replay::{MAX_FILE_BYTES, ReplayFile};
 use sandchart_core::{Candle, Drawing, Instrument, InstrumentId, Timeframe};
 use sandchart_engine::{Engine, EngineError};
@@ -606,11 +606,24 @@ impl Sandchart {
     )]
     async fn set_alert(&self, Parameters(p): Parameters<AlertInput>) -> ToolResult {
         let inst = self.instrument(&p.source, &p.symbol).await?;
-        check_scale(&inst, p.price_scale)?;
+        let price_scale = match (p.price_scale, &p.kind) {
+            (Some(scale), _) => {
+                check_scale(&inst, scale)?;
+                scale
+            }
+            // A line alert's level comes from its drawing.
+            (None, AlertKind::Drawing { .. }) => inst.price_scale,
+            (None, AlertKind::Price { .. }) => {
+                return Err(format!(
+                    "a price alert needs priceScale, the pair's ({} for {}/{})",
+                    inst.price_scale, inst.id.source, inst.id.symbol
+                ));
+            }
+        };
         let a = Alert {
             id: p.id.unwrap_or_else(|| new_id("mcp")),
             instrument: inst.id,
-            price_scale: p.price_scale,
+            price_scale,
             kind: p.kind,
             direction: p.direction,
             active: true,

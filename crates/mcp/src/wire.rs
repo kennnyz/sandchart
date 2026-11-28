@@ -100,6 +100,7 @@ pub struct DrawingInput {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct IdInput {
+    /// The id of the drawing or alert, as list_drawings or list_alerts return it.
     pub id: String,
 }
 
@@ -138,8 +139,8 @@ pub struct AlertInput {
     pub source: String,
     /// Symbol, e.g. "BTCUSDT".
     pub symbol: String,
-    /// Decimal places of `kind.price`: the pair's priceScale.
-    pub price_scale: u8,
+    /// Decimal places of `kind.price`: the pair's priceScale. Needed for a price alert only.
+    pub price_scale: Option<u8>,
     /// {"kind":"price","price":ticks} or {"kind":"drawing","drawingId":id} of an hline or
     /// trend drawing of the same pair.
     pub kind: AlertKind,
