@@ -413,6 +413,17 @@ describe("replay controller", () => {
     }
   });
 
+  it("steps and trades queued behind the step that catches up end quietly", async () => {
+    const { c, backend } = await started(2000, 2);
+    const sent = vi.spyOn(backend, "replayStep");
+    const cmd = vi.spyOn(backend, "replayCommand");
+    await Promise.all([c.step(), c.step(), c.step(), c.closeTrade(), c.buy(), c.step()]);
+    expect(c.view).toMatchObject({ caughtUp: true, atEnd: true });
+    expect(c.error).toBeNull();
+    expect(sent).toHaveBeenCalledTimes(1);
+    expect(cmd).not.toHaveBeenCalled();
+  });
+
   it("exits without a reload when the user opened another chart, and picking just cancels", async () => {
     const { c, feed } = await started();
     await c.exit(false);

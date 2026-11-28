@@ -292,7 +292,8 @@ export class ReplayController {
     this.steps++;
     return this.run(async () => {
       try {
-        if (this.phase !== "on") return;
+        // A step queued behind the one that reached the end has nothing left to do.
+        if (this.phase !== "on" || this.view?.atEnd || this.finished) return;
         await this.backend.replayStep(1);
         await this.sync();
       } finally {
@@ -328,7 +329,7 @@ export class ReplayController {
     this.pause();
     return this.run(async () => {
       let v = this.view;
-      if (this.phase !== "on" || !v || v.atEnd) return;
+      if (this.phase !== "on" || !v || v.atEnd || this.finished) return;
       let cut = v.cut;
       // Each step loads one more batch of newer candles at most; the cut stops moving at the end.
       for (;;) {
@@ -548,7 +549,8 @@ export class ReplayController {
   /** Sends a command made at run time (from the then current bar) and reads the results back. */
   private command(make: () => ReplayCommand | null): Promise<void> {
     return this.run(async () => {
-      if (this.phase !== "on" || !this.view) return;
+      // A command queued behind the step that caught up has nothing to trade on.
+      if (this.phase !== "on" || !this.view || this.finished) return;
       const cmd = make();
       if (!cmd) return;
       await this.backend.replayCommand(cmd);
