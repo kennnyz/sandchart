@@ -894,10 +894,14 @@ export class Chart {
     const inPlot = m !== null && m.x >= 0 && m.x < plotW && m.y >= 0 && m.y < plotH;
     const ch = this.crosshair;
     if (inPlot) {
-      ch.x = m.x;
-      ch.y = m.y;
+      // With ⌘ held and a tool picked, the crosshair sits on the bar price the ring shows.
+      const snap = this.drawings.snapPreview();
+      ch.x = snap ? snap.x : m.x;
+      ch.y = snap ? snap.y : m.y;
       ch.index = this.crosshairIndex;
     }
+    const dbg = chartDebug();
+    if (dbg) dbg.crosshair = inPlot ? { x: ch.x, y: ch.y } : null;
     const octx = this.octx;
     drawOverlay(f, octx, inPlot ? ch : null, this.buffers, () => {
       this.drawings.paintOverlay(octx, this.dpr, this.theme, (p, color) => drawingTag(octx, f, this.buffers, p, color));

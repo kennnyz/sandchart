@@ -49,6 +49,7 @@ interface Debug {
   ruler: string | null;
   outcomes: Record<string, string>;
   snapRing: { x: number; y: number } | null;
+  crosshair: { x: number; y: number } | null;
 }
 
 async function openChart(page: Page, query = ""): Promise<Plot> {
@@ -424,6 +425,8 @@ test("cmd_held_before_the_first_click_previews_the_snap_and_places_on_a_bar_pric
   const ring = (await debug(page)).snapRing;
   expect(ring).not.toBeNull();
   expect(ring!.x).toBeCloseTo(cx - plot.left, -1);
+  // The crosshair (and its price label) sits on the ring, not at the pointer.
+  expect((await debug(page)).crosshair).toEqual(ring);
   // The key alone, without moving the mouse, hides and shows the ring; the base stays as it is.
   const before = await settled(page);
   await page.keyboard.up("ControlOrMeta");

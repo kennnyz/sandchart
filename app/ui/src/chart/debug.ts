@@ -34,6 +34,8 @@ export interface ChartDebug {
   selectionBox: boolean;
   /** Handles of the selected drawing at the last overlay frame, in CSS px of the chart. */
   selectedHandles: { x: number; y: number }[];
+  /** The crosshair at the last overlay frame, in CSS px of the chart; null when not shown. */
+  crosshair: { x: number; y: number } | null;
   /** The ⌘ snap preview ring at the last overlay frame, in CSS px of the chart; null when not shown. */
   snapRing: { x: number; y: number } | null;
   /** The ruler's numbers at the last overlay frame ("+1.00 (+0.50%)|12 bars, 12h"), null when it is not shown. */
@@ -86,6 +88,7 @@ export function enableChartDebug(): void {
     replayHandles: null,
     replayClosed: 0,
     alertLevels: [],
+    crosshair: null,
     lineBells: [],
     plusButton: null,
   };
