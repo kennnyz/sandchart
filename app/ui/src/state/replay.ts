@@ -121,15 +121,12 @@ export class ReplayController {
   view: ReplayView | null = null;
   /** The engine's message for the last call that failed; cleared by the next action. */
   error: string | null = null;
-  /** A call is running (buttons that would queue another one disable). */
-  busy = false;
   private cursor = 0;
   /** Closed trades so far; they never change, so only later ones are asked for. */
   private closed: ReplayTrade[] = [];
   private feed: ReplayFeed | null = null;
   private switchTo: ((id: InstrumentId, tf: TimeframeCode) => void) | null = null;
   private queue: Promise<void> = Promise.resolve();
-  private pending = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
@@ -382,9 +379,7 @@ export class ReplayController {
 
   /** Runs `job` after every earlier one; a failure keeps the engine's message and stops Play. */
   private run(job: () => Promise<void>, onError?: () => void): Promise<void> {
-    this.pending++;
     this.error = null;
-    if (!this.busy) this.set({ busy: true });
     const next = this.queue.then(async () => {
       try {
         await job();
@@ -393,15 +388,13 @@ export class ReplayController {
         this.error = toProblem(e).message;
         onError?.();
         this.changed();
-      } finally {
-        if (--this.pending === 0) this.set({ busy: false });
       }
     });
     this.queue = next;
     return next;
   }
 
-  private set(patch: Partial<Pick<ReplayController, "phase" | "playing" | "speed" | "busy">>): void {
+  private set(patch: Partial<Pick<ReplayController, "phase" | "playing" | "speed">>): void {
     Object.assign(this, patch);
     this.changed();
   }

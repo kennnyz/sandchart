@@ -180,7 +180,6 @@ describe("replay controller", () => {
     expect(c.error).toBe("command 1: refused");
     expect(c.playing).toBe(false);
     expect(c.view!.open).toBeNull();
-    expect(c.busy).toBe(false);
   });
 
   it("saves, exits with a reload, and opens the saved text to the same results", async () => {
