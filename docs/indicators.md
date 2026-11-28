@@ -134,7 +134,7 @@ What `meta()` returns:
 
 A parameter has an `id`, a `label`, a `kind` and a `default`. The kinds are `Int((min, max))`, `Float((min, max))`, `Boolean` and `Choice(options)`. Parameter ids are unique, not empty, at most 64 bytes, and use only lower-case letters, digits, `_` and `-`; a label is at most 64 bytes. The default must be of the kind and inside the range or list. An int range needs `min <= max` with both bounds within ±(2^53 − 1), the largest integers the app's UI holds exactly. A float range needs `min <= max` with both bounds finite: no NaN and no infinity, because the app sends parameters as JSON, which has neither. A choice needs 1 to 256 options, each not empty, at most 64 bytes and listed once.
 
-A series has an `id`, a `label`, a `kind`, a `pane` and a `color`. The kinds are `Line`, `Histogram`, `Markers` and `Band(a, b)`. The pane is `Pane::Price` (over the candles) or `Pane::Own` (a pane of its own under the chart). The `color` is a palette slot from 0 to 7. Each theme maps the slots to colours, so an indicator never picks its own colours.
+A series has an `id`, a `label`, a `kind`, a `pane` and a `color`. The kinds are `Line`, `Histogram`, `Markers` and `Band(a, b)`. The pane is `Pane::Price` (over the candles) or `Pane::Own` (a pane of its own under the chart). The `color` is a palette slot from 0 to 7. Each theme maps the slots to colors, so an indicator never picks its own colors.
 
 Rules the app enforces on `meta`:
 
@@ -307,11 +307,11 @@ Here is a chart with lines, a band and a histogram: SMA and the Bollinger lines 
 | Kind | Where | What it draws | What you return |
 | --- | --- | --- | --- |
 | `Line` | Price or own pane | A line through the values. A `NaN` breaks it. | One value per candle. |
-| `Histogram` | Either pane; usually its own | Bars from zero to the value, in the theme's up colour above zero and its down colour below, until the user picks a colour for the series. A `NaN` draws no bar. The pane's scale always includes 0. | One value per candle. |
+| `Histogram` | Either pane; usually its own | Bars from zero to the value, in the theme's up color above zero and its down color below, until the user picks a color for the series. A `NaN` draws no bar. The pane's scale always includes 0. | One value per candle. |
 | `Markers` | Price pane only | A small shape at a bar: `Up` below the low of the candle, `Down` above its high, `Dot` at its close. A marker may carry a short `text`, drawn to its right. | A list of `Marker { index, shape, text }`. `index` counts from the first candle you received. |
 | `Band(a, b)` | Same pane as its two lines | A translucent fill between line `a` and line `b`, drawn under the candles. | Nothing (an empty list). |
 
-An own pane is 120 px high. The price pane keeps at least 40 % of the chart height, and when many own panes do not fit, they share the rest equally. Every series has a legend entry, and the user can hide an indicator, change its parameters and pick a colour slot for each series.
+An own pane is 120 px high. The price pane keeps at least 40 % of the chart height, and when many own panes do not fit, they share the rest equally. Every series has a legend entry, and the user can hide an indicator, change its parameters and pick a color slot for each series.
 
 There is no screenshot of markers here. The project that `sandchart-indicator new` creates draws them, so you can see them in the app after you add it.
 

@@ -39,7 +39,7 @@ The first alert you create may make your operating system ask whether Sandchart 
 
 ## On the chart
 
-Every active price alert of the pair on the chart shows as a thin dashed amber line at its price (apart from the grey last-price line), with a bell tag and the price on the price axis. Click the line to pick the alert in the alerts panel. Drag it up or down to move the alert: when you let go, the same alert is set again at the new price (armed, with its direction); if that is refused, the line goes back and the reason shows above the chart. Right-click it (Ctrl-click on a Mac) for its menu: **Remove alert** deletes it, as × in the panel does. Where a drawing lies over the line, the right click opens the drawing's menu instead. A fired alert has no line; a line alert is its own line. During a replay the levels are hidden.
+Every active price alert of the pair on the chart shows as a thin dashed amber line at its price (apart from the gray last-price line), with a bell tag and the price on the price axis. Click the line to pick the alert in the alerts panel. Drag it up or down to move the alert: when you let go, the same alert is set again at the new price (armed, with its direction); if that is refused, the line goes back and the reason shows above the chart. Right-click it (Ctrl-click on a Mac) for its menu: **Remove alert** deletes it, as × in the panel does. Where a drawing lies over the line, the right click opens the drawing's menu instead. A fired alert has no line; a line alert is its own line. During a replay the levels are hidden.
 
 ## The alerts panel
 

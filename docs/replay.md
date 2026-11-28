@@ -32,7 +32,7 @@ No bar after the current one ever reaches the screen. The price scale, the cross
 
 ## Controls
 
-The replay bar sits centred under the chart, with the results under it:
+The replay bar sits centered under the chart, with the results under it:
 
 | Control | What it does |
 | --- | --- |
@@ -62,7 +62,7 @@ Select bar, X and opening another pair drop the replay's trades. When it has tra
 
 ## Update interval and timeframes
 
-A replay steps one timeframe, its **update interval**: each step reveals one candle of it. It starts as the chart's timeframe. The dropdown offers the timeframes the chart can be built from: the chart's own and the lower ones whose bars line up with it (a 4h chart offers 1m, 3m, 5m, 15m, 30m, 1h, 2h and 4h; 5m is not offered while the replay steps 3m candles, since their bars do not line up). A higher one than the current interval is offered only where the replay stands on its boundary; otherwise it is greyed out with the time to step to first. The app's engine may still refuse one, for instance 1m over a span longer than 138 days; its message shows above the chart and the interval stays as it was.
+A replay steps one timeframe, its **update interval**: each step reveals one candle of it. It starts as the chart's timeframe. The dropdown offers the timeframes the chart can be built from: the chart's own and the lower ones whose bars line up with it (a 4h chart offers 1m, 3m, 5m, 15m, 30m, 1h, 2h and 4h; 5m is not offered while the replay steps 3m candles, since their bars do not line up). A higher one than the current interval is offered only where the replay stands on its boundary; otherwise it is grayed out with the time to step to first. The app's engine may still refuse one, for instance 1m over a span longer than 138 days; its message shows above the chart and the interval stays as it was.
 
 Changing the interval keeps the trades and the point the replay has reached. The commands are played again on the new candles, so a result can change: a 1h candle that touched both the stop and the take counts as a stop, while its 15m candles may show which came first.
 
@@ -102,7 +102,7 @@ The replay keys never use Alt, so they do not clash with the drawing tools (Alt 
 
 One trade can be open at a time; Buy and Sell are off while it is.
 
-A new trade has its **stop 1.5 % away** from the entry and its **take at 2 R** (twice as far, on the other side). It is drawn like a position drawing: a grey zone for the risk, a grey zone for the reward, the stop and take as percentages of the entry, and the trade's R so far on the right. Next to the percentages the take and the stop show what a fill there would be in R, measured against the stop at entry like the results (see [Fills and R](#fills-and-r)): a stop widened from 1 % to 1.6 % below the entry shows −1.6R, and the take's R does not change when the stop moves.
+A new trade has its **stop 1.5 % away** from the entry and its **take at 2 R** (twice as far, on the other side). It is drawn like a position drawing: a gray zone for the risk, a gray zone for the reward, the stop and take as percentages of the entry, and the trade's R so far on the right. Next to the percentages the take and the stop show what a fill there would be in R, measured against the stop at entry like the results (see [Fills and R](#fills-and-r)): a stop widened from 1 % to 1.6 % below the entry shows −1.6R, and the take's R does not change when the stop moves.
 
 Drag the round handle on the stop or the take to move it. The change is sent when you release the mouse and applies from the next bar. A level cannot be dragged across the current close: a long's stop stays below it and its take above it, a short's the other way round.
 
@@ -134,7 +134,7 @@ The panel under the replay bar shows a row of numbers over the closed trades and
 | Losing streak | The longest run of losing trades in a row. |
 | Open trade | The open trade's R marked to the current close. It does not count in the numbers above, nor does a trade not finished at real time. |
 
-All results are worked out by the app's engine, from the bars and the commands you gave. Numbers are coloured only by their sign.
+All results are worked out by the app's engine, from the bars and the commands you gave. Numbers are colored only by their sign.
 
 ## The .replay file
 

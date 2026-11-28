@@ -29,7 +29,7 @@ The tools rail is on the left of the chart. Click a tool, or press its shortcut 
 | Note | Alt+N | Click a bar. A marker appears above the bar's high and an editor opens; write the text (up to 2000 bytes) and save with ⌘Enter (Ctrl+Enter). Hover the marker to read the first line. An empty text deletes the note. |
 | Ruler | Alt+R | Not stored. See [Shift, magnet and ruler](#shift-magnet-and-ruler). |
 
-A position's zones are grey; only its numbers are coloured: the take and stop distance in percent, the reward to risk (RR), and the outcome in R once there is one.
+A position's zones are gray; only its numbers are colored: the take and stop distance in percent, the reward to risk (RR), and the outcome in R once there is one.
 
 ## Placing and editing
 
@@ -70,7 +70,7 @@ Arrow keys move between the items, Enter picks one, Esc or a click outside close
 
 Double-click a drawing, or select it and press Enter, to open its style popover. (On a note this opens the text editor instead.) Every change applies at once and is one undo step.
 
-- **Colour**: one of eight colours, the same palette the indicators use.
+- **Color**: one of eight colors, the same palette the indicators use.
 - **Width**: 1 to 4 px.
 - **Dashed**: a dashed line instead of a solid one.
 - **Options of the tool**: extend left and right on a trend line, extend right on a rectangle, the levels of a Fibonacci retracement (at least one stays on).
