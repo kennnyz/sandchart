@@ -1,8 +1,9 @@
 import { ChevronDown, ChevronUp } from "lucide-react";
-import type { ReplayTrade } from "../backend/types";
+import { memo } from "react";
+import type { ReplayTrade, TimeframeCode } from "../backend/types";
 import { formatCrosshairTime } from "../chart/format";
 import { formatR } from "../chart/replay";
-import { t } from "../i18n";
+import { t, useLanguage, type Language } from "../i18n";
 import type { ReplayController } from "../state/replay";
 
 const DASH = "—";
@@ -34,18 +35,37 @@ const EXIT_LABEL: Record<ReplayTrade["reason"], string> = {
 };
 
 /**
+ * One row of the trades table. The controller keeps a closed trade's object as it is, so a step
+ * renders only the open trade's row again, however long the list (`lang` and `base` change the text).
+ */
+const TradeRow = memo(function TradeRow({ tr, n, base }: { tr: ReplayTrade; n: number; base: TimeframeCode; lang: Language }) {
+  const when = (ms: number) => formatCrosshairTime(ms, base);
+  return (
+    <tr data-testid="replay-trade" data-reason={tr.reason}>
+      <td className="mono">{n}</td>
+      <td>{t(tr.side === "long" ? "replay.trades.long" : "replay.trades.short")}</td>
+      <td className="mono">{when(tr.entryTime)}</td>
+      <td className={tr.exitTime === null ? "muted" : "mono"}>
+        {tr.exitTime === null ? t(EXIT_LABEL[tr.reason]) : `${when(tr.exitTime)} · ${t(EXIT_LABEL[tr.reason])}${tr.ambiguous ? " ?" : ""}`}
+      </td>
+      <td className={`num mono ${signClass(tr.r) ?? ""}`}>{formatR(tr.r)}</td>
+    </tr>
+  );
+});
+
+/**
  * The replay's results under the replay bar, from the engine: a row of statistics over the
  * closed trades and the open trade's R, and below it the trades, newest first. It folds to the
  * row (remembered by the controller).
  */
 export function ReplayStats({ replay: r }: { replay: ReplayController }) {
+  const lang = useLanguage();
   const view = r.view;
   if (!view) return null;
   const s = view.stats;
   const none = s.count === 0;
   const open = view.open;
   const collapsed = r.resultsCollapsed;
-  const when = (ms: number) => formatCrosshairTime(ms, view.base);
   const trades = view.trades.map((tr, i) => ({ tr, n: i + 1 })).reverse();
   return (
     <section className="replay-results" aria-label={t("replay.stats")} data-testid="replay-stats" data-collapsed={collapsed}>
@@ -105,15 +125,7 @@ export function ReplayStats({ replay: r }: { replay: ReplayController }) {
               </thead>
               <tbody>
                 {trades.map(({ tr, n }) => (
-                  <tr key={n} data-testid="replay-trade" data-reason={tr.reason}>
-                    <td className="mono">{n}</td>
-                    <td>{t(tr.side === "long" ? "replay.trades.long" : "replay.trades.short")}</td>
-                    <td className="mono">{when(tr.entryTime)}</td>
-                    <td className={tr.exitTime === null ? "muted" : "mono"}>
-                      {tr.exitTime === null ? t(EXIT_LABEL[tr.reason]) : `${when(tr.exitTime)} · ${t(EXIT_LABEL[tr.reason])}${tr.ambiguous ? " ?" : ""}`}
-                    </td>
-                    <td className={`num mono ${signClass(tr.r) ?? ""}`}>{formatR(tr.r)}</td>
-                  </tr>
+                  <TradeRow key={n} tr={tr} n={n} base={view.base} lang={lang} />
                 ))}
               </tbody>
             </table>

@@ -456,6 +456,18 @@ describe("replay controller", () => {
     expect(c.view!.trades).toEqual((await state("1h", 0, 0)).trades);
   });
 
+  it("keeps each closed trade's object across steps, so its row is not drawn again", async () => {
+    const { c } = await started();
+    await c.buy();
+    await c.closeTrade();
+    const closed = c.view!.trades[0]!;
+    await c.buy();
+    await c.step();
+    await c.step();
+    expect(c.view!.trades).toHaveLength(2);
+    expect(c.view!.trades[0]).toBe(closed);
+  });
+
   it("a held → queues no step while one is on its way", async () => {
     const { c, backend } = await started();
     const sent = vi.spyOn(backend, "replayStep");
