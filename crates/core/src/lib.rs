@@ -2,6 +2,7 @@
 //!
 //! Prices and quantities are integers in ticks (`i64`); see [`decimal`].
 
+pub mod alert;
 pub mod decimal;
 pub mod drawing;
 pub mod model;
