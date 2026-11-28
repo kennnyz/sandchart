@@ -1051,8 +1051,8 @@ export class Chart {
       d.lastX = e.clientX;
       d.lastY = e.clientY;
       if (d.kind === "pan") {
+        this.shiftPrice(dy, priceH);
         this.view = panBy(this.view, dx);
-        if (!this.autoScale) this.shiftPrice(dy, priceH);
       } else {
         this.stretchPrice(dy, priceH);
       }
@@ -1222,9 +1222,10 @@ export class Chart {
     this.manualRange = this.fromScaleSpace([mid - half, mid + half]);
   }
 
-  /** Vertical drag on the plot while autoscale is off moves the price range. */
+  /** Start a vertical pan from the currently displayed price range. */
   private shiftPrice(dy: number, priceH: number): void {
-    if (dy === 0 || priceH <= 0) return;
+    if (dy === 0 || priceH <= 0 || this.series.count === 0) return;
+    this.freezeScale(priceH);
     const [lo, hi] = this.toScaleSpace(this.manualRange);
     const shift = (dy / priceH) * (hi - lo);
     this.manualRange = this.fromScaleSpace([lo + shift, hi + shift]);

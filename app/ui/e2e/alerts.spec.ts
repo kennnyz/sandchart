@@ -81,6 +81,28 @@ async function feed(page: Page, low: number, high: number, close: number): Promi
   );
 }
 
+test("first_vertical_pan_after_a_timeframe_switch_moves_the_price_levels", async ({ page }) => {
+  const plot = await openChart(page);
+  const x = plot.left + plot.width / 2;
+  const y = plot.top + plot.height / 3;
+  await page.getByRole("button", { name: "5m", exact: true }).click();
+  await expect(page.getByTestId("legend")).toContainText("5m");
+  await expect(page.getByTestId("legend")).toHaveAttribute("data-time", /^\d+$/);
+
+  // A price alert gives us a fixed price whose screen position we can track.
+  await page.mouse.move(x, y);
+  await nextFrame(page);
+  await page.keyboard.press("Alt+KeyA");
+  await expect.poll(async () => (await debug(page)).alertLevels.length).toBe(1);
+  const before = (await debug(page)).alertLevels[0]!.y;
+  await page.mouse.move(x, y + 30);
+  await page.mouse.down();
+  await page.mouse.move(x, y + 90);
+  await page.mouse.up();
+  const after = (await debug(page)).alertLevels[0]!.y;
+  expect(Math.abs(after - before - 60)).toBeLessThan(2);
+});
+
 test("alt_a_sets_a_price_alert_that_fires_once_on_the_live_feed", async ({ page }) => {
   const plot = await openChart(page);
   const cx = Math.round(plot.left + plot.width / 2);
