@@ -709,3 +709,21 @@ describe("locked drawings", () => {
     vi.useRealTimers();
   });
 });
+
+describe("selection count", () => {
+  it("is told to the host when the overlay is painted after it changed", () => {
+    const { l, c, paint } = recording();
+    const told: number[] = [];
+    (l as unknown as { host: LayerHost }).host.selection = (n) => told.push(n);
+    l.setDrawings([hl(c.p(400), "a"), hl(c.p(500), "b")]);
+    paint();
+    const overlay = () => l.paintOverlay(ctx, 1, dark, () => {});
+    overlay();
+    l.state.setSelection(["a", "b"]);
+    overlay();
+    overlay();
+    l.state.setSelection(["a"]);
+    overlay();
+    expect(told).toEqual([2, 1]);
+  });
+});

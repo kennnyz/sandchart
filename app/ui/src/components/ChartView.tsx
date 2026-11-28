@@ -341,16 +341,19 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
           },
         ];
   };
+  // Over several drawings the menu says how many it acts on.
+  const label = (action: "lock" | "unlock" | "hide" | "remove") =>
+    menuEdit && !menuEdit.single ? t(`drawingMenu.${action}N`, { n: menuEdit.ids.length }) : t(`drawingMenu.${action}`);
   const menuItems: MenuItem[] = menuEdit
     ? [
         menuEdit.locked
-          ? { id: "unlock", label: t("drawingMenu.unlock"), icon: LockOpen, onSelect: () => drawings.state.menuAction("unlock") }
-          : { id: "lock", label: t("drawingMenu.lock"), icon: Lock, onSelect: () => drawings.state.menuAction("lock") },
-        { id: "hide", label: t("drawingMenu.hide"), icon: EyeOff, onSelect: () => drawings.state.menuAction("hide") },
+          ? { id: "unlock", label: label("unlock"), icon: LockOpen, onSelect: () => drawings.state.menuAction("unlock") }
+          : { id: "lock", label: label("lock"), icon: Lock, onSelect: () => drawings.state.menuAction("lock") },
+        { id: "hide", label: label("hide"), icon: EyeOff, onSelect: () => drawings.state.menuAction("hide") },
         ...lineAlertItems(menuEdit.line),
         {
           id: "remove",
-          label: t("drawingMenu.remove"),
+          label: label("remove"),
           icon: Trash2,
           shortcut: deleteKeyLabel(),
           keys: ["Delete", "Backspace"],
@@ -610,6 +613,11 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
             testId="drawing-delete-confirm"
             onAnswer={answerDelete}
           />
+        )}
+        {drawings.state.selectionCount > 1 && (
+          <div className="selection-count" data-testid="selection-count">
+            {t("drawings.selected", { n: drawings.state.selectionCount })}
+          </div>
         )}
         {loading && <Loading symbol={symbol} tf={tfLabel(tf)} source={sourceLabel} />}
       </div>

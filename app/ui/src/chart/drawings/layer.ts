@@ -142,6 +142,8 @@ export interface LayerHost {
    * when the host asks and calls `go` on a yes; false (or no hook) deletes them at once.
    */
   confirmDelete?(ids: readonly string[], go: () => void): boolean;
+  /** How many drawings are selected, when that changed (told after the overlay is painted). */
+  selection?(count: number): void;
 }
 
 /** Draws a price tag on the axis of the given canvas: price in ticks, background colour. */
@@ -224,6 +226,8 @@ export class DrawingLayer {
   /** In a replay, the cut (close time of the last revealed base bar): a drawing anchored only at or after it is not shown. */
   private cut: number | null = null;
 
+  /** The selection count last told to the host. */
+  private toldSelection = 0;
   /** A press tried to drag a locked drawing: a "Locked" hint there for a moment. */
   private lockedHint: { x: number; y: number } | null = null;
   private lockedTimer: ReturnType<typeof setTimeout> | null = null;
@@ -606,6 +610,12 @@ export class DrawingLayer {
       debug.selectionBox = this.box !== null;
       debug.hoveredDrawing = this.state.hover?.id ?? null;
       debug.ruler = null;
+    }
+    // Every change of the selection paints the overlay: tell the host how many there are now.
+    const count = this.state.selection.length;
+    if (count !== this.toldSelection) {
+      this.toldSelection = count;
+      this.host.selection?.(count);
     }
     if (!c || c.count === 0 || c.plotW <= 0 || c.priceH <= 0) return;
     const s = this.state;

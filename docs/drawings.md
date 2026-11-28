@@ -54,7 +54,7 @@ Moving or deleting several is one step for undo, and one write: either all of th
 
 ## Context menu
 
-Right-click a drawing (or Ctrl-click it on macOS) to open its menu. When it is part of a selection, the menu acts on the whole selection; otherwise the drawing is selected alone first.
+Right-click a drawing (or Ctrl-click it on macOS) to open its menu. When it is part of a selection, the menu acts on the whole selection and says how many ("Remove 3 drawings"); otherwise the drawing is selected alone first. While several are selected, a note at the bottom left of the chart says how many.
 
 | Item | What |
 | --- | --- |

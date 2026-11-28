@@ -34,6 +34,8 @@ export interface DrawingSurface {
   onDrawingText(cb: ((edit: TextEdit | null) => void) | null): void;
   onDrawingStyle(cb: ((edit: StyleEdit | null) => void) | null): void;
   onDrawingMenu(cb: ((edit: MenuEdit | null) => void) | null): void;
+  /** How many drawings are selected, whenever that changes. */
+  onDrawingSelection(cb: ((count: number) => void) | null): void;
   /** Asks before deleting drawings: true when `cb` took the question (and calls `go` on a yes). */
   onDrawingConfirmDelete(cb: ((ids: readonly string[], go: () => void) => boolean) | null): void;
 }
@@ -121,6 +123,8 @@ export class DrawingController {
   styleEdit: StyleEdit | null = null;
   /** The context menu the chart has open; null when closed. */
   menu: MenuEdit | null = null;
+  /** How many drawings the chart has selected. */
+  selectionCount = 0;
   /** A delete that would take alerts with it, waiting for the answer; null when none. */
   deleteQuestion: DeleteQuestion | null = null;
   /** Whether a drawing has an alert (set by the view from the alerts); none without it. */
@@ -185,6 +189,10 @@ export class DrawingController {
       this.onChange();
     });
     surface.onDrawingConfirmDelete((ids, go) => this.askDelete(ids, go));
+    surface.onDrawingSelection((n) => {
+      this.selectionCount = n;
+      this.onChange();
+    });
     surface.setDrawingsHidden(this.hidden);
     return () => {
       surface.onDrawingCommit(null);
@@ -193,8 +201,10 @@ export class DrawingController {
       surface.onDrawingStyle(null);
       surface.onDrawingMenu(null);
       surface.onDrawingConfirmDelete(null);
+      surface.onDrawingSelection(null);
       if (this.surface !== surface) return;
       this.deleteQuestion = null;
+      this.selectionCount = 0;
       this.surface = null;
       this.tool = null;
       this.textEdit = null;

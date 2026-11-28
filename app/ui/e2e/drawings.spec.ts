@@ -1065,8 +1065,11 @@ test("lock_from_the_menu_keeps_every_selected_drawing_in_place", async ({ page }
   const all = await levels(page, cx, ys);
   await cmdDrag(page, [cx - 300, ys[0]! - 15], [cx - 250, ys[1]! + 15]);
   expect((await debug(page)).selectedDrawings).toHaveLength(2);
+  // The selection says how many; so does its menu.
+  await expect(page.getByTestId("selection-count")).toHaveText("2 drawings selected");
   await page.mouse.click(cx, ys[1]!, { button: "right" });
   await expect(page.getByTestId("drawing-menu-settings")).toHaveCount(0);
+  await expect(page.getByTestId("drawing-menu").getByRole("menuitem")).toHaveText([/Lock 2 drawings/, /Hide 2 drawings/, /Remove 2 drawings/]);
   await page.getByTestId("drawing-menu-lock").click();
   await expect.poll(async () => (await stored(page)).every((s) => s.locked)).toBe(true);
 
@@ -1078,8 +1081,12 @@ test("lock_from_the_menu_keeps_every_selected_drawing_in_place", async ({ page }
 
   // Unlock both again from the menu of the selection.
   await page.mouse.click(cx, ys[0]!, { button: "right" });
+  await expect(page.getByTestId("drawing-menu-unlock")).toContainText("Unlock 2 drawings");
   await page.getByTestId("drawing-menu-unlock").click();
   await expect.poll(async () => (await stored(page)).some((s) => s.locked)).toBe(false);
+  // One selected: no count.
+  await page.mouse.click(cx - 100, ys[0]!);
+  await expect(page.getByTestId("selection-count")).toHaveCount(0);
 });
 
 test("hide_from_the_menu_persists_across_a_reload_until_shown_from_the_rail", async ({ page }) => {

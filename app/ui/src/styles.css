@@ -1318,6 +1318,20 @@ button:disabled {
   border-radius: 8px;
   box-shadow: var(--shadow);
 }
+/* How many drawings are selected, bottom left of the chart; it never takes a click. */
+.selection-count {
+  position: absolute;
+  left: 8px;
+  bottom: 34px;
+  z-index: 5;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 11px;
+  pointer-events: none;
+}
 .chart-confirm {
   position: absolute;
   top: 48px;

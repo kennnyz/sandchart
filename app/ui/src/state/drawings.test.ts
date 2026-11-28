@@ -42,6 +42,7 @@ function fakeSurface() {
   let tool: ((k: ToolId | null) => void) | null = null;
   let text: ((e: TextEdit | null) => void) | null = null;
   let confirmDelete: ((ids: readonly string[], go: () => void) => boolean) | null = null;
+  let selection: ((n: number) => void) | null = null;
   const surface: DrawingSurface = {
     setDrawings: (list) => sets.push(list),
     setDrawingMagnet: (on) => magnets.push(on),
@@ -71,6 +72,7 @@ function fakeSurface() {
     },
     onDrawingMenu: (cb) => (menu = cb),
     onDrawingConfirmDelete: (cb) => (confirmDelete = cb),
+    onDrawingSelection: (cb) => (selection = cb),
     addDrawing: (body) => added.push(body),
   };
   return {
@@ -94,6 +96,7 @@ function fakeSurface() {
     openText: (e: TextEdit | null) => text!(e),
     /** The chart is about to delete `ids`: whether the controller took the question. */
     askDelete: (ids: string[], go: () => void) => confirmDelete?.(ids, go) ?? false,
+    select: (n: number) => selection!(n),
     hasListeners: () => commit !== null || text !== null,
   };
 }
@@ -141,6 +144,21 @@ function fakeBackend(stored: Drawing[], scale = 2) {
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 afterEach(() => vi.restoreAllMocks());
+
+describe("DrawingController selection", () => {
+  it("keeps the chart's selection count for the view", () => {
+    const b = fakeBackend([]);
+    const s = fakeSurface();
+    let changes = 0;
+    const c = new DrawingController(b.backend, () => changes++);
+    const detach = c.attach(s.surface);
+    s.select(3);
+    expect(c.selectionCount).toBe(3);
+    expect(changes).toBe(1);
+    detach();
+    expect(c.selectionCount).toBe(0);
+  });
+});
 
 describe("DrawingController lines", () => {
   it("knows the shown pair's lines as the chart has them, for their alerts' levels", async () => {
