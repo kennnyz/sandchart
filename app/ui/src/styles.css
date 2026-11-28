@@ -1434,8 +1434,8 @@ button:disabled {
   align-items: center;
   gap: 4px;
 }
-.dstyle-alert select {
-  width: 104px;
+.ind-field.dstyle-alert select {
+  width: auto;
 }
 .dstyle-alert-button {
   display: flex;
