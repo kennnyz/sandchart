@@ -325,213 +325,23 @@ mod tests {
 
     const BIG: i64 = JS_SAFE_MAX + 1;
 
+    /// The other rules are in `tests/fixtures/drawings_*.json`, shared with the UI mock;
+    /// these cannot be written there (JSON has no NaN) or are not sent by the UI.
     #[test]
-    fn valid_drawings_pass() {
-        let bodies = [
-            trend(),
-            DrawingBody::Hline { p: -JS_SAFE_MAX },
-            DrawingBody::Rect {
-                a: at(1, 100),
-                b: at(1, 200),
-                extend_right: false,
-            },
-            fib(vec![0.0, 0.618, 1.0, -5.0, 5.0]),
-            fib(vec![0.5; MAX_FIB_LEVELS]),
-            position(Side::Long, 90, 100, 120, 1_001),
-            position(Side::Short, 110, 100, 85, 2_000),
-            brush(MIN_BRUSH_POINTS),
-            brush(MAX_BRUSH_POINTS),
-            note("x".into()),
-            note("я".repeat(MAX_NOTE_BYTES / 2)),
-        ];
-        for body in bodies {
-            let d = drawing(body);
-            assert_eq!(validate(&d), Ok(()), "{d:?}");
+    fn rules_outside_the_shared_fixture() {
+        for (levels, expected) in [
+            (vec![f64::NAN], "level NaN"),
+            (vec![f64::INFINITY], "level inf"),
+            (vec![0.5, f64::NEG_INFINITY], "level -inf"),
+        ] {
+            let err = validate(&drawing(fib(levels))).unwrap_err();
+            assert!(err.contains(expected), "{err:?}");
         }
         let mut d = drawing(trend());
-        d.id = "a".repeat(MAX_ID_BYTES);
-        d.style = Style {
-            color: 7,
-            width: 4,
-            dash: true,
-        };
+        d.updated_at = -BIG;
+        assert!(validate(&d).unwrap_err().contains("updated_at"));
+        d.updated_at = JS_SAFE_MAX;
         assert_eq!(validate(&d), Ok(()));
-    }
-
-    /// Every rule, each with the part of its message that must show.
-    #[test]
-    fn each_rule_rejects_with_a_clear_message() {
-        let with = |f: &dyn Fn(&mut Drawing)| {
-            let mut d = drawing(trend());
-            f(&mut d);
-            d
-        };
-        let cases: Vec<(&str, Drawing, &str)> = vec![
-            ("empty id", with(&|d| d.id.clear()), "drawing id"),
-            (
-                "long id",
-                with(&|d| d.id = "a".repeat(MAX_ID_BYTES + 1)),
-                "drawing id",
-            ),
-            (
-                "id with a space",
-                with(&|d| d.id = "a b".into()),
-                "drawing id",
-            ),
-            (
-                "id with a slash",
-                with(&|d| d.id = "a/b".into()),
-                "drawing id",
-            ),
-            ("non-ascii id", with(&|d| d.id = "é".into()), "drawing id"),
-            ("colour 8", with(&|d| d.style.color = 8), "colour slot 8"),
-            ("width 0", with(&|d| d.style.width = 0), "line width 0"),
-            ("width 5", with(&|d| d.style.width = 5), "line width 5"),
-            ("unsafe z", with(&|d| d.z = BIG), "z"),
-            (
-                "unsafe updated_at",
-                with(&|d| d.updated_at = -BIG),
-                "updated_at",
-            ),
-            (
-                "trend same points",
-                drawing(DrawingBody::Trend {
-                    a: at(1, 1),
-                    b: at(1, 1),
-                    extend_left: false,
-                    extend_right: false,
-                }),
-                "must differ",
-            ),
-            (
-                "trend unsafe price",
-                drawing(DrawingBody::Trend {
-                    a: at(1, BIG),
-                    b: at(2, 1),
-                    extend_left: false,
-                    extend_right: false,
-                }),
-                "point a price",
-            ),
-            (
-                "trend unsafe time",
-                drawing(DrawingBody::Trend {
-                    a: at(1, 1),
-                    b: at(-BIG, 1),
-                    extend_left: false,
-                    extend_right: false,
-                }),
-                "point b time",
-            ),
-            (
-                "hline unsafe",
-                drawing(DrawingBody::Hline { p: BIG }),
-                "outside ±(2^53 - 1)",
-            ),
-            (
-                "rect same points",
-                drawing(DrawingBody::Rect {
-                    a: at(3, 3),
-                    b: at(3, 3),
-                    extend_right: true,
-                }),
-                "must differ",
-            ),
-            (
-                "fib same points",
-                drawing(DrawingBody::Fib {
-                    a: at(3, 3),
-                    b: at(3, 3),
-                    levels: vec![0.5],
-                }),
-                "must differ",
-            ),
-            ("fib no levels", drawing(fib(vec![])), "1 to 16 levels"),
-            (
-                "fib 17 levels",
-                drawing(fib(vec![0.5; MAX_FIB_LEVELS + 1])),
-                "1 to 16 levels",
-            ),
-            ("fib NaN", drawing(fib(vec![f64::NAN])), "level NaN"),
-            ("fib inf", drawing(fib(vec![f64::INFINITY])), "level inf"),
-            ("fib above 5", drawing(fib(vec![5.01])), "level 5.01"),
-            ("fib below -5", drawing(fib(vec![-6.0])), "level -6"),
-            (
-                "long stop above entry",
-                drawing(position(Side::Long, 101, 100, 120, 2_000)),
-                "stop < entry < take",
-            ),
-            (
-                "long stop at entry",
-                drawing(position(Side::Long, 100, 100, 120, 2_000)),
-                "stop < entry < take",
-            ),
-            (
-                "long take at entry",
-                drawing(position(Side::Long, 90, 100, 100, 2_000)),
-                "stop < entry < take",
-            ),
-            (
-                "short take above entry",
-                drawing(position(Side::Short, 110, 100, 105, 2_000)),
-                "take < entry < stop",
-            ),
-            (
-                "short stop at entry",
-                drawing(position(Side::Short, 100, 100, 85, 2_000)),
-                "take < entry < stop",
-            ),
-            (
-                "position ends at entry",
-                drawing(position(Side::Long, 90, 100, 120, 1_000)),
-                "end after its entry",
-            ),
-            (
-                "position ends before entry",
-                drawing(position(Side::Short, 110, 100, 85, 0)),
-                "end after its entry",
-            ),
-            (
-                "position unsafe take",
-                drawing(position(Side::Long, 90, 100, BIG, 2_000)),
-                "position take",
-            ),
-            ("brush 1 point", drawing(brush(1)), "2 to 500 points"),
-            (
-                "brush 501 points",
-                drawing(brush(MAX_BRUSH_POINTS + 1)),
-                "2 to 500 points",
-            ),
-            (
-                "brush unsafe point",
-                drawing(DrawingBody::Brush {
-                    points: vec![at(0, 0), at(1, BIG)],
-                }),
-                "brush point price",
-            ),
-            (
-                "empty note",
-                drawing(note(String::new())),
-                "1 to 2000 bytes",
-            ),
-            (
-                "long note",
-                drawing(note("я".repeat(MAX_NOTE_BYTES / 2 + 1))),
-                "not 2002",
-            ),
-            (
-                "note unsafe time",
-                drawing(DrawingBody::Note {
-                    t: BIG,
-                    text: "x".into(),
-                }),
-                "note time",
-            ),
-        ];
-        for (name, d, expected) in cases {
-            let err = validate(&d).expect_err(name);
-            assert!(err.contains(expected), "{name}: {err:?}");
-        }
     }
 
     #[test]

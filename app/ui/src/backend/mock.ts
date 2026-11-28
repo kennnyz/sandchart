@@ -412,7 +412,9 @@ export function mockValidateDrawing(d: DrawingInput): string | null {
         return `a Fibonacci drawing needs 1 to 16 levels, not ${b.levels.length}`;
       }
       const l = b.levels.find((x) => !(Number.isFinite(x) && Math.abs(x) <= 5));
-      return l === undefined ? null : `Fibonacci level ${l} is not a number in -5..=5`;
+      // Rust prints infinity as "inf".
+      const shown = l === Infinity ? "inf" : l === -Infinity ? "-inf" : String(l);
+      return l === undefined ? null : `Fibonacci level ${shown} is not a number in -5..=5`;
     }
     case "position":
       return mockValidatePosition(b);

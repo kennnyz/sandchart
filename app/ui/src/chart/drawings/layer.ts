@@ -647,7 +647,7 @@ export class DrawingLayer {
 }
 
 /** Moves anchors by (dx, dy) px from where they are drawn; an axis that did not move stays exact. */
-function mover(c: Coords, dx: number, dy: number): Mover {
+export function mover(c: Coords, dx: number, dy: number): Mover {
   return {
     anchor: (a) => ({ t: dx === 0 ? a.t : c.t(c.x(a.t) + dx), p: dy === 0 ? a.p : c.p(c.y(a.p) + dy) }),
     price: (p) => (dy === 0 ? p : c.p(c.y(p) + dy)),

@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import invalidDrawings from "../../../../crates/core/tests/fixtures/drawings_invalid.json";
+import validDrawings from "../../../../crates/core/tests/fixtures/drawings_valid.json";
 import fixture from "../../../../crates/core/tests/fixtures/positions.json";
 import { createMockBackend, mockResolve, mockSma, mockValidateDrawing } from "./mock";
 import type { Drawing, DrawingBody, DrawingInput, IndicatorInstance, IndicatorResult, PositionBody, PositionOutcome } from "./types";
@@ -278,34 +280,20 @@ describe("mock backend", () => {
       expect(await b.getDrawings(id)).toEqual([]);
     });
 
-    it("validates every rule", () => {
-      const at = (t: number, p: number) => ({ t, p });
-      const ok: DrawingBody[] = [
-        { kind: "trend", a: at(1, 1), b: at(2, 2), extendLeft: true, extendRight: false },
-        { kind: "rect", a: at(1, 1), b: at(1, 2), extendRight: true },
-        { kind: "fib", a: at(1, 1), b: at(2, 2), levels: [0, 0.618, -5, 5] },
-        long(),
-        { kind: "position", side: "short", entry: at(1, 100), stop: 110, take: 85, endT: 2 },
-        { kind: "brush", points: [at(0, 0), at(1, 1)] },
-        { kind: "note", t: 0, text: "я".repeat(1000) },
-      ];
-      for (const body of ok) expect(mockValidateDrawing(input("ok", body)), body.kind).toBeNull();
-      const bad: [string, DrawingInput, string][] = [
-        ["long id", input("a".repeat(65), { kind: "hline", p: 1 }), "drawing id"],
-        ["colour", { ...input("a", { kind: "hline", p: 1 }), style: { color: 8, width: 1, dash: false } }, "colour slot 8"],
-        ["width", { ...input("a", { kind: "hline", p: 1 }), style: { color: 0, width: 5, dash: false } }, "line width 5"],
-        ["unsafe price", input("a", { kind: "hline", p: 2 ** 53 }), "outside"],
-        ["same points", input("a", { kind: "trend", a: at(1, 1), b: at(1, 1), extendLeft: false, extendRight: false }), "must differ"],
-        ["fib empty", input("a", { kind: "fib", a: at(1, 1), b: at(2, 2), levels: [] }), "1 to 16 levels"],
-        ["fib range", input("a", { kind: "fib", a: at(1, 1), b: at(2, 2), levels: [5.5] }), "level 5.5"],
-        ["fib NaN", input("a", { kind: "fib", a: at(1, 1), b: at(2, 2), levels: [NaN] }), "level NaN"],
-        ["short order", input("a", { kind: "position", side: "short", entry: at(1, 100), stop: 90, take: 85, endT: 2 }), "take < entry < stop"],
-        ["end", input("a", long({ endT: 1_000 })), "end after its entry"],
-        ["brush", input("a", { kind: "brush", points: [at(0, 0)] }), "2 to 500 points"],
-        ["empty note", input("a", { kind: "note", t: 0, text: "" }), "1 to 2000 bytes"],
-        ["long note", input("a", { kind: "note", t: 0, text: "я".repeat(1001) }), "not 2002"],
-      ];
-      for (const [name, d, msg] of bad) expect(mockValidateDrawing(d), name).toContain(msg);
+    it("validates as Rust does: the shared fixture, with the same messages", () => {
+      type Case = { name: string; drawing: Omit<DrawingInput, "instrument" | "priceScale" | "locked">; error?: string };
+      const full = (c: Case): DrawingInput => ({ ...c.drawing, instrument: id, priceScale: 2, locked: false });
+      const ok = validDrawings.cases as Case[];
+      const bad = invalidDrawings.cases as Case[];
+      expect(ok.length).toBeGreaterThanOrEqual(10);
+      expect(bad.length).toBeGreaterThanOrEqual(30);
+      for (const c of ok) expect(mockValidateDrawing(full(c)), c.name).toBeNull();
+      for (const c of bad) expect(mockValidateDrawing(full(c)), c.name).toBe(c.error);
+      // JSON has no NaN or infinity: these are checked here and in drawing.rs.
+      const fib = (levels: number[]) => input("f", { kind: "fib", a: { t: 1, p: 1 }, b: { t: 2, p: 2 }, levels });
+      expect(mockValidateDrawing(fib([NaN]))).toBe("Fibonacci level NaN is not a number in -5..=5");
+      expect(mockValidateDrawing(fib([Infinity]))).toBe("Fibonacci level inf is not a number in -5..=5");
+      expect(mockValidateDrawing(fib([0.5, -Infinity]))).toBe("Fibonacci level -inf is not a number in -5..=5");
     });
 
     it("keeps at most 2000 drawings per instrument", async () => {

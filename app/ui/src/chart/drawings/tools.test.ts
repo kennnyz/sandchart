@@ -4,6 +4,7 @@ import { PriceScale } from "../scale";
 import { Coords } from "./geometry";
 import { FIB_LEVELS, fibPrice } from "./tools/fib";
 import { MAX_BRUSH_POINTS } from "./tools/brush";
+import { mover as screenMover } from "./layer";
 import { TOOLS, toolFor, type Mover } from "./registry";
 
 const H = 3_600_000;
@@ -198,7 +199,7 @@ describe("fib", () => {
   });
 
   it("lays the levels out as prices, so a log scale keeps them right", () => {
-    const log = new Coords(times, 100, { barWidth: 10, rightIndex: 99 }, new PriceScale(100, 10_000, 1000, "log"), 1000, 1000, H, 2);
+    const log = new Coords(times, 100, { barWidth: 10, rightIndex: 99 }, new PriceScale(10_000, 1_000_000, 1000, "log"), 1000, 1000, H, 2);
     const b: Fib = { kind: "fib", a: { t: c.t(300), p: 1000 }, b: { t: c.t(700), p: 3000 }, levels: [0.5] };
     const g = tool.layout(b, log) as unknown as { ys: number[]; labels: string[] };
     expect(g.ys[0]).toBeCloseTo(log.y(2000));
@@ -281,5 +282,75 @@ describe("brush", () => {
     const b: BrushBody = { kind: "brush", points: stroke([100, 200], [100, 150]) };
     expect(tool.moveBy(b, mover(10, 10))).toEqual({ kind: "brush", points: stroke([110, 210], [110, 160]) });
     expect(tool.moveHandle(b, 0, at(5, 5), false)).toBe(b);
+  });
+});
+
+describe("on a log price scale", () => {
+  // The same bars; prices 10 000..1 000 000 ticks over 1000 px, so 1 px is about 0.46 %.
+  const lc = new Coords(times, 100, { barWidth: 10, rightIndex: 99 }, new PriceScale(10_000, 1_000_000, 1000, "log"), 1000, 1000, H);
+  const la = (x: number, y: number): Anchor => ({ t: lc.t(x), p: lc.p(y) });
+  const m = screenMover(lc, 30, 100);
+  /** Screen y of every price of a body, in the order they appear. */
+  const ys = (b: DrawingBody): number[] => {
+    switch (b.kind) {
+      case "hline":
+        return [lc.y(b.p)];
+      case "position":
+        return [lc.y(b.entry.p), lc.y(b.stop), lc.y(b.take)];
+      case "brush":
+        return b.points.map((p) => lc.y(p.p));
+      case "note":
+        return [];
+      default:
+        return [lc.y(b.a.p), lc.y(b.b.p)];
+    }
+  };
+  const bodies: DrawingBody[] = [
+    { kind: "hline", p: la(0, 300).p },
+    { kind: "trend", a: la(100, 700), b: la(300, 200), extendLeft: false, extendRight: true },
+    { kind: "rect", a: la(100, 700), b: la(300, 200), extendRight: false },
+    { kind: "fib", a: la(100, 700), b: la(300, 200), levels: [0, 0.5, 1] },
+    { kind: "position", side: "long", entry: la(200, 500), stop: la(0, 600).p, take: la(0, 300).p, endT: lc.t(400) },
+    { kind: "position", side: "short", entry: la(200, 500), stop: la(0, 400).p, take: la(0, 800).p, endT: lc.t(400) },
+    { kind: "brush", points: [la(100, 100), la(150, 400), la(200, 250)] },
+  ];
+
+  it("moves every price of a body by the same pixels, not by the same ticks", () => {
+    for (const b of bodies) {
+      const moved = toolFor(b.kind)!.moveBy(b, m);
+      const before = ys(b);
+      const after = ys(moved);
+      for (let i = 0; i < before.length; i++) expect(after[i]! - before[i]!, `${b.kind} ${i}`).toBeCloseTo(100, 0);
+      // Prices fall by a share, not by a fixed number of ticks.
+      expect(new Set(after.map((y, i) => Math.round(y - before[i]!))).size, b.kind).toBe(1);
+    }
+    const trend = toolFor("trend")!.moveBy(bodies[1]!, m) as Extract<DrawingBody, { kind: "trend" }>;
+    expect(lc.x(trend.a.t)).toBeCloseTo(130, 6);
+    const a0 = (bodies[1] as Extract<DrawingBody, { kind: "trend" }>).a;
+    const b0 = (bodies[1] as Extract<DrawingBody, { kind: "trend" }>).b;
+    expect(a0.p - trend.a.p).not.toBe(b0.p - trend.b.p);
+  });
+
+  it("does not move a position past the bottom, where a log scale has no prices", () => {
+    const low: DrawingBody = { kind: "position", side: "long", entry: la(200, 990), stop: la(0, 998).p, take: la(0, 900).p, endT: lc.t(400) };
+    // 1 tick is the lowest price: entry and stop would meet there.
+    const down = screenMover(lc, 0, 5000);
+    expect(toolFor("position")!.moveBy(low, down)).toBe(low);
+  });
+
+  it("puts a dragged handle at the price under the pointer", () => {
+    const trend = bodies[1]!;
+    const to = la(250, 650);
+    expect(toolFor("trend")!.moveHandle(trend, 1, to, false)).toMatchObject({ b: to });
+    // Shift: at the other end's price exactly, whatever the scale.
+    const a = (trend as Extract<DrawingBody, { kind: "trend" }>).a;
+    expect(toolFor("trend")!.moveHandle(trend, 1, to, true)).toMatchObject({ b: { t: to.t, p: a.p } });
+    const long = bodies[4]!;
+    expect(toolFor("position")!.moveHandle(long, 0, la(0, 700), false)).toMatchObject({ stop: lc.p(700) });
+    // A stop dragged above the entry stays one tick below it.
+    const e = (long as Extract<DrawingBody, { kind: "position" }>).entry.p;
+    expect(toolFor("position")!.moveHandle(long, 0, la(0, 100), false)).toMatchObject({ stop: e - 1 });
+    const fib = bodies[3]!;
+    expect(toolFor("fib")!.moveHandle(fib, 0, to, false)).toMatchObject({ a: to });
   });
 });

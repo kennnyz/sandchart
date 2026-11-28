@@ -103,8 +103,8 @@ The user-facing guide for writing indicators is `docs/indicators.md`; read it fi
 
 Read ADR 0004 and `docs/drawings.md` first. The chart core has no per-tool code: a tool is data in Rust plus one module in the UI.
 
-1. Add a `DrawingBody` variant in `crates/core/src/drawing.rs` (serde `kind` in snake_case) and its rules in `validate`, with a test per rule. Prices are `i64` ticks inside `±(2^53 - 1)`; points are `Anchor { t, p }`, never bar indices.
-2. Mirror the type in `app/ui/src/backend/types.ts` (`DrawingBody`) and the same rules in `mockValidateDrawing` in `app/ui/src/backend/mock.ts`, so the browser mock rejects what Rust rejects.
+1. Add a `DrawingBody` variant in `crates/core/src/drawing.rs` (serde `kind` in snake_case) and its rules in `validate`. Add a case per rule, with the whole message, to `crates/core/tests/fixtures/drawings_invalid.json`, and a valid one to `drawings_valid.json`. Prices are `i64` ticks inside `±(2^53 - 1)`; points are `Anchor { t, p }`, never bar indices.
+2. Mirror the type in `app/ui/src/backend/types.ts` (`DrawingBody`) and the same rules in `mockValidateDrawing` in `app/ui/src/backend/mock.ts`, so the browser mock rejects what Rust rejects. `crates/core/tests/drawing.rs` and `mock.test.ts` both run the fixtures, so the two cannot drift.
 3. Write `app/ui/src/chart/drawings/tools/<name>.ts` implementing `ToolDef` (placement, `create`, `timeSpan`, `layout`, `paint`, `hitTest`, `handles`, `moveBy`, `moveHandle`). Cache a `Path2D` in the geometry; put any text on a `pill` (`label.ts`). Icons come from Lucide.
 4. Add it to `TOOLS` in `registry.ts`. Pick a free Alt shortcut (`code`, not R or M, which are the ruler and the magnet); `tools.test.ts` checks the shortcuts do not clash. If it has options, add them to `BodyOptions` in `app/ui/src/components/DrawingStyle.tsx`.
 5. Add `tools.<name>` (and any other strings) to `en.json` and `ru.json`.
