@@ -127,7 +127,7 @@ export function ReplayStats({ replay: r }: { replay: ReplayController }) {
                   <th scope="col">{t("replay.trades.side")}</th>
                   <th scope="col">{t("replay.trades.entry")}</th>
                   <th scope="col">{t("replay.trades.exit")}</th>
-                  <th scope="col" className="num">
+                  <th scope="col" className="num" title={t("replay.trades.r.title")} data-testid="replay-trades-r">
                     {t("replay.trades.r")}
                   </th>
                 </tr>

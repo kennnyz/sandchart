@@ -46,16 +46,47 @@ export function defaultPosition(side: Side, entry: Anchor, step: Step): Position
   };
 }
 
-/** The label numbers: take and stop as a share of the entry ("+4.50%", "−1.50%") and reward over risk ("3.0"). */
-export function positionStats(b: Position): { take: string; stop: string; rr: string } {
+/** The label numbers of a position. `takeR` and `stopR` are set for a replay trade (see `positionStats`). */
+export interface PositionStats {
+  take: string;
+  stop: string;
+  rr: string;
+  takeR?: string;
+  stopR?: string;
+}
+
+/** "+2.0R", "−1.6R", "0.0R". */
+function rText(r: number): string {
+  const v = Math.abs(r).toFixed(1);
+  return v === "0.0" ? "0.0R" : `${r > 0 ? "+" : MINUS}${v}R`;
+}
+
+/**
+ * The label numbers: take and stop as a share of the entry ("+4.50%", "−1.50%") and reward over
+ * risk ("3.0"). With `initialStop` (a replay trade, whose R is measured against the stop it was
+ * opened with) also what a fill at the take and at the stop would be in that R ("+2.0R", "−1.6R"),
+ * so a moved stop never shows a different R than the result will use.
+ */
+export function positionStats(b: Position, initialStop?: number): PositionStats {
   const base = Math.abs(b.entry.p);
   const reward = Math.abs(b.take - b.entry.p);
   const risk = Math.abs(b.entry.p - b.stop);
-  return {
+  const out: PositionStats = {
     take: formatChange(reward, base, 0).pct,
     stop: formatChange(-risk, base, 0).pct,
     rr: risk > 0 ? (reward / risk).toFixed(1) : "",
   };
+  const r0 = initialStop === undefined ? 0 : b.entry.p - initialStop;
+  if (r0 !== 0) {
+    out.takeR = rText((b.take - b.entry.p) / r0);
+    out.stopR = rText((b.stop - b.entry.p) / r0);
+  }
+  return out;
+}
+
+/** A replay trade's geometry from `layout`: its labels in R of the stop at entry (`positionStats`). */
+export function measureFromInitialStop(g: unknown, body: Position, initialStop: number): void {
+  (g as PositionGeom).stats = positionStats(body, initialStop);
 }
 
 interface OutcomeGeom {
@@ -77,7 +108,7 @@ interface PositionGeom {
   yTake: number;
   plotW: number;
   priceH: number;
-  stats: { take: string; stop: string; rr: string };
+  stats: PositionStats;
   outcome: OutcomeGeom | null;
 }
 
@@ -166,16 +197,15 @@ function positionTool(side: Side): ToolDef<Position, PositionGeom> {
       ctx.textBaseline = "middle";
       const cx = (g.left + g.right) / 2;
       const takeUp = g.yTake < g.yEntry;
+      // A replay trade: the take's and the stop's R against the stop at entry instead of RR.
+      const st = g.stats;
       const take: [string, string][] = [
         [`${t("position.take")} `, th.fg],
-        [g.stats.take, th.up],
-        [` · ${t("position.rr")} `, th.fg],
-        [g.stats.rr, th.up],
+        [st.take, th.up],
+        ...((st.takeR ? [[" · ", th.fg], [st.takeR, th.up]] : [[` · ${t("position.rr")} `, th.fg], [st.rr, th.up]]) as [string, string][]),
       ];
-      const stop: [string, string][] = [
-        [`${t("position.stop")} `, th.fg],
-        [g.stats.stop, th.down],
-      ];
+      const stop: [string, string][] = [[`${t("position.stop")} `, th.fg], [st.stop, th.down]];
+      if (st.stopR) stop.push([" · ", th.fg], [st.stopR, st.stopR.startsWith(MINUS) ? th.down : st.stopR === "0.0R" ? th.fg : th.up]);
       label(ctx, take, cx, takeUp ? g.yTake - GAP - LABEL_H : g.yTake + GAP, g, th);
       label(ctx, stop, cx, takeUp ? g.yStop + GAP : g.yStop - GAP - LABEL_H, g, th);
 

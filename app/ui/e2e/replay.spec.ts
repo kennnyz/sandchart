@@ -110,6 +110,7 @@ test("replay_start_step_play_trade_save_open_exit", async ({ page }) => {
   await expect(stat(page, "open-r")).not.toHaveText("—");
   await expect(page.getByTestId("replay-buy")).toBeDisabled();
   await expect(page.getByTestId("replay-sell")).toBeDisabled();
+  await expect(page.getByTestId("replay-trades-r")).toHaveAttribute("title", "R relative to the stop at entry");
   await expect.poll(async () => (await debug(page)).replayHandles !== null).toBe(true);
   const handles = (await debug(page)).replayHandles!;
   expect(handles.stop.y).toBeGreaterThan(handles.take.y);

@@ -3,6 +3,7 @@ import { chartDebug } from "./debug";
 import type { Coords } from "./drawings/geometry";
 import { pill } from "./drawings/label";
 import { toolFor } from "./drawings/registry";
+import { measureFromInitialStop } from "./drawings/tools/position";
 import { MONO_FAMILY, type ChartTheme } from "./theme";
 
 type Position = Extract<DrawingBody, { kind: "position" }>;
@@ -279,6 +280,8 @@ export class ReplayLayer {
     if (!tool) return;
     const body = this.body(t, c);
     const g = tool.layout(body, c);
+    // R against the stop at entry, as the results measure it (a moved stop changes the risk shown, not 1R).
+    measureFromInitialStop(g, body, t.initialStop);
     ctx.strokeStyle = th.muted;
     ctx.fillStyle = th.muted;
     ctx.lineWidth = 1;

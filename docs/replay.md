@@ -98,7 +98,7 @@ The replay keys never use Alt, so they do not clash with the drawing tools (Alt 
 
 One trade can be open at a time; Buy and Sell are off while it is.
 
-A new trade has its **stop 1.5 % away** from the entry and its **take at 2 R** (twice as far, on the other side). It is drawn like a position drawing: a grey zone for the risk, a grey zone for the reward, the stop and take as percentages and the reward to risk, and the trade's R so far on the right.
+A new trade has its **stop 1.5 % away** from the entry and its **take at 2 R** (twice as far, on the other side). It is drawn like a position drawing: a grey zone for the risk, a grey zone for the reward, the stop and take as percentages of the entry, and the trade's R so far on the right. Next to the percentages the take and the stop show what a fill there would be in R, measured against the stop at entry like the results (see [Fills and R](#fills-and-r)): a stop widened from 1 % to 1.6 % below the entry shows −1.6R, and the take's R does not change when the stop moves.
 
 Drag the round handle on the stop or the take to move it. The change is sent when you release the mouse and applies from the next bar. A level cannot be dragged across the current close: a long's stop stays below it and its take above it, a short's the other way round.
 
@@ -113,7 +113,7 @@ Closed trades stay on the chart as an entry dot and an exit dot joined by a dash
 - An edit of the stop or take applies from the next bar.
 - There are no fees and no slippage.
 
-**R** is the result measured in units of the first risk: (exit − entry) / (entry − stop at entry). It is measured against the stop the trade was **opened** with, so moving the stop later does not change what 1 R is. A take at 2 R is +2.0R; a stop at the first stop is −1.0R (more when a gap opens through it); a stop moved to the entry closes at 0.0R.
+**R** (the R column of the results says so in its tooltip) is the result measured in units of the first risk: (exit − entry) / (entry − stop at entry). It is measured against the stop the trade was **opened** with, so moving the stop later does not change what 1 R is. A take at 2 R is +2.0R; a stop at the first stop is −1.0R (more when a gap opens through it); a stop moved to the entry closes at 0.0R.
 
 ## Results
 

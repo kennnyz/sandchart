@@ -212,6 +212,7 @@
   "replay.trades.exit": "Выход",
   "replay.trades.side": "Сторона",
   "replay.trades.r": "R",
+  "replay.trades.r.title": "R относительно стопа при входе",
   "replay.trades.long": "Лонг",
   "replay.trades.short": "Шорт",
   "replay.trades.open": "Открыта",

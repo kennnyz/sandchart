@@ -212,6 +212,7 @@
   "replay.trades.exit": "Exit",
   "replay.trades.side": "Side",
   "replay.trades.r": "R",
+  "replay.trades.r.title": "R relative to the stop at entry",
   "replay.trades.long": "Long",
   "replay.trades.short": "Short",
   "replay.trades.open": "Open",
