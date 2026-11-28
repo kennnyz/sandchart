@@ -1070,3 +1070,49 @@ button:disabled {
   white-space: pre-wrap;
   user-select: text;
 }
+
+/* ---- Note editor ---- */
+
+.note-editor {
+  position: absolute;
+  z-index: 10;
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.note-editor textarea {
+  width: 100%;
+  min-height: 72px;
+  resize: vertical;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  line-height: 18px;
+}
+.note-editor textarea:focus-visible {
+  outline: 1px solid var(--muted);
+  outline-offset: 0;
+}
+.note-editor-footer {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.note-editor-bytes {
+  margin-right: auto;
+  color: var(--muted);
+  font-size: 11px;
+}
+.note-editor-bytes[data-full="true"] {
+  color: var(--down);
+}
