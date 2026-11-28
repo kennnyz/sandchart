@@ -336,9 +336,11 @@ test("a_clicked_control_gets_focus_back_without_a_ring_but_a_keyboard_one_keeps_
   /** The outline the focused element shows now. */
   const ring = () => page.evaluate(() => getComputedStyle(document.activeElement as Element).outlineStyle);
   // Clicked, closed with Esc: focus is back on the button, without a ring.
+  // (WebKit does not focus a clicked button at all: nothing to give back there.)
+  const webkit = test.info().project.name === "webkit";
   await page.getByTestId("indicators-button").click();
   await page.keyboard.press("Escape");
-  await expect(page.getByTestId("indicators-button")).toBeFocused();
+  if (!webkit) await expect(page.getByTestId("indicators-button")).toBeFocused();
   expect(await ring()).toBe("none");
   await page.getByTestId("tf-more").click();
   await page.keyboard.press("Escape");
@@ -348,7 +350,8 @@ test("a_clicked_control_gets_focus_back_without_a_ring_but_a_keyboard_one_keeps_
   await page.keyboard.press("Shift");
   if (await page.getByTestId("tool-trend").evaluate((el) => el === document.activeElement)) expect(await ring()).toBe("none");
   await page.keyboard.press("Escape");
-  // Reached with Tab, the ring stays after the menu closes.
+  // Reached with Tab, the ring stays after the menu closes (WebKit does not Tab to buttons).
+  if (webkit) return;
   await page.getByTestId("tf-more").focus();
   await page.keyboard.press("Shift+Tab");
   await page.keyboard.press("Tab");
