@@ -584,7 +584,8 @@ impl Sandchart {
     #[tool(
         description = "Opens a .replay file the user named (absolute path, at most 32 MiB) \
                        and returns its trades and statistics in R, simulated again from the \
-                       file's own candles and commands.",
+                       file's own candles and commands. start, cut and caughtUpAt are times \
+                       (Unix ms), not bar numbers.",
         annotations(read_only_hint = true)
     )]
     async fn run_replay(&self, Parameters(p): Parameters<ReplayInput>) -> ToolResult {
@@ -602,6 +603,7 @@ impl Sandchart {
             "candles": file.candles.len(),
             "start": file.start,
             "cut": file.cut,
+            "caughtUpAt": file.caught_up_at,
             "trades": sim.trades.iter().map(|t| wire::trade(t, scale)).collect::<Vec<_>>(),
             "stats": sim.stats,
         }))

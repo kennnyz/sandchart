@@ -660,6 +660,17 @@ async fn a_replay_file_is_simulated_again_from_its_commands() {
     assert_eq!(got["stats"]["count"], 1);
     assert_eq!(got["stats"]["wins"], 1);
     assert_eq!(got["stats"]["totalR"], 2.0);
+    assert_eq!(got["caughtUpAt"], json!(null));
+
+    // A session saved after catching up with real time says where its backtest ended.
+    let (mut file, _) = ReplayFile::from_json(replay_file().as_bytes()).unwrap();
+    file.candles.truncate(16);
+    file.caught_up_at = Some(file.cut);
+    std::fs::write(&path, file.to_json()).unwrap();
+    let got = h
+        .call("run_replay", json!({ "path": path.to_str().unwrap() }))
+        .await;
+    assert_eq!(got["caughtUpAt"], json!(T0 + 16 * H));
 }
 
 #[tokio::test]

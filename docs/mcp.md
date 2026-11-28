@@ -258,7 +258,7 @@ Only an absolute path to a regular file ending in `.replay`, at most 32 MiB, is 
 
 ```json
 { "instrument": { "symbol": "BTCUSDT", "priceScale": 2, "...": "..." }, "base": "1h",
-  "candles": 620, "start": 1793970000000, "cut": 1794398400000,
+  "candles": 620, "start": 1793970000000, "cut": 1794398400000, "caughtUpAt": null,
   "trades": [
     { "side": "long", "entryTime": 1793977200000, "entryPrice": 6012000, "entryPriceDecimal": "60120.00",
       "initialStop": 5992000, "initialStopDecimal": "59920.00", "stop": 5992000, "stopDecimal": "59920.00",
@@ -269,7 +269,7 @@ Only an absolute path to a regular file ending in `.replay`, at most 32 MiB, is 
              "profitFactor": null, "maxDrawdownR": 0.0, "longestLosingStreak": 0 } }
 ```
 
-`base` is the timeframe the replay stepped; `start` and `cut` are times (Unix ms): the close time of the first replayed candle and of the last revealed one. A trade's `entryTime` and `exitTime` are the open times of the candles it filled on. Version 1 files are read too and come back the same way.
+`base` is the timeframe the replay stepped; `start` and `cut` are times (Unix ms), not bar numbers: the close time of the first replayed candle and of the last revealed one. `caughtUpAt` is the cut at which the replay caught up with real time and its backtest ended (a trade still open there has `reason: "unfinished"`), null for one that had not. A trade's `entryTime` and `exitTime` are the open times of the candles it filled on. Version 1 files are read too and come back the same way.
 
 ### list_alerts
 
