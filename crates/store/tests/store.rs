@@ -714,3 +714,63 @@ fn at_most_500_alerts_are_stored() {
     store.delete_alert("a0").unwrap();
     store.upsert_alert(&a).unwrap();
 }
+
+/// Holds the write lock of `path` from another connection, as the app or the MCP server
+/// would, and lets it go after `ms`.
+fn hold_write_lock(path: &std::path::Path, ms: u64) -> std::thread::JoinHandle<()> {
+    let conn = rusqlite::Connection::open(path).unwrap();
+    conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+        conn.execute_batch("COMMIT").unwrap();
+    })
+}
+
+#[test]
+fn a_write_waits_for_another_process_instead_of_failing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sandchart.db");
+    let mut store = Store::open(&path).unwrap();
+    store.upsert_instruments(&[instrument("BTCUSDT")]).unwrap();
+
+    let started = std::time::Instant::now();
+    let other = hold_write_lock(&path, 300);
+    // A read-then-write transaction (it counts the drawings first) and a single statement.
+    store.upsert_drawing(&drawing("a", "BTCUSDT", 0)).unwrap();
+    store.delete_alert("none").unwrap();
+    assert!(started.elapsed() >= std::time::Duration::from_millis(250));
+    other.join().unwrap();
+
+    // Reads never wait for a writer in WAL mode.
+    let other = hold_write_lock(&path, 300);
+    let started = std::time::Instant::now();
+    assert_eq!(store.drawings(&id("BTCUSDT")).unwrap().len(), 1);
+    assert!(started.elapsed() < std::time::Duration::from_millis(250));
+    other.join().unwrap();
+}
+
+#[test]
+fn two_processes_opening_an_old_file_migrate_it_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sandchart.db");
+    Store::open(&path).unwrap().migrate_down_to(1).unwrap();
+
+    // Both open while a third connection holds the write lock, so both read the old version
+    // before either can migrate.
+    let lock = hold_write_lock(&path, 300);
+    let opens: Vec<_> = (0..2)
+        .map(|_| {
+            let path = path.clone();
+            std::thread::spawn(move || Store::open(&path).map(|_| ()))
+        })
+        .collect();
+    lock.join().unwrap();
+    for open in opens {
+        open.join().unwrap().unwrap();
+    }
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let version: u32 = conn
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 4);
+}

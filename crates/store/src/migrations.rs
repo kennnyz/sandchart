@@ -2,7 +2,7 @@
 
 use rusqlite::Connection;
 
-use crate::StoreError;
+use crate::{StoreError, write};
 
 struct Migration {
     up: &'static str,
@@ -44,22 +44,26 @@ fn latest() -> u32 {
     u32::try_from(MIGRATIONS.len()).unwrap_or(u32::MAX)
 }
 
-/// Applies every pending migration, each in its own transaction.
+/// Applies every pending migration, each in its own write transaction. The version is read
+/// again inside each one, so a second process opening the same old file at the same time
+/// waits and then finds the work done instead of applying a migration twice.
 pub(crate) fn up(conn: &mut Connection) -> Result<(), StoreError> {
-    let current = user_version(conn)?;
-    if current > latest() {
-        return Err(StoreError::SchemaTooNew {
-            found: current,
-            supported: latest(),
-        });
-    }
-    for (index, migration) in MIGRATIONS.iter().enumerate().skip(current as usize) {
-        let tx = conn.transaction()?;
+    loop {
+        let tx = write(conn)?;
+        let current = user_version(&tx)?;
+        if current > latest() {
+            return Err(StoreError::SchemaTooNew {
+                found: current,
+                supported: latest(),
+            });
+        }
+        let Some(migration) = MIGRATIONS.get(current as usize) else {
+            return Ok(());
+        };
         tx.execute_batch(migration.up)?;
-        set_user_version(&tx, index as u32 + 1)?;
+        set_user_version(&tx, current + 1)?;
         tx.commit()?;
     }
-    Ok(())
 }
 
 /// Reverts migrations, newest first, until the schema is at `target`.
@@ -72,7 +76,7 @@ pub(crate) fn down_to(conn: &mut Connection, target: u32) -> Result<(), StoreErr
         });
     }
     for index in (target as usize..current as usize).rev() {
-        let tx = conn.transaction()?;
+        let tx = write(conn)?;
         tx.execute_batch(MIGRATIONS[index].down)?;
         set_user_version(&tx, index as u32)?;
         tx.commit()?;

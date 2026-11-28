@@ -6,8 +6,9 @@
 mod migrations;
 
 use std::path::Path;
+use std::time::Duration;
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sandchart_core::alert::{Alert, AlertKind, Direction};
 use sandchart_core::{Candle, Drawing, Instrument, InstrumentId, Timeframe};
 
@@ -66,9 +67,20 @@ pub struct StoredInstance {
     pub hidden: bool,
 }
 
+/// How long a write waits for another connection's write (the app and the MCP server
+/// share the file) before it fails with "database is locked".
+pub const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// The local cache. Wraps a single SQLite connection.
 pub struct Store {
     conn: Connection,
+}
+
+/// Starts a write transaction that takes the write lock at once (waiting up to
+/// [`BUSY_TIMEOUT`]). A deferred one that reads first could fail without waiting when
+/// another connection commits between its read and its write.
+pub(crate) fn write(conn: &mut Connection) -> rusqlite::Result<Transaction<'_>> {
+    conn.transaction_with_behavior(TransactionBehavior::Immediate)
 }
 
 fn limit_to_i64(limit: usize) -> Result<i64, StoreError> {
@@ -103,6 +115,8 @@ impl Store {
     /// Opens (creating if needed) the database at `path` and applies pending migrations.
     pub fn open(path: &Path) -> Result<Store, StoreError> {
         let conn = Connection::open(path)?;
+        // Before anything that may need a lock, switching to WAL included.
+        conn.busy_timeout(BUSY_TIMEOUT)?;
         conn.execute_batch("PRAGMA journal_mode = WAL;")?;
         Self::init(conn)
     }
@@ -124,7 +138,7 @@ impl Store {
     }
 
     pub fn upsert_instruments(&mut self, items: &[Instrument]) -> Result<(), StoreError> {
-        let tx = self.conn.transaction()?;
+        let tx = write(&mut self.conn)?;
         {
             let mut stmt = tx.prepare_cached(
                 "INSERT INTO instruments (source, symbol, base, quote, price_scale, qty_scale)
@@ -194,7 +208,7 @@ impl Store {
         tf: Timeframe,
         candles: &[Candle],
     ) -> Result<(), StoreError> {
-        let tx = self.conn.transaction()?;
+        let tx = write(&mut self.conn)?;
         {
             let mut stmt = tx.prepare_cached(
                 "INSERT OR REPLACE INTO candles
@@ -327,7 +341,7 @@ impl Store {
 
     /// Removes every candle and the history-start marker of one series, atomically.
     pub fn delete_series(&mut self, id: &InstrumentId, tf: Timeframe) -> Result<(), StoreError> {
-        let tx = self.conn.transaction()?;
+        let tx = write(&mut self.conn)?;
         for table in ["candles", "history_start"] {
             tx.execute(
                 &format!("DELETE FROM {table} WHERE source = ?1 AND symbol = ?2 AND tf = ?3"),
@@ -353,7 +367,7 @@ impl Store {
 
     /// Replaces the whole watchlist, preserving the order of `ids`.
     pub fn set_watchlist(&mut self, ids: &[InstrumentId]) -> Result<(), StoreError> {
-        let tx = self.conn.transaction()?;
+        let tx = write(&mut self.conn)?;
         tx.execute("DELETE FROM watchlist", [])?;
         {
             let mut stmt = tx.prepare_cached(
@@ -397,7 +411,7 @@ impl Store {
 
     /// Removes a module and every chart instance of it, atomically.
     pub fn delete_indicator_module(&mut self, id: &str) -> Result<(), StoreError> {
-        let tx = self.conn.transaction()?;
+        let tx = write(&mut self.conn)?;
         tx.execute("DELETE FROM indicator_instances WHERE module_id = ?1", [id])?;
         tx.execute("DELETE FROM indicator_modules WHERE id = ?1", [id])?;
         tx.commit()?;
@@ -423,7 +437,7 @@ impl Store {
 
     /// Replaces every chart instance, preserving the order of `items`.
     pub fn set_indicator_instances(&mut self, items: &[StoredInstance]) -> Result<(), StoreError> {
-        let tx = self.conn.transaction()?;
+        let tx = write(&mut self.conn)?;
         tx.execute("DELETE FROM indicator_instances", [])?;
         {
             let mut stmt = tx.prepare_cached(
@@ -497,7 +511,7 @@ impl Store {
     pub fn upsert_drawing(&mut self, d: &Drawing) -> Result<(), StoreError> {
         let body = serde_json::to_string(&d.body)?;
         let style = serde_json::to_string(&d.style)?;
-        let tx = self.conn.transaction()?;
+        let tx = write(&mut self.conn)?;
         let others: i64 = tx.query_row(
             "SELECT COUNT(*) FROM drawings WHERE source = ?1 AND symbol = ?2 AND id != ?3",
             params![d.instrument.source, d.instrument.symbol, d.id],
@@ -531,7 +545,7 @@ impl Store {
     /// Removes a drawing and its alerts, atomically; an unknown id is not an error.
     /// Returns how many alerts went with it.
     pub fn delete_drawing(&mut self, id: &str) -> Result<usize, StoreError> {
-        let tx = self.conn.transaction()?;
+        let tx = write(&mut self.conn)?;
         let alerts = tx.execute("DELETE FROM alerts WHERE drawing_id = ?1", [id])?;
         tx.execute("DELETE FROM drawings WHERE id = ?1", [id])?;
         tx.commit()?;
@@ -641,7 +655,7 @@ impl Store {
     /// Inserts or replaces an alert by id. An active one is refused past
     /// [`MAX_ACTIVE_ALERTS`] or [`MAX_ALERT_PAIRS`], any one past [`MAX_ALERTS`].
     pub fn upsert_alert(&mut self, a: &Alert) -> Result<(), StoreError> {
-        let tx = self.conn.transaction()?;
+        let tx = write(&mut self.conn)?;
         let count = |sql: &str, p: &[&dyn rusqlite::ToSql]| -> Result<usize, StoreError> {
             let n: i64 = tx.query_row(sql, p, |row| row.get(0))?;
             Ok(usize::try_from(n).unwrap_or(usize::MAX))
