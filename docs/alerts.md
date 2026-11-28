@@ -17,7 +17,7 @@ An alert tells you when the price reaches a level: a price you pick, or a horizo
 | Kind | Watches |
 | --- | --- |
 | Price alert | A fixed price of a pair. |
-| Line alert | A horizontal line or a trend line on the chart. Move the line and the alert follows it. Delete the line and its alert is deleted too. A line hidden from its context menu keeps its alert. |
+| Line alert | A horizontal line or a trend line on the chart. Move the line and the alert follows it. Delete the line and its alert is deleted too; a question asks first, because undo brings back the line but not its alert. A line hidden from its context menu keeps its alert. |
 
 Each alert has a direction:
 

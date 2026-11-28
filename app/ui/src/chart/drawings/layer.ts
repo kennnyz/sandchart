@@ -103,6 +103,11 @@ export interface LayerHost {
   style(edit: StyleEdit | null): void;
   /** Open the context menu of the selection, or close it with null. */
   menu(edit: MenuEdit | null): void;
+  /**
+   * Deleting `ids` (the Delete key, the menu or the style popover) may need a yes first: true
+   * when the host asks and calls `go` on a yes; false (or no hook) deletes them at once.
+   */
+  confirmDelete?(ids: readonly string[], go: () => void): boolean;
 }
 
 /** Draws a price tag on the axis of the given canvas: price in ticks, background colour. */
@@ -324,8 +329,7 @@ export class DrawingLayer {
       return;
     }
     if (action === "remove") {
-      s.setSelection(ids);
-      s.deleteSelected();
+      this.remove(ids);
     } else {
       s.updateMany(ids, action === "hide" ? { hidden: true } : { locked: action === "lock" });
     }
@@ -347,8 +351,7 @@ export class DrawingLayer {
     }
     const s = this.state;
     if ("delete" in action) {
-      s.select(se.id);
-      s.deleteSelected();
+      this.remove([se.id]);
     } else {
       s.update(se.id, action.patch);
     }
@@ -450,9 +453,28 @@ export class DrawingLayer {
     // Not in the middle of a drag, nor on hidden drawings: the history would change unseen.
     if (this.edit || this.press || this.box || this.hiddenAll) return false;
     this.closeMenu();
-    const done = cmd === "undo" ? this.state.undo() : cmd === "redo" ? this.state.redo() : this.state.deleteSelected();
+    if (cmd === "delete") return this.remove(this.state.selection);
+    const done = cmd === "undo" ? this.state.undo() : this.state.redo();
     if (done) this.host.invalidate();
     return done;
+  }
+
+  /**
+   * Deletes `ids` as one undo step, once the host agrees (`confirmDelete`): when it asks, the
+   * ones still there are deleted on its yes. False when there is nothing to delete.
+   */
+  private remove(ids: readonly string[]): boolean {
+    const s = this.state;
+    const wanted = ids.filter((id) => s.byId(id));
+    if (wanted.length === 0) return false;
+    const go = () => {
+      const live = wanted.filter((id) => s.byId(id));
+      if (live.length === 0 || this.hiddenAll) return;
+      s.setSelection(live);
+      if (s.deleteSelected()) this.host.invalidate();
+    };
+    if (!this.host.confirmDelete?.(wanted, go)) go();
+    return true;
   }
 
   /** Drops a drag, stroke, measurement or placement press in progress without storing anything. */

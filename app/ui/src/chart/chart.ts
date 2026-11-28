@@ -171,6 +171,7 @@ export class Chart {
   private drawingTextCb: ((edit: TextEdit | null) => void) | null = null;
   private drawingStyleCb: ((edit: StyleEdit | null) => void) | null = null;
   private drawingMenuCb: ((edit: MenuEdit | null) => void) | null = null;
+  private drawingConfirmDeleteCb: ((ids: readonly string[], go: () => void) => boolean) | null = null;
   /** A replay's trades and cut; its stop and take handles come before drawings for input. */
   private readonly replay = new ReplayLayer();
   private replayOn = false;
@@ -192,6 +193,7 @@ export class Chart {
     text: (e) => this.drawingTextCb?.(e),
     style: (e) => this.drawingStyleCb?.(e),
     menu: (e) => this.drawingMenuCb?.(e),
+    confirmDelete: (ids, go) => this.drawingConfirmDeleteCb?.(ids, go) ?? false,
   });
 
   constructor(
@@ -463,6 +465,11 @@ export class Chart {
   }
 
   /** The context menu of the selected drawings opens (where, in CSS px of the chart) or closes (null). */
+  /** Deleting drawings may ask first: `cb` returns true when it asks, and calls `go` on a yes. */
+  onDrawingConfirmDelete(cb: ((ids: readonly string[], go: () => void) => boolean) | null): void {
+    this.drawingConfirmDeleteCb = cb;
+  }
+
   onDrawingMenu(cb: ((edit: MenuEdit | null) => void) | null): void {
     this.drawingMenuCb = cb;
   }
@@ -614,6 +621,7 @@ export class Chart {
     this.drawingTextCb = null;
     this.drawingStyleCb = null;
     this.drawingMenuCb = null;
+    this.drawingConfirmDeleteCb = null;
     this.replayEditCb = null;
     this.pickCb = null;
     this.alertClickCb = null;

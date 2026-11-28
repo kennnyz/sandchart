@@ -34,6 +34,16 @@ export interface DrawingSurface {
   onDrawingText(cb: ((edit: TextEdit | null) => void) | null): void;
   onDrawingStyle(cb: ((edit: StyleEdit | null) => void) | null): void;
   onDrawingMenu(cb: ((edit: MenuEdit | null) => void) | null): void;
+  /** Asks before deleting drawings: true when `cb` took the question (and calls `go` on a yes). */
+  onDrawingConfirmDelete(cb: ((ids: readonly string[], go: () => void) => boolean) | null): void;
+}
+
+/** Drawings about to be deleted that have alerts: waiting for a yes (see `DrawingController.askDelete`). */
+export interface DeleteQuestion {
+  /** How many drawings would go, and how many of them have an alert. */
+  count: number;
+  alerts: number;
+  go: () => void;
 }
 
 /** A failed store, or a failed load (the chart then shows no drawings). */
@@ -110,6 +120,10 @@ export class DrawingController {
   styleEdit: StyleEdit | null = null;
   /** The context menu the chart has open; null when closed. */
   menu: MenuEdit | null = null;
+  /** A delete that would take alerts with it, waiting for the answer; null when none. */
+  deleteQuestion: DeleteQuestion | null = null;
+  /** Whether a drawing has an alert (set by the view from the alerts); none without it. */
+  private hasAlert: (id: string) => boolean = () => false;
   /** Points snap to bar prices; kept across sessions. */
   magnet: boolean;
   /** Hide all: for this session only, the drawings are not changed. */
@@ -167,6 +181,7 @@ export class DrawingController {
       this.menu = edit;
       this.onChange();
     });
+    surface.onDrawingConfirmDelete((ids, go) => this.askDelete(ids, go));
     surface.setDrawingsHidden(this.hidden);
     return () => {
       surface.onDrawingCommit(null);
@@ -174,7 +189,9 @@ export class DrawingController {
       surface.onDrawingText(null);
       surface.onDrawingStyle(null);
       surface.onDrawingMenu(null);
+      surface.onDrawingConfirmDelete(null);
       if (this.surface !== surface) return;
+      this.deleteQuestion = null;
       this.surface = null;
       this.tool = null;
       this.textEdit = null;
@@ -184,8 +201,36 @@ export class DrawingController {
     };
   }
 
+  /** Tells which drawings have alerts, so deleting one asks first. */
+  setAlertCheck(hasAlert: (id: string) => boolean): void {
+    this.hasAlert = hasAlert;
+  }
+
+  /**
+   * Deleting `ids` would delete the alerts of the lines among them too (in the engine, with
+   * the drawing), and undo brings back the drawing only: ask first. False when none has an alert.
+   */
+  private askDelete(ids: readonly string[], go: () => void): boolean {
+    const alerts = ids.filter((id) => this.hasAlert(id)).length;
+    if (alerts === 0) return false;
+    this.deleteQuestion = { count: ids.length, alerts, go };
+    this.onChange();
+    return true;
+  }
+
+  /** The answer to `deleteQuestion`: yes deletes them (the ones still there), no keeps them. */
+  answerDelete(yes: boolean): void {
+    const q = this.deleteQuestion;
+    if (!q) return;
+    this.deleteQuestion = null;
+    this.onChange();
+    if (yes) q.go();
+  }
+
   /** Shows the drawings of `id`: the chart is cleared at once, then filled when they arrive. */
   async open(id: InstrumentId): Promise<void> {
+    // A question about the old pair's drawings is void.
+    this.deleteQuestion = null;
     this.id = id;
     this.bars = null;
     this.setError(null);

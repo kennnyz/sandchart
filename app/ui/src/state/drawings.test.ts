@@ -41,6 +41,7 @@ function fakeSurface() {
   let commit: ((step: DrawingChange[]) => void) | null = null;
   let tool: ((k: ToolId | null) => void) | null = null;
   let text: ((e: TextEdit | null) => void) | null = null;
+  let confirmDelete: ((ids: readonly string[], go: () => void) => boolean) | null = null;
   const surface: DrawingSurface = {
     setDrawings: (list) => sets.push(list),
     setDrawingMagnet: (on) => magnets.push(on),
@@ -69,6 +70,7 @@ function fakeSurface() {
       showHidden++;
     },
     onDrawingMenu: (cb) => (menu = cb),
+    onDrawingConfirmDelete: (cb) => (confirmDelete = cb),
     addDrawing: (body) => added.push(body),
   };
   return {
@@ -90,6 +92,8 @@ function fakeSurface() {
     /** One undo step: a single change or all of a group's. */
     commit: (c: DrawingChange | DrawingChange[]) => commit!(Array.isArray(c) ? c : [c]),
     openText: (e: TextEdit | null) => text!(e),
+    /** The chart is about to delete `ids`: whether the controller took the question. */
+    askDelete: (ids: string[], go: () => void) => confirmDelete?.(ids, go) ?? false,
     hasListeners: () => commit !== null || text !== null,
   };
 }
@@ -137,6 +141,33 @@ function fakeBackend(stored: Drawing[], scale = 2) {
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 afterEach(() => vi.restoreAllMocks());
+
+describe("DrawingController delete question", () => {
+  it("asks only when a drawing to delete has an alert, and runs the delete on yes only", async () => {
+    const b = fakeBackend([]);
+    const s = fakeSurface();
+    let changes = 0;
+    const c = new DrawingController(b.backend, () => changes++);
+    c.attach(s.surface);
+    c.setAlertCheck((id) => id === "a");
+    const go = vi.fn();
+    expect(s.askDelete(["b"], go)).toBe(false);
+    expect(c.deleteQuestion).toBeNull();
+    expect(s.askDelete(["a", "b", "c"], go)).toBe(true);
+    expect(c.deleteQuestion).toMatchObject({ count: 3, alerts: 1 });
+    expect(changes).toBeGreaterThan(0);
+    c.answerDelete(false);
+    expect(go).not.toHaveBeenCalled();
+    expect(c.deleteQuestion).toBeNull();
+    s.askDelete(["a"], go);
+    c.answerDelete(true);
+    expect(go).toHaveBeenCalledTimes(1);
+    // Another pair drops a pending question.
+    s.askDelete(["a"], go);
+    void c.open(ETH);
+    expect(c.deleteQuestion).toBeNull();
+  });
+});
 
 describe("DrawingController", () => {
   it("clears the chart, then shows the instrument's drawings", async () => {

@@ -36,7 +36,7 @@ A position's zones are grey; only its numbers are coloured: the take and stop di
 - **Select** a drawing by clicking it. Its handles show. A click on empty space deselects it.
 - **Move** it by dragging its body. **Reshape** it by dragging a handle.
 - **Handles**: a trend line has one on each end and one in the middle, which moves the whole line. A rectangle has one on each corner and one in the middle of each edge; an edge handle moves only that side. A Fibonacci retracement has its two ends, a position its stop, take, entry and end. A brush stroke shows a marker on each end while it is selected, but has no handles: it only moves. A horizontal line has one in the middle.
-- **Delete** the selection with Delete or Backspace.
+- **Delete** the selection with Delete or Backspace. When a line among it has an [alert](alerts.md), a question asks first, since the alert is deleted with the line and undo brings back only the line: **Delete** goes on, **Cancel** or Esc keeps them.
 - **Esc** drops a half-placed drawing and the tool, closes a popover, and deselects.
 - **Undo** with ⌘Z (Ctrl+Z), **redo** with ⇧⌘Z (Ctrl+Shift+Z). Every change counts: placing, moving, reshaping, deleting, and each change in the style popover. The history lasts for the session, up to 200 steps, and starts over when you open another pair.
 
@@ -47,7 +47,7 @@ Every change is saved when you release the mouse, not while you drag.
 - **⌘-drag** (Ctrl-drag on Windows and Linux) on empty chart space draws a selection box. Every drawing the box touches is added to the selection.
 - **⌘-click** (Ctrl-click) a drawing to add it to the selection, or to take it out.
 - **Drag** any of them to move them all together. Locked ones stay where they are.
-- **Delete** or Backspace removes them all, and the [alerts](alerts.md) of the lines among them. Undo brings the drawings back, but not their alerts.
+- **Delete** or Backspace removes them all, and the [alerts](alerts.md) of the lines among them, after a question that says how many drawings and alerts go. Undo brings the drawings back, but not their alerts.
 - A click without a drag on one of them selects only that one; a click on empty space deselects all.
 
 Moving or deleting several is one step for undo, and one write: either all of them are saved or none is.
@@ -60,7 +60,7 @@ Right-click a drawing (or Ctrl-click it on macOS) to open its menu. When it is p
 | --- | --- |
 | Lock / Unlock | Lock them, or unlock them when all are locked. |
 | Hide | Hide them until you show them again (see [Hide and show](#hide-and-show)). |
-| Remove (Delete) | Delete them. |
+| Remove (Delete) | Delete them (asking first when one has an alert). |
 | Settings… (Enter) | The style popover, or the text editor of a note. Only for one drawing. |
 
 Arrow keys move between the items, Enter picks one, Esc or a click outside closes the menu. Each item is one undo step. The web view's own menu never opens over the app; in a text field you still get the usual edit menu.
@@ -75,7 +75,7 @@ Double-click a drawing, or select it and press Enter, to open its style popover.
 - **Options of the tool**: extend left and right on a trend line, extend right on a rectangle, the levels of a Fibonacci retracement (at least one stays on).
 - **Alert** (horizontal and trend lines): set an alert on the line, crossing it either way, above or below; see [Alerts](alerts.md). The alert is not part of the undo history.
 - **Locked**: a locked drawing can still be selected, styled and deleted, but not moved or reshaped. Use it for levels you do not want to nudge by accident.
-- **Delete** removes the drawing, and its alert with it.
+- **Delete** removes the drawing, and its alert with it (a line with an alert asks first).
 
 Tab moves between the controls and stays inside the popover; Esc or a click outside closes it.
 

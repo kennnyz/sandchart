@@ -26,6 +26,7 @@ import { NoteEditor } from "./NoteEditor";
 import { REPLAY_KEYS, ReplayBar } from "./ReplayBar";
 import { ReplayStats } from "./ReplayStats";
 import { tfLabel } from "./TimeframePicker";
+import { Confirm } from "./Confirm";
 
 export interface ChartViewProps {
   backend: Backend;
@@ -282,6 +283,11 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [chart, alerts, replay]);
+
+  // Deleting a line with an alert asks first: the engine deletes the alert with it, and undo cannot bring it back.
+  useEffect(() => drawings.state.setAlertCheck((id) => alerts.state.forDrawing(id) !== undefined), [drawings, alerts]);
+  const deleteQuestion = drawings.state.deleteQuestion;
+  const answerDelete = useCallback((yes: boolean) => drawings.state.answerDelete(yes), [drawings]);
 
   const styled = styleEdit?.drawing;
   const lineAlert: LineAlert | undefined =
@@ -545,6 +551,18 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
             width={hostWidth}
             height={hostHeight}
             onClose={closeChartMenu}
+          />
+        )}
+        {deleteQuestion && (
+          <Confirm
+            title={deleteQuestion.count === 1 ? t("drawingDelete.one") : t("drawingDelete.many", { n: deleteQuestion.count })}
+            text={
+              deleteQuestion.count === 1 ? t("drawingDelete.alertOne") : t("drawingDelete.alertMany", { n: deleteQuestion.alerts })
+            }
+            ok={t("drawingDelete.ok")}
+            cancel={t("drawingDelete.cancel")}
+            testId="drawing-delete-confirm"
+            onAnswer={answerDelete}
           />
         )}
         {loading && <Loading symbol={symbol} tf={tfLabel(tf)} source={sourceLabel} />}

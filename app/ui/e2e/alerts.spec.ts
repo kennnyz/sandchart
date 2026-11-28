@@ -165,11 +165,62 @@ test("an_hline_popover_sets_its_alert_and_deleting_the_line_deletes_it", async (
   await expect(section).toHaveAttribute("data-state", "fired");
   expect((await alerts(page))[0]).toMatchObject({ active: false, triggeredPrice: p });
 
-  // Deleting the line deletes its alert.
+  // Deleting the line deletes its alert, once that is agreed.
   await pop.getByTestId("drawing-style-delete").click();
+  const ask = page.getByTestId("drawing-delete-confirm");
+  await expect(ask).toContainText("This also deletes its alert");
+  await page.getByTestId("drawing-delete-confirm-ok").click();
   await expect(pop).toBeHidden();
   await alertCount(page, 0);
   await expect(page.getByTestId("alerts-empty")).toBeVisible();
+});
+
+test("deleting_lines_with_alerts_asks_first_with_the_key_and_for_a_group", async ({ page }) => {
+  const plot = await openChart(page);
+  const cx = Math.round(plot.left + plot.width / 2);
+  const ys = [0.3, 0.5].map((f) => Math.round(plot.top + plot.height * f));
+  for (const y of ys) {
+    await page.keyboard.press("Alt+KeyH");
+    await page.mouse.click(cx, y);
+  }
+  await expect.poll(async () => (await storedDrawings(page)).length).toBe(2);
+  // An alert on the first line only.
+  await page.mouse.dblclick(cx, ys[0]!);
+  await page.getByTestId("drawing-alert-set").click();
+  await alertCount(page, 1);
+  await expect(page.getByTestId("alert-row")).toHaveCount(1);
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("drawing-style")).toBeHidden();
+
+  // Delete on the line asks; Esc keeps the line and its alert.
+  await page.mouse.click(cx, ys[0]!);
+  await page.keyboard.press("Delete");
+  const ask = page.getByTestId("drawing-delete-confirm");
+  await expect(ask).toContainText("Delete the line?");
+  await page.keyboard.press("Escape");
+  await expect(ask).toHaveCount(0);
+  expect(await storedDrawings(page)).toHaveLength(2);
+  await alertCount(page, 1);
+
+  // Both selected: the question names the count; Delete removes both and the alert.
+  // Off the line's middle handle, where ⌘ would snap the handle instead.
+  await page.keyboard.down("ControlOrMeta");
+  await page.mouse.click(cx - 150, ys[1]!);
+  await page.keyboard.up("ControlOrMeta");
+  await page.keyboard.press("Delete");
+  await expect(ask).toContainText("Delete 2 drawings?");
+  await expect(ask).toContainText("alerts of 1 of them");
+  await page.getByTestId("drawing-delete-confirm-ok").click();
+  await expect.poll(async () => (await storedDrawings(page)).length).toBe(0);
+  await alertCount(page, 0);
+
+  // A line without an alert goes at once.
+  await page.keyboard.press("Alt+KeyH");
+  await page.mouse.click(cx, ys[1]!);
+  await expect.poll(async () => (await storedDrawings(page)).length).toBe(1);
+  await page.keyboard.press("Delete");
+  await expect.poll(async () => (await storedDrawings(page)).length).toBe(0);
+  await expect(ask).toHaveCount(0);
 });
 
 test("removing_an_alert_from_the_popover_keeps_the_line", async ({ page }) => {

@@ -411,6 +411,59 @@ describe("context menu", () => {
   });
 });
 
+describe("delete confirmation", () => {
+  /** A recording layer whose host asks before deleting `ask` and keeps the yes to call later. */
+  function asking(ask: string[]) {
+    const r = recording();
+    const asked: { ids: readonly string[]; go: () => void }[] = [];
+    const host = (r.l as unknown as { host: LayerHost }).host;
+    host.confirmDelete = (ids, go) => {
+      if (!ids.some((id) => ask.includes(id))) return false;
+      asked.push({ ids, go });
+      return true;
+    };
+    return { ...r, asked };
+  }
+
+  it("waits for the yes on Delete, the menu and the style popover; one undo step brings them back", () => {
+    const { l, c, rec, paint, asked } = asking(["a"]);
+    l.setDrawings([hl(c.p(400), "a"), hl(c.p(500), "b"), hl(c.p(700), "c")]);
+    paint();
+    l.state.setSelection(["a", "b"]);
+    expect(l.command("delete")).toBe(true);
+    expect(l.state.drawings).toHaveLength(3);
+    expect(asked.at(-1)!.ids).toEqual(["a", "b"]);
+    // The yes deletes them as one step, even when the selection changed meanwhile.
+    l.state.setSelection(["c"]);
+    asked.at(-1)!.go();
+    expect(l.state.drawings.map((d) => d.id)).toEqual(["c"]);
+    expect(rec.commits.filter((ch) => ch.after === null)).toHaveLength(2);
+    expect(l.command("undo")).toBe(true);
+    expect(l.state.drawings).toHaveLength(3);
+
+    // From the menu: asked, and a no (never calling go) deletes nothing.
+    l.contextMenu(100, 400);
+    l.menuAction("remove");
+    expect(asked).toHaveLength(2);
+    expect(l.state.drawings).toHaveLength(3);
+    // A drawing without an alert goes at once.
+    l.contextMenu(100, 700);
+    l.menuAction("remove");
+    expect(l.state.drawings.map((d) => d.id)).toEqual(["a", "b"]);
+  });
+
+  it("deletes only the ones still there on a late yes", () => {
+    const { l, c, paint, asked } = asking(["a"]);
+    l.setDrawings([hl(c.p(400), "a"), hl(c.p(500), "b")]);
+    paint();
+    l.state.setSelection(["a", "b"]);
+    l.command("delete");
+    l.setDrawings([hl(c.p(500), "b")]);
+    asked[0]!.go();
+    expect(l.state.drawings).toHaveLength(0);
+  });
+});
+
 describe("hidden drawings", () => {
   it("are neither painted nor hit", () => {
     const { l, c } = recording();
