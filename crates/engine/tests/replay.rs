@@ -928,8 +928,10 @@ async fn a_step_stands_when_newer_candles_fail_to_load_and_the_next_step_tries_a
     assert!(!st.at_end && !st.caught_up);
     let msg = st.newer_error.expect("the failure is reported");
     assert!(msg.contains("connection refused"), "{msg}");
-    // Still down: the step reveals nothing more, the notice stays.
+    // Still down: the step reveals nothing more, the notice stays, and it asked once.
+    let asked = f.provider.calls(TF);
     assert_eq!(f.engine.replay_step(1).await.unwrap(), cut);
+    assert_eq!(f.provider.calls(TF), asked + 1);
     assert!(
         f.engine
             .replay_state(TF, 0, 0)

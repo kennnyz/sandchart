@@ -470,7 +470,7 @@ impl Engine {
             view: None,
         };
         *self.shared.session() = Some(session);
-        self.load_newer().await;
+        let _ = self.load_newer().await;
         self.replay_state(base, 0, 0)
     }
 
@@ -484,8 +484,9 @@ impl Engine {
             Some(_) => Err(caught_up_error("steps")),
             None => Ok(()),
         })?;
-        // A load that failed at the last step is tried again first, so this step can reveal.
-        self.load_newer().await;
+        // A load that failed at the last step is tried again first, so this step can reveal;
+        // failing again, it is not asked twice in one step.
+        let failed = self.load_newer().await;
         let cut = self.with_session(|s| {
             if s.caught_up_at.is_some() {
                 return Ok(s.cut); // that load found nothing newer: caught up
@@ -499,14 +500,17 @@ impl Engine {
             }
             Ok(s.cut)
         })?;
-        self.load_newer().await;
+        if !failed {
+            self.load_newer().await;
+        }
         Ok(cut)
     }
 
     /// When a session from the cache has revealed every loaded candle: loads the newer
     /// closed base candles, or, when there are none, marks it caught up at its cut. A
-    /// failure is kept in the session (`newer_error`) for the UI to show.
-    async fn load_newer(&self) {
+    /// failure is kept in the session (`newer_error`) for the UI to show; returns whether
+    /// one happened.
+    async fn load_newer(&self) -> bool {
         let Some((sid, inst, base, last, room)) = self.shared.session().as_ref().and_then(|s| {
             s.wants_more().then(|| {
                 let last = s.candles.last().map_or(i64::MIN, |c| c.open_time);
@@ -519,14 +523,14 @@ impl Engine {
                 )
             })
         }) else {
-            return;
+            return false;
         };
         let newer = self
             .newer_candles(&inst, base, last, room.min(NEWER_BATCH))
             .await;
         let mut guard = self.shared.session();
         let Some(s) = guard.as_mut().filter(|s| s.id == sid && s.wants_more()) else {
-            return; // replaced or changed meanwhile
+            return false; // replaced or changed meanwhile
         };
         match newer {
             Ok(newer) if newer.is_empty() => {
@@ -539,8 +543,12 @@ impl Engine {
                 s.append(&newer);
                 s.newer_error = None;
             }
-            Err(e) => s.newer_error = Some(e.to_string()),
+            Err(e) => {
+                s.newer_error = Some(e.to_string());
+                return true;
+            }
         }
+        false
     }
 
     /// Closed base candles after the one opening at `last`, at most `room`: the cached
@@ -677,7 +685,7 @@ impl Engine {
                 sim
             });
         }
-        self.load_newer().await;
+        let _ = self.load_newer().await;
         self.replay_state(base, 0, 0)
     }
 
