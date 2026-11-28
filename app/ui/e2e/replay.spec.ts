@@ -453,6 +453,8 @@ test("replay_jumps_to_real_time_and_ends_the_backtest_there", async ({ page }) =
   await expect(bar).toHaveAttribute("data-finished", "true");
   await expect(page.getByTestId("replay-real-time")).toBeVisible();
   await expect.poll(() => lastBar(page)).toBe(live);
+  // The backtest is over: the pair's live quote gives nothing away any more.
+  await expect(page.locator('[data-testid="watchlist-row"][data-symbol="BTCUSDT"]')).toContainText("%");
   for (const id of ["replay-step", "replay-play", "replay-jump", "replay-buy", "replay-sell", "replay-close"]) {
     await expect(page.getByTestId(id)).toBeDisabled();
   }

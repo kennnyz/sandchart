@@ -71,9 +71,9 @@ export function App() {
     backend.setLanguage(lang).catch((e: unknown) => console.error("setting the language failed", e));
   }, [lang]);
   const replayPhase = useSyncExternalStore(replay.subscribe, () => replay.state.phase);
-  // The replayed pair as a stable key: the watchlist hides its live quote.
+  // The replayed pair as a stable key: the watchlist hides its live quote until the backtest is over.
   const replayingKey = useSyncExternalStore(replay.subscribe, () => {
-    const v = replay.state.phase === "on" ? replay.state.view : null;
+    const v = replay.state.phase === "on" && !replay.state.finished ? replay.state.view : null;
     return v ? JSON.stringify(v.instrument.id) : null;
   });
   const replaying = useMemo(() => (replayingKey ? (JSON.parse(replayingKey) as InstrumentId) : null), [replayingKey]);
