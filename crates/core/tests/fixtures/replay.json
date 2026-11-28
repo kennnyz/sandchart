@@ -1,5 +1,5 @@
 {
-  "about": "Replay cases, written by hand from the rules in ADR 0005. Read by crates/core/tests/replay.rs (the Rust simulate) and app/ui/src/backend/mock.test.ts (the TEST-ONLY copy in the mock). Candle rows of cases are [openTime, open, high, low, close] (volume 0); file candles are [openTime, open, high, low, close, volume], and the file sha256 was computed with Python's hashlib over six little-endian int64 per candle. Fractional numbers compare within 1e-9.",
+  "about": "Replay cases, written by hand from the rules in ADR 0005. Read by crates/core/tests/replay.rs (the Rust simulate) and app/ui/src/backend/mockReplay.test.ts (the TEST-ONLY copy in the mock). Candle rows of cases are [openTime, open, high, low, close] (volume 0); file candles are [openTime, open, high, low, close, volume], and the file sha256 was computed with Python's hashlib over six little-endian int64 per candle. Fractional numbers compare within 1e-9.",
   "cases": [
     {
       "name": "long take: hit on a later bar, filled at the take",
