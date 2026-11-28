@@ -70,7 +70,9 @@ impl Engine {
         };
 
         let need_fetch = match before {
-            None => cache.newest.is_none_or(|n| self.is_stale(n, tf)),
+            None => cache
+                .newest
+                .is_none_or(|n| self.refresh_newest || self.is_stale(n, tf)),
             Some(_) => {
                 cache.candles.len() < usize::from(PAGE)
                     && !reached_start(&cache.candles, cache.history_start)

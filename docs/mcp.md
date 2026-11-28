@@ -97,7 +97,7 @@ Finds pairs by symbol. The first call after the server starts refreshes the pair
 
 ### get_candles
 
-Candles, oldest first, from the local cache; candles that are missing are fetched from the exchange and cached, like the chart does when you scroll. The last candle may still be forming.
+Candles, oldest first, from the local cache; candles that are missing are fetched from the exchange and cached, like the chart does when you scroll. Without `before`, the newest page is always asked for again (one request), so the last candle, which may still be forming, is as it is now.
 
 | Input | |
 | --- | --- |

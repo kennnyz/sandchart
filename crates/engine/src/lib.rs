@@ -107,6 +107,10 @@ pub struct Engine {
     providers: HashMap<String, Arc<dyn Provider>>,
     clock: Clock,
     indicators: indicators::Service,
+    /// A second process has no live stream to bring the newest stored candle up to date: it
+    /// may be one that was still forming when it was stored, so a load of the newest page
+    /// always asks the provider (one request).
+    refresh_newest: bool,
 }
 
 /// Locks the store; a poisoned lock is safe to reuse because every store write is a transaction.
@@ -217,7 +221,8 @@ impl Engine {
     /// such as the MCP server: it reads and writes the same database and loads the same
     /// indicators, but never deletes module files or prunes the compiled-module cache,
     /// because the app may be installing a module at that moment. A database an older app
-    /// left at an older schema version is refused, not upgraded. It does not need
+    /// left at an older schema version is refused, not upgraded. With no live stream of its
+    /// own, a load of the newest candles always asks the provider. It does not need
     /// [`Engine::run_alerts`]: the app evaluates the alerts.
     pub fn open_secondary(
         data_dir: &Path,
@@ -267,6 +272,7 @@ impl Engine {
                 .collect(),
             clock,
             indicators,
+            refresh_newest: !housekeeping,
         })
     }
 

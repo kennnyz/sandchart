@@ -64,6 +64,30 @@ fn klines() -> String {
     Value::Array(rows).to_string()
 }
 
+/// Kline rows for `candles`, as Binance sends them.
+fn kline_rows(candles: &[Candle]) -> String {
+    let rows: Vec<Value> = candles
+        .iter()
+        .map(|c| {
+            json!([
+                c.open_time,
+                price(c.open),
+                price(c.high),
+                price(c.low),
+                price(c.close),
+                "1.00000000",
+                c.open_time + H - 1,
+                "0",
+                1,
+                "0",
+                "0",
+                "0"
+            ])
+        })
+        .collect();
+    Value::Array(rows).to_string()
+}
+
 fn json_body(body: String) -> ResponseTemplate {
     ResponseTemplate::new(200).set_body_raw(body.into_bytes(), "application/json")
 }
@@ -105,7 +129,11 @@ async fn harness_with(info: ResponseTemplate) -> Harness {
         .respond_with(json_body("[]".to_owned()))
         .mount(&mock)
         .await;
+    serve(mock).await
+}
 
+/// The server over `mock`, which answers the exchange's endpoints.
+async fn serve(mock: MockServer) -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let engine = Engine::open_secondary(dir.path(), None, vec![Arc::new(binance(&mock))]).unwrap();
     let (server_io, client_io) = tokio::io::duplex(1 << 20);
@@ -820,4 +848,60 @@ async fn writes_wait_for_the_app_and_both_see_each_others_changes() {
         .map(|d| d.id)
         .collect();
     assert_eq!(ids, ["from-agent", "from-app"]);
+}
+
+#[tokio::test]
+async fn the_newest_candle_is_asked_for_again_while_it_is_forming() {
+    // Five hourly candles up to the one forming now; the exchange's last close moves.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let forming = now / H * H;
+    let page = |last_close: i64| {
+        let candles: Vec<Candle> = (0..5)
+            .map(|i| Candle {
+                open_time: forming - (4 - i) * H,
+                ..candle(i)
+            })
+            .map(|mut c| {
+                if c.open_time == forming {
+                    c.close = last_close;
+                    c.high = c.high.max(last_close);
+                }
+                c
+            })
+            .collect();
+        json_body(kline_rows(&candles))
+    };
+    let mock = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v3/exchangeInfo"))
+        .respond_with(json_body(EXCHANGE_INFO.to_owned()))
+        .mount(&mock)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v3/klines"))
+        .and(query_param_is_missing("endTime"))
+        .respond_with(page(10_400))
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&mock)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v3/klines"))
+        .and(query_param_is_missing("endTime"))
+        .respond_with(page(10_475))
+        .with_priority(2)
+        .mount(&mock)
+        .await;
+    let h = serve(mock).await;
+    let last = |v: &Value| v["candles"].as_array().unwrap().last().unwrap()["close"].clone();
+    let args = json!({ "symbol": "BTCUSDT", "timeframe": "1h", "limit": 2 });
+    assert_eq!(last(&h.call("get_candles", args.clone()).await), "104.00");
+    // Within the same bar: one more request, and the candle as it is now.
+    let again = h.call("get_candles", args).await;
+    assert_eq!(last(&again), "104.75");
+    assert_eq!(again["candles"].as_array().unwrap().len(), 2);
+    assert_eq!(h.requests("/api/v3/klines").await, 2);
 }
