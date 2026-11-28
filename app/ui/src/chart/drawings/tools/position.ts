@@ -4,6 +4,7 @@ import { t } from "../../../i18n";
 import { formatChange } from "../../format";
 import { MONO_FAMILY, type ChartTheme } from "../../theme";
 import { MAX_TICKS } from "../geometry";
+import { pill } from "../label";
 import type { ToolDef } from "../registry";
 
 type Position = Extract<DrawingBody, { kind: "position" }>;
@@ -86,8 +87,7 @@ function label(ctx: CanvasRenderingContext2D, parts: [string, string][], cx: num
   const w = widths.reduce((a, b) => a + b, 0) + 2 * PAD;
   const x = Math.min(Math.max(cx - w / 2, 2), Math.max(2, g.plotW - w - 2));
   const top = Math.min(Math.max(y, 2), Math.max(2, g.priceH - LABEL_H - 2));
-  ctx.fillStyle = th.crosshairLabelBg;
-  ctx.fillRect(x, top, w, LABEL_H);
+  pill(ctx, x, top, w, LABEL_H, th);
   let at = x + PAD;
   parts.forEach(([s, col], i) => {
     ctx.fillStyle = col;
@@ -200,8 +200,10 @@ function positionTool(side: Side): ToolDef<Position, PositionGeom> {
           ctx.strokeStyle = th.bg;
           ctx.stroke();
           if (o.ambiguous) {
+            const qx = o.x + MARKER_R + 2;
+            pill(ctx, qx, o.y - LABEL_H / 2, ctx.measureText("?").width + 2 * PAD, LABEL_H, th);
             ctx.fillStyle = th.fg;
-            ctx.fillText("?", o.x + MARKER_R + 3, o.y);
+            ctx.fillText("?", qx + PAD, o.y);
           }
         }
       }

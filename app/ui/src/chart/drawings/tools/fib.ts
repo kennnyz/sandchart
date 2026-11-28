@@ -2,6 +2,7 @@ import { Rows3 } from "lucide-react";
 import type { DrawingBody } from "../../../backend/types";
 import { formatPrice } from "../../format";
 import { MONO_FAMILY } from "../../theme";
+import { pill } from "../label";
 import type { ToolDef } from "../registry";
 
 type Fib = Extract<DrawingBody, { kind: "fib" }>;
@@ -9,6 +10,10 @@ type Fib = Extract<DrawingBody, { kind: "fib" }>;
 /** Retracement levels 0..1 and two extensions; a new drawing stores this list. */
 export const FIB_LEVELS: readonly number[] = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1, 1.272, 1.618];
 const LABEL_FONT = `11px ${MONO_FAMILY}`;
+/** Label pill: height, inner padding, gap above its level line. */
+const LABEL_H = 15;
+const LABEL_PAD = 4;
+const LABEL_GAP = 2;
 
 /** Price of `level` in ticks: 0 at the end of the move (b), 1 at its start (a). */
 export function fibPrice(body: Fib, level: number): number {
@@ -25,6 +30,8 @@ interface FibGeom {
   /** y of each level and its label, "0.618  1 234.50". */
   ys: number[];
   labels: string[];
+  /** Label widths in px, measured on the first paint. */
+  widths: number[] | null;
   path: Path2D | null;
 }
 
@@ -61,11 +68,12 @@ export const fibTool: ToolDef<Fib, FibGeom> = {
       right: Math.max(ax, bx),
       ys: prices.map((p) => c.y(p)),
       labels: body.levels.map((l, i) => `${l}  ${formatPrice(prices[i]!, c.decimals)}`),
+      widths: null,
       path: null,
     };
   },
 
-  paint(ctx, g) {
+  paint(ctx, g, look) {
     if (!g.path) {
       g.path = new Path2D();
       for (const y of g.ys) {
@@ -74,11 +82,18 @@ export const fibTool: ToolDef<Fib, FibGeom> = {
       }
     }
     ctx.stroke(g.path);
+    // Each label on a pill in the chart ground just above its line, readable over candles.
     ctx.font = LABEL_FONT;
     ctx.textAlign = "left";
-    ctx.textBaseline = "bottom";
+    ctx.textBaseline = "middle";
+    g.widths ??= g.labels.map((s) => ctx.measureText(s).width);
     const x = Math.max(g.left, 0) + 4;
-    for (let i = 0; i < g.ys.length; i++) ctx.fillText(g.labels[i]!, x, g.ys[i]! - 2);
+    for (let i = 0; i < g.ys.length; i++) {
+      const top = g.ys[i]! - LABEL_GAP - LABEL_H;
+      pill(ctx, x, top, g.widths[i]! + 2 * LABEL_PAD, LABEL_H, look.theme);
+      ctx.fillStyle = look.color;
+      ctx.fillText(g.labels[i]!, x + LABEL_PAD, top + LABEL_H / 2);
+    }
   },
 
   hitTest(g, x, y, tol) {

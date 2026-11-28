@@ -1,6 +1,7 @@
 import { StickyNote } from "lucide-react";
 import type { DrawingBody } from "../../../backend/types";
 import { SANS_FAMILY } from "../../theme";
+import { pill } from "../label";
 import type { ToolDef } from "../registry";
 
 type Note = Extract<DrawingBody, { kind: "note" }>;
@@ -112,8 +113,7 @@ export const noteTool: ToolDef<Note, NoteGeom> = {
     const x = Math.min(Math.max(g.x - w / 2, 2), Math.max(2, c.plotW - w - 2));
     const above = g.y - MARKER_R - 6 - TOOLTIP_H;
     const y = above >= 2 ? above : g.y + MARKER_R + 6;
-    ctx.fillStyle = th.crosshairLabelBg;
-    ctx.fillRect(x, y, w, TOOLTIP_H);
+    pill(ctx, x, y, w, TOOLTIP_H, th);
     ctx.fillStyle = th.fg;
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
