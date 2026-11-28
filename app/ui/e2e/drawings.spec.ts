@@ -670,6 +670,30 @@ test("enter_opens_the_style_popover_and_undo_reverts_a_style_change", async ({ p
   await expect(pop).toBeHidden();
 });
 
+test("delete_keys_on_a_style_popover_control_stay_in_the_popover", async ({ page }) => {
+  const plot = await openChart(page);
+  const cx = Math.round(plot.left + plot.width / 2);
+  await page.keyboard.press("Alt+KeyT");
+  await page.mouse.click(cx - 150, plot.top + plot.height * 0.6);
+  await page.mouse.click(cx + 150, plot.top + plot.height * 0.4);
+  const [line] = await storedCount(page, 1);
+  await page.keyboard.press("Enter");
+  const pop = page.getByTestId("drawing-style");
+  await expect(pop).toBeVisible();
+  // On a button and on a checkbox: no delete, and WebKit does not go back a page.
+  await page.getByTestId("drawing-color-3").focus();
+  await page.keyboard.press("Backspace");
+  await page.keyboard.press("Delete");
+  await pop.getByLabel("Extend right").focus();
+  await page.keyboard.press("Backspace");
+  await nextFrame(page);
+  await expect(pop).toBeVisible();
+  expect((await debug(page)).selectedDrawing).toBe(line!.id);
+  await page.keyboard.press("Escape");
+  await expect(pop).toBeHidden();
+  expect(await stored(page)).toHaveLength(1);
+});
+
 test("a_locked_drawing_does_not_move", async ({ page }) => {
   const plot = await openChart(page);
   const cx = Math.round(plot.left + plot.width / 2);

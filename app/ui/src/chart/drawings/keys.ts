@@ -21,7 +21,7 @@ export const MAGNET_CODE = "KeyM";
 const NOT_TEXT = new Set(["checkbox", "radio", "button"]);
 
 /** Focus is in a text field, where keys type instead. */
-function typing(target: unknown): boolean {
+export function typing(target: unknown): boolean {
   if (typeof target !== "object" || target === null) return false;
   const el = target as { tagName?: string; type?: string; isContentEditable?: boolean };
   if (el.tagName === "INPUT") return !NOT_TEXT.has(el.type ?? "");

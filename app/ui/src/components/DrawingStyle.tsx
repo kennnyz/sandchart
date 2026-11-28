@@ -2,6 +2,7 @@ import { X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { DrawingBody } from "../backend/types";
 import type { StyleEdit } from "../chart/drawings/layer";
+import { typing } from "../chart/drawings/keys";
 import { toolFor } from "../chart/drawings/registry";
 import type { DrawingPatch } from "../chart/drawings/state";
 import { FIB_LEVELS } from "../chart/drawings/tools/fib";
@@ -116,7 +117,10 @@ export function DrawingStyle({ edit, palette, hostWidth, hostHeight, onChange, o
     // ⌘Z / ⇧⌘Z reach the chart's shortcuts; every other key stays here (Enter, Delete, Space work on the controls).
     if ((e.metaKey || e.ctrlKey) && e.code === "KeyZ") return;
     e.stopPropagation();
-    if (e.key === "Escape") {
+    // Off a text field, Delete or Backspace does nothing here (WebKit would go back a page).
+    if ((e.key === "Backspace" || e.key === "Delete") && !typing(e.target)) {
+      e.preventDefault();
+    } else if (e.key === "Escape") {
       e.preventDefault();
       onClose();
     } else if (e.key === "Tab") {
