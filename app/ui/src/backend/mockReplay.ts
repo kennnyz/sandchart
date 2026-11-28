@@ -9,6 +9,7 @@ export const MOCK_REPLAY_VERSION = 1;
 export const MOCK_MAX_REPLAY_CANDLES = 200_000;
 export const MOCK_MAX_REPLAY_COMMANDS = 10_000;
 export const MOCK_MAX_REPLAY_BYTES = 32 * 1024 * 1024;
+const MOCK_MAX_SCALE = 18;
 const SAFE = Number.MAX_SAFE_INTEGER;
 
 export interface MockCandle {
@@ -332,6 +333,15 @@ export async function mockReadReplay(bytes: Uint8Array): Promise<MockReplayFile>
   const rows = raw.candles as number[][];
   const tf = raw.timeframe as TimeframeCode;
   if (!TIMEFRAME_CODES.includes(tf)) throw new Error(`unknown timeframe ${JSON.stringify(raw.timeframe)}`);
+  for (const [what, k] of [["price", "priceScale"], ["quantity", "qtyScale"]] as const) {
+    const v = inst[k] as number;
+    if (v > MOCK_MAX_SCALE) throw new Error(`the instrument's ${what} scale ${v} is above ${MOCK_MAX_SCALE}`);
+  }
+  for (const k of ["source", "symbol", "base", "quote"]) {
+    if (!/^[A-Za-z0-9._-]{1,64}$/.test(inst[k] as string)) {
+      throw new Error(`the instrument's ${k} must be 1 to 64 characters from A-Z, a-z, 0-9, ., _ and -`);
+    }
+  }
   const candles = rows.map(([time, open, high, low, close, volume]) => ({
     time: time!,
     open: open!,

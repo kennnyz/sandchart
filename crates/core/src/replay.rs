@@ -19,6 +19,11 @@ pub const VERSION: u32 = 1;
 pub const MAX_CANDLES: usize = 200_000;
 pub const MAX_COMMANDS: usize = 10_000;
 pub const MAX_FILE_BYTES: usize = 32 * 1024 * 1024;
+/// Largest price or quantity scale a file may carry: 10^18 is the largest power of ten
+/// in an `i64`, so ticks can still be rescaled.
+pub const MAX_SCALE: u8 = 18;
+/// Longest source, symbol, base or quote of a file's instrument.
+pub const MAX_NAME_BYTES: usize = 64;
 
 /// What the user did at a bar. `bar` indexes the session's candles. JSON is
 /// `{ "kind": "open", ... }` with camelCase fields.
@@ -545,6 +550,7 @@ impl ReplayFile {
             serde_json::from_slice(bytes).map_err(|e| format!("not a replay file: {e}"))?;
         let timeframe = Timeframe::from_code(&body.timeframe)
             .ok_or_else(|| format!("unknown timeframe {:?}", body.timeframe))?;
+        check_instrument(&body.instrument)?;
         let candles: Vec<Candle> = body
             .candles
             .iter()
@@ -608,6 +614,37 @@ pub fn check_candles(candles: &[Candle]) -> Result<(), String> {
         }
         if i > 0 && candles[i - 1].open_time >= c.open_time {
             return Err(format!("candle {i}: open times must go up"));
+        }
+    }
+    Ok(())
+}
+
+/// A file's instrument is only as trusted as the file: scales the tick maths can use, and
+/// names of the length and characters the providers give.
+fn check_instrument(i: &FileInstrument) -> Result<(), String> {
+    for (what, v) in [("price", i.price_scale), ("quantity", i.qty_scale)] {
+        if v > MAX_SCALE {
+            return Err(format!(
+                "the instrument's {what} scale {v} is above {MAX_SCALE}"
+            ));
+        }
+    }
+    let ok = |s: &str| {
+        !s.is_empty()
+            && s.len() <= MAX_NAME_BYTES
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    };
+    for (what, v) in [
+        ("source", &i.source),
+        ("symbol", &i.symbol),
+        ("base", &i.base),
+        ("quote", &i.quote),
+    ] {
+        if !ok(v) {
+            return Err(format!(
+                "the instrument's {what} must be 1 to {MAX_NAME_BYTES} characters from A-Z, a-z, 0-9, ., _ and -"
+            ));
         }
     }
     Ok(())

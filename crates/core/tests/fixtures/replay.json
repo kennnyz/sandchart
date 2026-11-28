@@ -549,6 +549,96 @@
         "candles": []
       },
       "error": "start 0 and current 0 must satisfy start <= current < 0 candles"
+    },
+    {
+      "name": "a price scale above 18 is refused",
+      "file": {
+        "version": 1,
+        "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 19, "qtyScale": 5},
+        "timeframe": "1h",
+        "start": 1,
+        "current": 2,
+        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "commands": [],
+        "candles": [
+          [1000, 100, 101, 99, 100, 7],
+          [2000, 100, 102, 98, 100, 7],
+          [3000, 100, 101, 99, 100, 7]
+        ]
+      },
+      "error": "the instrument's price scale 19 is above 18"
+    },
+    {
+      "name": "a quantity scale above 18 is refused",
+      "file": {
+        "version": 1,
+        "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 30},
+        "timeframe": "1h",
+        "start": 1,
+        "current": 2,
+        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "commands": [],
+        "candles": [
+          [1000, 100, 101, 99, 100, 7],
+          [2000, 100, 102, 98, 100, 7],
+          [3000, 100, 101, 99, 100, 7]
+        ]
+      },
+      "error": "the instrument's quantity scale 30 is above 18"
+    },
+    {
+      "name": "a symbol with a character the providers do not use is refused",
+      "file": {
+        "version": 1,
+        "instrument": {"source": "binance", "symbol": "BTC USDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
+        "timeframe": "1h",
+        "start": 1,
+        "current": 2,
+        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "commands": [],
+        "candles": [
+          [1000, 100, 101, 99, 100, 7],
+          [2000, 100, 102, 98, 100, 7],
+          [3000, 100, 101, 99, 100, 7]
+        ]
+      },
+      "error": "the instrument's symbol must be 1 to 64 characters from A-Z, a-z, 0-9, ., _ and -"
+    },
+    {
+      "name": "an empty source is refused",
+      "file": {
+        "version": 1,
+        "instrument": {"source": "", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
+        "timeframe": "1h",
+        "start": 1,
+        "current": 2,
+        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "commands": [],
+        "candles": [
+          [1000, 100, 101, 99, 100, 7],
+          [2000, 100, 102, 98, 100, 7],
+          [3000, 100, 101, 99, 100, 7]
+        ]
+      },
+      "error": "the instrument's source must be 1 to 64 characters from A-Z, a-z, 0-9, ., _ and -"
+    },
+    {
+      "name": "a quote asset longer than 64 characters is refused",
+      "file": {
+        "version": 1,
+        "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ", "priceScale": 2, "qtyScale": 5},
+        "timeframe": "1h",
+        "start": 1,
+        "current": 2,
+        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "commands": [],
+        "candles": [
+          [1000, 100, 101, 99, 100, 7],
+          [2000, 100, 102, 98, 100, 7],
+          [3000, 100, 101, 99, 100, 7]
+        ]
+      },
+      "error": "the instrument's quote must be 1 to 64 characters from A-Z, a-z, 0-9, ., _ and -"
     }
   ]
 }
