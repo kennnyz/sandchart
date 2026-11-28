@@ -114,9 +114,10 @@ impl Engine {
             let instrument = s.instrument(&key)?;
             let context = s.candles_before(&key, tf, Some(start_time), REPLAY_CONTEXT)?;
             let room = MAX_CANDLES - context.len();
-            let rest = s.scan_candles_between(&key, tf, start_time - 1, i64::MAX, |it| {
-                it.take(room).collect::<Vec<_>>()
-            })?;
+            let rest =
+                s.scan_candles_between(&key, tf, start_time.saturating_sub(1), i64::MAX, |it| {
+                    it.take(room).collect::<Vec<_>>()
+                })?;
             Ok((instrument, context, rest))
         })
         .await?;

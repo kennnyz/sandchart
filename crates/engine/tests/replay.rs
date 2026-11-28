@@ -96,6 +96,9 @@ async fn start_needs_a_cached_bar_at_that_time() {
     assert_eq!(msg, format!("no cached 1h bar opens at {}", T0 + 3 * H + 1));
     let msg = replay_err(engine.replay_start(&id(), Timeframe::H4, T0).await);
     assert_eq!(msg, format!("no cached 4h bar opens at {T0}"));
+    // The lowest time does not overflow looking for the bar.
+    let msg = replay_err(engine.replay_start(&id(), Timeframe::H1, i64::MIN).await);
+    assert_eq!(msg, format!("no cached 1h bar opens at {}", i64::MIN));
     assert!(matches!(
         engine.replay_state(0),
         Err(EngineError::Replay(m)) if m == "no replay is open"
