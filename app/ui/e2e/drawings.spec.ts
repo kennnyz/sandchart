@@ -866,6 +866,15 @@ test("right_click_shows_our_menu_and_never_the_native_one", async ({ page }) => 
   await expect(menu).toHaveCount(0);
   expect((await debug(page)).selectedDrawing).toBe(line!.id);
 
+  // Esc gives focus back to where it was: here the eye button that opened the rail menu.
+  await page.getByTestId("tool-hide-all").focus();
+  await page.keyboard.press("Space");
+  await expect(page.getByTestId("visibility-menu")).toBeVisible();
+  await expect(page.getByTestId("visibility-menu-toggle")).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("visibility-menu")).toHaveCount(0);
+  await expect(page.getByTestId("tool-hide-all")).toBeFocused();
+
   // Lock by keyboard; the menu then offers Unlock.
   await page.mouse.click(cx - 100, y, { button: "right" });
   await expect(page.getByTestId("drawing-menu-lock")).toBeFocused();

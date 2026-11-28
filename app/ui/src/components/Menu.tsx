@@ -34,7 +34,8 @@ const MARGIN = 8;
 /**
  * A small menu at a point: right of and below it when it fits, else flipped, never off
  * the area. Arrow keys, Home and End move between items, Enter or Space picks one, Esc,
- * Tab and a press outside close it. Focus moves to the first item when it opens.
+ * Tab and a press outside close it. Focus moves to the first item when it opens and back
+ * to where it was when it closes.
  */
 export function Menu({ items, label, testId, x, y, width, height, fixed, onClose }: MenuProps) {
   const ref = useRef<HTMLDivElement>(null);
@@ -49,10 +50,18 @@ export function Menu({ items, label, testId, x, y, width, height, fixed, onClose
     setAt({ left, top });
   }, [x, y, width, height, items.length]);
 
-  // On the next frame: the press that opened it would otherwise take focus back.
+  // On the next frame: the press that opened it would otherwise take focus back. On close,
+  // focus goes back to where it was, unless it has moved on outside the menu.
   useEffect(() => {
+    const before = document.activeElement;
     const id = requestAnimationFrame(() => ref.current?.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled)')?.focus());
-    return () => cancelAnimationFrame(id);
+    const menu = ref.current;
+    return () => {
+      cancelAnimationFrame(id);
+      const now = document.activeElement;
+      const lost = now === null || now === document.body || menu?.contains(now) === true;
+      if (lost && before instanceof HTMLElement && before.isConnected) before.focus();
+    };
   }, []);
 
   useEffect(() => {
