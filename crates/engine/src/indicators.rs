@@ -760,13 +760,14 @@ impl Engine {
             Ok((s.indicator_instances()?, s.instrument(&key)?))
         })
         .await?;
-        let (bars, generation) = match self.shared.replay_bars(id, tf, MAX_INDICATOR_BARS) {
+        let replayed = self.shared.with_replay_bars(id, tf, |inst, candles| {
+            let newest = &candles[candles.len().saturating_sub(MAX_INDICATOR_BARS)..];
+            Arc::new(to_bars(newest, inst))
+        });
+        let (bars, generation) = match replayed {
             // A replay computes over its revealed bars only, never the cache; a fresh
             // generation keeps its results apart from the cache's in the memo.
-            Some((inst, candles)) => (
-                Arc::new(to_bars(&candles, &inst)),
-                self.shared.bar_state().next_generation(),
-            ),
+            Some(bars) => (bars, self.shared.bar_state().next_generation()),
             None => {
                 let inst = inst.ok_or_else(|| EngineError::UnknownInstrument(id.clone()))?;
                 let shared = self.shared.clone();

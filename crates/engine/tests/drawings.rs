@@ -343,3 +343,51 @@ async fn position_outcomes_reject_an_invalid_position() {
         "{err:?}"
     );
 }
+
+#[tokio::test]
+async fn position_outcomes_in_a_replay_see_only_the_revealed_bars() {
+    let f = Fixture::new();
+    let t0 = NOW / H * H;
+    f.store()
+        .upsert_candles(
+            &id("BTCUSDT"),
+            Timeframe::H1,
+            &[
+                bar(t0, 13_000, 8_000),
+                bar(t0 + H, 10_500, 9_500),
+                bar(t0 + 2 * H, 12_100, 9_900), // reaches the take
+            ],
+        )
+        .unwrap();
+    let positions = vec![("take".to_owned(), long(t0 + 10, t0 + 5 * H))];
+    let outcome = || async {
+        f.engine
+            .position_outcomes(&id("BTCUSDT"), Timeframe::H1, positions.clone())
+            .await
+            .unwrap()[0]
+            .1
+    };
+    f.engine
+        .replay_start(&id("BTCUSDT"), Timeframe::H1, t0 + H)
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome().await.status,
+        Status::Open,
+        "the take bar is not revealed"
+    );
+    f.engine.replay_step(1).unwrap();
+    assert_eq!(outcome().await.status, Status::Take);
+    assert_eq!(outcome().await.exit_time, Some(t0 + 2 * H));
+
+    f.engine
+        .replay_start(&id("BTCUSDT"), Timeframe::H1, t0 + H)
+        .await
+        .unwrap();
+    f.engine.replay_exit();
+    assert_eq!(
+        outcome().await.status,
+        Status::Take,
+        "the cache again after the replay"
+    );
+}

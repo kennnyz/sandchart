@@ -66,7 +66,8 @@ impl Engine {
     }
 
     /// The outcome of each position over the cached candles of `tf`, in the order given.
-    /// Bars that are not cached do not count, so such a position may show as open.
+    /// Bars that are not cached do not count, so such a position may show as open. While a
+    /// replay of `(id, tf)` is open, only its revealed bars count.
     pub async fn position_outcomes(
         &self,
         id: &InstrumentId,
@@ -82,6 +83,22 @@ impl Engine {
         for (drawing_id, p) in &positions {
             p.validate()
                 .map_err(|e| EngineError::Drawing(format!("position {drawing_id}: {e}")))?;
+        }
+        // In a replay only the revealed bars count, so no outcome gives a later bar away.
+        let replayed = self.shared.with_replay_bars(id, tf, |_, bars| {
+            positions
+                .iter()
+                .map(|(drawing_id, p)| {
+                    let start = bars.partition_point(|c| c.open_time <= p.entry.t);
+                    (
+                        drawing_id.clone(),
+                        p.resolve_iter(bars[start..].iter().copied()),
+                    )
+                })
+                .collect::<Vec<_>>()
+        });
+        if let Some(outcomes) = replayed {
+            return Ok(outcomes);
         }
         let id = id.clone();
         blocking(&self.shared.store, move |s| {

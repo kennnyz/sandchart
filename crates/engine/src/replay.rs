@@ -67,22 +67,21 @@ impl crate::Shared {
         self.replay.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// The revealed bars (the newest `max`, up to the current one) and the instrument of
-    /// the open replay, if it replays `(id, tf)`. Indicators compute over these only, so
-    /// they never see a bar the UI has not been shown (ADR 0005, decision 5).
-    pub(crate) fn replay_bars(
+    /// Runs `f` over the instrument and the revealed bars (up to the current one) of the
+    /// open replay, if it replays `(id, tf)`. Indicators and position outcomes read these
+    /// instead of the cache, so they never see a bar the UI has not been shown (ADR 0005,
+    /// decision 5).
+    pub(crate) fn with_replay_bars<R>(
         &self,
         id: &InstrumentId,
         tf: Timeframe,
-        max: usize,
-    ) -> Option<(Instrument, Vec<Candle>)> {
+        f: impl FnOnce(&Instrument, &[Candle]) -> R,
+    ) -> Option<R> {
         let guard = self.session();
         let s = guard
             .as_ref()
             .filter(|s| s.instrument.id == *id && s.tf == tf)?;
-        let end = s.current as usize + 1;
-        let revealed = &s.candles[end.saturating_sub(max)..end];
-        Some((s.instrument.clone(), revealed.to_vec()))
+        Some(f(&s.instrument, &s.candles[..=s.current as usize]))
     }
 
     /// Live events of this instrument are held back while it is replayed.
