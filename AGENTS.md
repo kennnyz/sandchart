@@ -24,6 +24,7 @@ Sandchart is a desktop chart app: a Rust core (candles, providers, SQLite cache)
 | `crates/core/src/alert.rs`, `crates/engine/src/alerts.rs` | Alerts (ADR 0007): the model, trend line levels (`Level::at`) and the firing rule (`fires`) in core; in the engine the armed set, one live stream per pair with an active alert (the chart's when it shows the pair, else the engine's own 1-minute one, started by `run_alerts`), the stream cap `MAX_LIVE_STREAMS` over both, and `AlertEvent`. Tauri shows fired ones as OS notifications from Rust (`app/src-tauri/src/alerts.rs`). In the UI `src/state/alerts.ts`, `components/AlertsPanel.tsx`; `backend/mockAlerts.ts` is the TEST-ONLY copy of the rule. User guide: `docs/alerts.md`. |
 | `crates/core/tests/fixtures/alerts.json` | Hand-written alert cases (levels, firing, validation) read by `crates/core/tests/alert.rs` and `app/ui/src/backend/mockAlerts.test.ts`. Add a case for every rule change, computed by hand. |
 | `crates/core/tests/fixtures/replay.json` | Hand-written replay cases (simulate, stats, files with their sha256) read by both `crates/core/tests/replay.rs` and `app/ui/src/backend/mockReplay.test.ts`, so the Rust simulation and the mock's copy cannot drift. Add a case there for every rule change, computed by hand, never with the code under test. |
+| `crates/mcp` | The `sandchart-mcp` MCP server (ADR 0006): stdio only, on `rmcp`. `lib.rs` holds the tools (`#[tool_router]` on `Sandchart`), `wire.rs` their inputs (serde + `schemars`, camelCase, `deny_unknown_fields`) and the JSON they return. It opens the app's data folder with `Engine::open_secondary`. Tests in `tests/tools.rs` drive it through an rmcp client over an in-memory pipe against a wiremock Binance. User guide: `docs/mcp.md`. |
 | `deny.toml` | cargo-deny licence and ban policy. |
 | `docs/adr` | Architecture decision records. |
 
@@ -113,6 +114,16 @@ Read ADR 0004 and `docs/drawings.md` first. The chart core has no per-tool code:
 4. Add it to `TOOLS` in `registry.ts`. Pick a free Alt shortcut (`code`, not R or M, which are the ruler and the magnet); `tools.test.ts` checks the shortcuts do not clash. If it has options, add them to `BodyOptions` in `app/ui/src/components/DrawingStyle.tsx`.
 5. Add `tools.<name>` (and any other strings) to `en.json` and `ru.json`.
 6. Tests: geometry and editing in `app/ui/src/chart/drawings/tools.test.ts`, an end-to-end placement and reload in `app/ui/e2e/drawings.spec.ts`, and a line for the tool in `docs/drawings.md`.
+
+## Add an MCP tool
+
+Read ADR 0006 and `docs/mcp.md` first. A tool is a thin wrapper: the work is in the engine or core, never in `crates/mcp`.
+
+1. Add the input struct to `crates/mcp/src/wire.rs` with `#[serde(rename_all = "camelCase", deny_unknown_fields)]` and `JsonSchema`; doc comments become the schema's descriptions, so keep them to one line. Reuse core types (they derive `JsonSchema` behind the `schema` feature) instead of copying them. Prices go in as ticks with a `priceScale`; outputs add a `<field>Decimal` string next to every tick field.
+2. Add a method with `#[tool(description = "...", annotations(read_only_hint = ...))]` to the `#[tool_router] impl Sandchart` in `lib.rs`, returning `ToolResult`. Check every limit and fail with a sentence the agent can act on (`Err(String)`); never fall back to a default silently. Run blocking store calls with `blocking`.
+3. The description is read by agents on every session: one or two sentences, what it returns and any limit that matters (alerts: only while the app runs).
+4. Tests in `crates/mcp/tests/tools.rs`: the happy path, each validation error with its message, and the tool's name in `TOOLS`. No test may touch the real network.
+5. Document the tool with an input table and an example in `docs/mcp.md`.
 
 ## Rules
 
