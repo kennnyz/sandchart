@@ -487,6 +487,10 @@ async fn drawings_are_saved_listed_and_deleted_with_the_apps_rules() {
         json!({ "color": 0, "width": 1, "dash": false })
     );
     assert!(saved["updatedAt"].as_i64().unwrap() > 0);
+    assert_eq!(
+        saved["body"],
+        json!({ "kind": "hline", "p": 12_345, "pDecimal": "123.45" })
+    );
 
     // Ticks at another price scale are a mistake (10x or 100x off), not rescaled.
     let trend = json!({
@@ -944,4 +948,52 @@ async fn a_position_is_resolved_from_its_end_back_and_refused_past_5000_bars() {
 
     let e = h.fail("position_outcome", position(100, 6_400)).await;
     assert_contains(&e, "more than 5000 bars before endT");
+}
+
+#[tokio::test]
+async fn every_price_of_a_drawing_comes_with_its_decimal_and_saves_back_as_it_is() {
+    let h = harness().await;
+    let pt = |t: i64, p: i64| json!({ "t": T0 + t * H, "p": p });
+    let save = |body: Value| {
+        json!({ "symbol": "BTCUSDT", "priceScale": 2, "body": body })
+    };
+    let cases = [
+        (
+            json!({ "kind": "trend", "a": pt(0, 10_000), "b": pt(1, 10_150),
+                    "extendLeft": false, "extendRight": false }),
+            json!({ "kind": "trend", "a": { "t": T0, "p": 10_000, "pDecimal": "100.00" },
+                    "b": { "t": T0 + H, "p": 10_150, "pDecimal": "101.50" },
+                    "extendLeft": false, "extendRight": false }),
+        ),
+        (
+            json!({ "kind": "position", "side": "long", "entry": pt(0, 10_000), "stop": 9_900,
+                    "take": 10_250, "endT": T0 + 5 * H }),
+            json!({ "kind": "position", "side": "long",
+                    "entry": { "t": T0, "p": 10_000, "pDecimal": "100.00" },
+                    "stop": 9_900, "stopDecimal": "99.00", "take": 10_250, "takeDecimal": "102.50",
+                    "endT": T0 + 5 * H }),
+        ),
+        (
+            json!({ "kind": "brush", "points": [pt(0, 5), pt(1, -7)] }),
+            json!({ "kind": "brush", "points": [
+                { "t": T0, "p": 5, "pDecimal": "0.05" }, { "t": T0 + H, "p": -7, "pDecimal": "-0.07" }
+            ] }),
+        ),
+    ];
+    for (body, want) in cases {
+        let saved = h.call("save_drawing", save(body)).await;
+        assert_eq!(saved["body"], want);
+        // What an agent read can be saved back unchanged.
+        let mut again = save(saved["body"].clone());
+        again["id"] = saved["id"].clone();
+        assert_eq!(h.call("save_drawing", again).await["body"], want);
+    }
+    let fib = h
+        .call(
+            "save_drawing",
+            save(json!({ "kind": "fib", "a": pt(0, 1), "b": pt(1, 2), "levels": [0, 0.5, 1] })),
+        )
+        .await;
+    assert_eq!(fib["body"]["levels"], json!([0.0, 0.5, 1.0]));
+    assert_eq!(fib["body"]["b"]["pDecimal"], "0.02");
 }

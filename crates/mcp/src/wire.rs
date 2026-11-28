@@ -183,13 +183,32 @@ pub fn candle(c: &Candle, i: &Instrument) -> Value {
     })
 }
 
+/// A drawing body with `<field>Decimal` next to every price: `p`, `stop`, `take`, and `p`
+/// of the points `a`, `b`, `entry` and `points`. Saving it back works: the extra fields
+/// are ignored on input.
+fn body(b: &DrawingBody, scale: u8) -> Value {
+    let mut v = json!(b);
+    add_decimals(&mut v, &["p", "stop", "take"], scale);
+    for k in ["a", "b", "entry"] {
+        if let Some(point) = v.get_mut(k) {
+            add_decimals(point, &["p"], scale);
+        }
+    }
+    if let Some(Value::Array(points)) = v.get_mut("points") {
+        for point in points {
+            add_decimals(point, &["p"], scale);
+        }
+    }
+    v
+}
+
 pub fn drawing(d: &Drawing) -> Value {
     json!({
         "id": d.id,
         "source": d.instrument.source,
         "symbol": d.instrument.symbol,
         "priceScale": d.price_scale,
-        "body": d.body,
+        "body": body(&d.body, d.price_scale),
         "style": d.style,
         "locked": d.locked,
         "z": d.z,

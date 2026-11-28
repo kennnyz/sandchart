@@ -170,13 +170,13 @@ A marker series comes as `{ "id": "...", "markers": [ { "time": ..., "shape": "u
 
 ### list_drawings
 
-The drawings of a pair in paint order. Input: `source`, `symbol`.
+The drawings of a pair in paint order. Input: `source`, `symbol`. Every price in a `body` comes with its decimal string next to it: `pDecimal` beside each `p` (also inside the points `a`, `b`, `entry` and `points`), `stopDecimal` and `takeDecimal`. A drawing read here can be saved back as it is; the decimal fields are ignored on input.
 
 ```json
 { "instrument": { "symbol": "BTCUSDT", "priceScale": 2, "...": "..." },
   "drawings": [
     { "id": "mcp-1a2b-...", "source": "binance", "symbol": "BTCUSDT", "priceScale": 2,
-      "body": { "kind": "hline", "p": 6000000 }, "style": { "color": 0, "width": 1, "dash": false },
+      "body": { "kind": "hline", "p": 6000000, "pDecimal": "60000.00" }, "style": { "color": 0, "width": 1, "dash": false },
       "locked": false, "z": 0, "updatedAt": 1795766400123 }
   ] }
 ```
