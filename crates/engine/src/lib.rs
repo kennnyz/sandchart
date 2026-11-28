@@ -210,19 +210,37 @@ impl Engine {
     ) -> Result<Engine, EngineError> {
         let runtime = Runtime::new(Limits::default(), cache_dir.map(Path::to_path_buf))
             .map_err(|e| format!("the indicator runtime could not start: {e}"));
-        Self::open_with_runtime(data_dir, providers, clock, runtime)
+        Self::open_with_runtime(data_dir, providers, clock, runtime, true)
+    }
+
+    /// Like [`Engine::open`] for a second process next to the app on the same data folder,
+    /// such as the MCP server: it reads and writes the same database and loads the same
+    /// indicators, but never deletes module files or prunes the compiled-module cache,
+    /// because the app may be installing a module at that moment. It does not need
+    /// [`Engine::run_alerts`]: the app evaluates the alerts.
+    pub fn open_secondary(
+        data_dir: &Path,
+        cache_dir: Option<&Path>,
+        providers: Vec<Arc<dyn Provider>>,
+    ) -> Result<Engine, EngineError> {
+        let runtime = Runtime::new(Limits::default(), cache_dir.map(Path::to_path_buf))
+            .map_err(|e| format!("the indicator runtime could not start: {e}"));
+        Self::open_with_runtime(data_dir, providers, Arc::new(system_now_ms), runtime, false)
     }
 
     /// Opens the engine with an indicator runtime that may have failed to start: then
-    /// charts still work and every indicator method returns that error.
+    /// charts still work and every indicator method returns that error. `housekeeping`
+    /// lets the indicator loader delete unused module files and compiled modules.
     fn open_with_runtime(
         data_dir: &Path,
         providers: Vec<Arc<dyn Provider>>,
         clock: Clock,
         runtime: Result<Runtime, String>,
+        housekeeping: bool,
     ) -> Result<Engine, EngineError> {
         let store = Arc::new(Mutex::new(Store::open(&data_dir.join("sandchart.db"))?));
-        let indicators = indicators::Service::start(data_dir, runtime, Arc::clone(&store));
+        let indicators =
+            indicators::Service::start(data_dir, runtime, Arc::clone(&store), housekeeping);
         let (connection, _) = watch::channel(ConnectionState::Connecting);
         Ok(Engine {
             shared: Shared {
@@ -350,6 +368,7 @@ mod tests {
             vec![],
             Arc::new(|| 0),
             Err("the indicator runtime could not start: injected".into()),
+            true,
         )
         .unwrap();
         assert!(engine.indicators_ready());

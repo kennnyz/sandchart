@@ -14,8 +14,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use sandchart_core::{Candle, Instrument, InstrumentId, Timeframe};
 use sandchart_indicators::{
-    Bar, Meta, Module, ParamValue, REPAINT_BARS, REPAINT_PREFIXES, Runtime, SeriesData, SeriesOut,
-    builtins, check_repaint, is_user_id, module_hash, sample_bars,
+    Bar, Meta, Module, ParamKind, ParamValue, REPAINT_BARS, REPAINT_PREFIXES, Runtime, SeriesData,
+    SeriesOut, builtins, check_repaint, is_user_id, module_hash, sample_bars,
 };
 use sandchart_store::{Store, StoreError, StoredInstance, StoredModule};
 use serde::{Deserialize, Serialize};
@@ -222,11 +222,13 @@ impl Drop for ReadyOnDrop {
 impl Service {
     /// Starts a background thread that loads the built-ins and every installed module
     /// with `runtime`; returns without waiting for it. A runtime that failed to start
-    /// leaves the service ready and empty, with that error.
+    /// leaves the service ready and empty, with that error. Without `housekeeping` (a
+    /// second process) no module file or compiled module is deleted.
     pub(crate) fn start(
         data_dir: &Path,
         runtime: Result<Runtime, String>,
         store: Arc<Mutex<Store>>,
+        housekeeping: bool,
     ) -> Service {
         let (ready, _) = watch::channel(false);
         let service = Service {
@@ -252,7 +254,7 @@ impl Service {
             .name("indicator-load".into())
             .spawn(move || {
                 let _done = done;
-                load_all(&runtime, &store, &dir, &modules, &problems);
+                load_all(&runtime, &store, &dir, &modules, &problems, housekeeping);
             });
         // On failure the closure, and with it `done`, is dropped: ready.
         if let Err(e) = spawned {
@@ -281,6 +283,7 @@ fn load_all(
     dir: &Path,
     modules: &Mutex<HashMap<String, Loaded>>,
     problems: &Mutex<Problems>,
+    housekeeping: bool,
 ) {
     let mut keep = Vec::new();
     for (id, bytes) in builtins() {
@@ -303,7 +306,16 @@ fn load_all(
     }
     let rows = lock(store).indicator_modules();
     // Without the rows nothing is known to be unused, so nothing is deleted or pruned.
-    if !load_installed(runtime, rows, dir, modules, problems, &mut keep) {
+    let loaded = load_installed(
+        runtime,
+        rows,
+        dir,
+        modules,
+        problems,
+        &mut keep,
+        housekeeping,
+    );
+    if !loaded || !housekeeping {
         return;
     }
     if let Err(e) = runtime.prune_cache(&keep) {
@@ -311,9 +323,9 @@ fn load_all(
     }
 }
 
-/// Loads the installed modules of `rows` and deletes module files no row references.
-/// Returns false, touching no file, when the rows could not be read: a failed read
-/// must not make every installed module look unused.
+/// Loads the installed modules of `rows` and, with `housekeeping`, deletes module files
+/// no row references. Returns false, touching no file, when the rows could not be read:
+/// a failed read must not make every installed module look unused.
 fn load_installed(
     runtime: &Runtime,
     rows: Result<Vec<StoredModule>, StoreError>,
@@ -321,6 +333,7 @@ fn load_installed(
     modules: &Mutex<HashMap<String, Loaded>>,
     problems: &Mutex<Problems>,
     keep: &mut Vec<[u8; 32]>,
+    housekeeping: bool,
 ) -> bool {
     let rows = match rows {
         Ok(rows) => rows,
@@ -331,7 +344,9 @@ fn load_installed(
             return false;
         }
     };
-    delete_orphans(dir, &rows);
+    if housekeeping {
+        delete_orphans(dir, &rows);
+    }
     for row in rows {
         let path = module_file(dir, &row.sha256);
         let bytes = match std::fs::read(&path) {
@@ -849,6 +864,57 @@ impl Engine {
         Ok(out)
     }
 
+    /// Computes one indicator with `params` over the same bars as the chart (every cached
+    /// bar of `(id, tf)` up to [`MAX_INDICATOR_BARS`], or a replay's revealed bars) and
+    /// keeps the last `last_n`. Returns the open times of the kept bars with the result.
+    /// Unlike chart instances, a parameter the module does not have or a value outside its
+    /// range is an error, never replaced by the default. The chart's instances are untouched.
+    pub async fn compute_indicator(
+        &self,
+        id: &InstrumentId,
+        tf: Timeframe,
+        module_id: &str,
+        params: Vec<(String, ParamValue)>,
+        last_n: usize,
+    ) -> Result<(Vec<i64>, Computed), EngineError> {
+        let svc = &self.indicators;
+        svc.wait_ready().await?;
+        let loaded = svc
+            .loaded(module_id)
+            .ok_or_else(|| EngineError::Indicator(format!("no indicator {module_id:?}")))?;
+        let resolved = loaded.module.resolve_params(&params);
+        check_params(loaded.module.meta(), &params, &resolved)?;
+
+        let bars = match self.shared.replay_bars(id, tf) {
+            Some(r) => {
+                spawn_blocking(move || {
+                    let candles = r.revealed();
+                    let newest = &candles[candles.len().saturating_sub(MAX_INDICATOR_BARS)..];
+                    Ok(Arc::new(to_bars(newest, &r.instrument)))
+                })
+                .await?
+            }
+            None => {
+                let (store, key) = (Arc::clone(&self.shared.store), id.clone());
+                let inst = spawn_blocking(move || Ok(lock(&store).instrument(&key)?))
+                    .await?
+                    .ok_or_else(|| EngineError::UnknownInstrument(id.clone()))?;
+                let shared = self.shared.clone();
+                spawn_blocking(move || Ok(cached_bars(&shared, &inst, tf)?.0)).await?
+            }
+        };
+        let module = loaded.module.clone();
+        spawn_blocking(move || {
+            let start = bars.len().saturating_sub(last_n);
+            let from_time = bars.get(start).map_or(i64::MAX, |b| b.time);
+            let computed = compute_one(&module, &resolved, &bars, from_time)
+                .map_err(EngineError::Indicator)?;
+            let times = bars[start..].iter().map(|b| b.time).collect();
+            Ok((times, computed))
+        })
+        .await
+    }
+
     pub fn indicator_stats(&self) -> IndicatorStats {
         IndicatorStats {
             store_reads: self.indicators.store_reads.load(Ordering::Relaxed),
@@ -884,6 +950,55 @@ fn cached_bars(
     Ok((bars, generation, true))
 }
 
+/// Every given parameter must exist and survive [`Module::resolve_params`] unchanged.
+fn check_params(
+    meta: &Meta,
+    given: &[(String, ParamValue)],
+    resolved: &[(String, ParamValue)],
+) -> Result<(), EngineError> {
+    for (name, value) in given {
+        let Some(spec) = meta.params.iter().find(|p| p.id == *name) else {
+            let names: Vec<&str> = meta.params.iter().map(|p| p.id.as_str()).collect();
+            return Err(EngineError::Indicator(format!(
+                "{} has no parameter {name:?}; its parameters are: {}",
+                meta.id,
+                if names.is_empty() {
+                    "none".to_owned()
+                } else {
+                    names.join(", ")
+                }
+            )));
+        };
+        if resolved.iter().all(|(n, v)| n != name || v != value) {
+            return Err(EngineError::Indicator(format!(
+                "parameter {name:?} of {}: {} does not fit {}",
+                meta.id,
+                describe_value(value),
+                describe_kind(&spec.kind)
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn describe_value(v: &ParamValue) -> String {
+    match v {
+        ParamValue::Int(i) => format!("the integer {i}"),
+        ParamValue::Float(f) => format!("the number {f}"),
+        ParamValue::Boolean(b) => format!("the boolean {b}"),
+        ParamValue::Choice(c) => format!("the choice {c:?}"),
+    }
+}
+
+fn describe_kind(k: &ParamKind) -> String {
+    match k {
+        ParamKind::Int { min, max } => format!("an integer in {min}..={max}"),
+        ParamKind::Float { min, max } => format!("a number in {min}..={max}"),
+        ParamKind::Boolean => "true or false".to_owned(),
+        ParamKind::Choice(options) => format!("one of {options:?}"),
+    }
+}
+
 fn compute_one(
     module: &Module,
     params: &[(String, ParamValue)],
@@ -917,7 +1032,15 @@ mod tests {
         let mut keep = Vec::new();
 
         let rows = Err(StoreError::LimitTooLarge(0));
-        load_installed(&runtime, rows, dir.path(), &modules, &problems, &mut keep);
+        load_installed(
+            &runtime,
+            rows,
+            dir.path(),
+            &modules,
+            &problems,
+            &mut keep,
+            true,
+        );
 
         assert!(file.exists(), "an installed module file was deleted");
         assert!(guard(&modules).is_empty());

@@ -804,3 +804,83 @@ async fn a_replay_memoises_results_until_a_step_or_another_session() {
     f.compute(i64::MIN).await;
     assert_eq!(calls(), first + 2);
 }
+
+#[tokio::test]
+async fn one_indicator_computes_over_every_cached_bar_and_keeps_the_last_n() {
+    let f = fixture().await;
+    f.cache_candles("BTCUSDT", three()).await;
+    let params = vec![("period".to_owned(), ParamValue::Int(2))];
+    let (times, c) = f
+        .engine
+        .compute_indicator(&id("BTCUSDT"), TF, "builtin.sma", params, 2)
+        .await
+        .unwrap();
+    assert_eq!(times, [NOW_OPEN - H, NOW_OPEN]);
+    assert_eq!((c.first_time, c.last_time), (NOW_OPEN - H, NOW_OPEN));
+    match &c.series[0].data {
+        // The first kept value uses the bar before it: the window is not cut first.
+        SeriesData::Values(v) => assert!(same(v, &[100.5, 101.5])),
+        SeriesData::Markers(_) => panic!("expected values"),
+    }
+    // The chart's instances are not touched.
+    assert!(f.engine.chart_indicators().await.unwrap().is_empty());
+
+    let (times, _) = f
+        .engine
+        .compute_indicator(&id("BTCUSDT"), TF, "builtin.sma", vec![], 10)
+        .await
+        .unwrap();
+    assert_eq!(times.len(), 3, "last_n past the cached bars keeps them all");
+}
+
+#[tokio::test]
+async fn one_indicator_refuses_parameters_it_would_replace_by_defaults() {
+    let f = fixture().await;
+    f.cache_candles("BTCUSDT", three()).await;
+    let run = |module: &'static str, params: Vec<(&'static str, ParamValue)>| {
+        let params = params.into_iter().map(|(k, v)| (k.to_owned(), v)).collect();
+        let engine = &f.engine;
+        async move {
+            engine
+                .compute_indicator(&id("BTCUSDT"), TF, module, params, 3)
+                .await
+                .unwrap_err()
+                .to_string()
+        }
+    };
+    let err = run("builtin.sma", vec![("length", ParamValue::Int(3))]).await;
+    assert!(err.contains("no parameter \"length\""), "{err}");
+    assert!(err.contains("period"), "{err}");
+    let err = run("builtin.sma", vec![("period", ParamValue::Int(0))]).await;
+    assert!(err.contains("\"period\"") && err.contains("1"), "{err}");
+    let err = run("builtin.sma", vec![("period", ParamValue::Float(2.0))]).await;
+    assert!(err.contains("\"period\""), "{err}");
+    let err = run("me.missing", vec![]).await;
+    assert!(err.contains("no indicator \"me.missing\""), "{err}");
+}
+
+#[tokio::test]
+async fn a_secondary_process_never_deletes_the_apps_module_files() {
+    let f = fixture().await;
+    f.install("ok_echo").await;
+    let stray = f
+        .dir
+        .path()
+        .join("indicators")
+        .join(format!("{}.wasm", "cd".repeat(32)));
+    std::fs::write(
+        &stray,
+        b"written by an install that has not stored its row yet",
+    )
+    .unwrap();
+
+    let secondary = Engine::open_secondary(
+        f.dir.path(),
+        Some(f.cache.path()),
+        vec![f.provider.clone() as Arc<dyn Provider>],
+    )
+    .unwrap();
+    let list = secondary.indicators().await.indicators;
+    assert!(list.iter().any(|i| i.meta.id == "test.echo"));
+    assert!(stray.exists(), "a secondary process deleted a module file");
+}
