@@ -677,8 +677,10 @@ export function createMockBackend(opts: MockOptions): MockBackend {
     }
   }
 
-  function replayStateOf(s: MockSession, cursor: number): ReplayState {
+  function replayStateOf(s: MockSession, cursor: number, tradesFrom: number): ReplayState {
     const { trades, stats } = simulateOrThrow(s, s.commands);
+    const closed = trades.length - (trades.at(-1)?.reason === "open" ? 1 : 0);
+    const tf = Math.min(tradesFrom, closed);
     const from = Math.min(cursor, s.current + 1);
     const bars = column();
     for (const c of s.candles.slice(from, s.current + 1)) {
@@ -697,8 +699,8 @@ export function createMockBackend(opts: MockOptions): MockBackend {
       atEnd: s.current + 1 >= s.total,
       from,
       bars,
-      commands: structuredClone(s.commands),
-      trades,
+      tradesFrom: tf,
+      trades: trades.slice(tf),
       stats,
     };
   }
@@ -798,7 +800,7 @@ export function createMockBackend(opts: MockOptions): MockBackend {
         current: i - ctx,
         commands: [],
       };
-      return replayStateOf(session, 0);
+      return replayStateOf(session, 0, 0);
     },
 
     async replayStep(n) {
@@ -816,9 +818,9 @@ export function createMockBackend(opts: MockOptions): MockBackend {
       s.commands = next;
     },
 
-    async replayState(cursor) {
+    async replayState(cursor, tradesFrom) {
       await delay();
-      return replayStateOf(openSession(), cursor);
+      return replayStateOf(openSession(), cursor, tradesFrom);
     },
 
     async replaySave() {
@@ -838,7 +840,7 @@ export function createMockBackend(opts: MockOptions): MockBackend {
         throw problem(e instanceof Error ? e.message : String(e));
       }
       session = { ...f, total: f.candles.length, make: null };
-      return replayStateOf(session, 0);
+      return replayStateOf(session, 0, 0);
     },
 
     async replayExit() {

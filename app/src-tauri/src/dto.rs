@@ -1,7 +1,7 @@
 //! Wire types of the Tauri commands and events. JSON is camelCase; candles are columnar
 //! so a 200 000-candle history is six flat arrays, not 200 000 objects.
 
-use sandchart_core::replay::{Command, Stats, Trade};
+use sandchart_core::replay::{Stats, Trade};
 use sandchart_core::{
     Candle, Drawing, DrawingBody, Instrument, InstrumentId, JS_SAFE_MAX, Outcome, PositionBody,
     Style,
@@ -562,7 +562,7 @@ pub struct PositionOutcomeDto {
 // Replay.
 
 /// The replay session as the UI sees it: the revealed bars from index `from` on (never a
-/// bar after `current`), the commands so far, and the trades and statistics from Rust.
+/// bar after `current`), the trades from index `tradesFrom` on, and the statistics.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReplayStateDto {
@@ -573,13 +573,13 @@ pub struct ReplayStateDto {
     pub at_end: bool,
     pub from: u32,
     pub bars: ColumnsDto,
-    pub commands: Vec<Command>,
+    pub trades_from: u32,
     pub trades: Vec<Trade>,
     pub stats: Stats,
 }
 
 pub fn to_replay_state_dto(s: ReplayState) -> Result<ReplayStateDto, DtoError> {
-    for t in &s.simulation.trades {
+    for t in &s.trades {
         for v in [t.entry_time, t.entry_price, t.initial_stop, t.stop, t.take]
             .into_iter()
             .chain(t.exit_time)
@@ -596,9 +596,9 @@ pub fn to_replay_state_dto(s: ReplayState) -> Result<ReplayStateDto, DtoError> {
         current: s.current,
         at_end: s.at_end,
         from: s.from,
-        commands: s.commands,
-        trades: s.simulation.trades,
-        stats: s.simulation.stats,
+        trades_from: s.trades_from,
+        trades: s.trades,
+        stats: s.stats,
     })
 }
 
@@ -994,7 +994,7 @@ mod tests {
 
     #[test]
     fn replay_state_json_matches_the_ui_types() {
-        use sandchart_core::replay::{Simulation, simulate};
+        use sandchart_core::replay::{Command, Simulation, simulate};
         use sandchart_core::{Side, Timeframe};
         let candles: Vec<Candle> = (0..4).map(|i| candle(i, 110 + i)).collect();
         let commands = vec![Command::Open {
@@ -1012,8 +1012,9 @@ mod tests {
             at_end: false,
             from: 3,
             bars: candles[3..].to_vec(),
-            commands,
-            simulation,
+            trades_from: 0,
+            trades: simulation.trades,
+            stats: simulation.stats,
         };
         let json = serde_json::to_value(to_replay_state_dto(state).unwrap()).unwrap();
         assert_eq!(
@@ -1028,7 +1029,7 @@ mod tests {
                     "time": [1_700_000_180_000i64], "open": [103], "high": [123], "low": [93],
                     "close": [113], "volume": [8]
                 },
-                "commands": [{ "kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 140 }],
+                "tradesFrom": 0,
                 "trades": [{
                     "side": "long", "entryBar": 1, "entryTime": 1_700_000_060_000i64,
                     "entryPrice": 111, "initialStop": 90, "stop": 90, "take": 140,

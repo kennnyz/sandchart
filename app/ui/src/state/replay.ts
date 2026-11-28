@@ -124,6 +124,8 @@ export class ReplayController {
   /** A call is running (buttons that would queue another one disable). */
   busy = false;
   private cursor = 0;
+  /** Closed trades so far; they never change, so only later ones are asked for. */
+  private closed: ReplayTrade[] = [];
   private feed: ReplayFeed | null = null;
   private switchTo: ((id: InstrumentId, tf: TimeframeCode) => void) | null = null;
   private queue: Promise<void> = Promise.resolve();
@@ -270,7 +272,7 @@ export class ReplayController {
   resync(): Promise<void> {
     return this.run(async () => {
       if (this.phase !== "on") return;
-      const st = await this.backend.replayState(0);
+      const st = await this.backend.replayState(0, 0);
       this.cursor = 0;
       this.show(st);
     });
@@ -291,6 +293,7 @@ export class ReplayController {
       this.phase = "off";
       this.view = null;
       this.cursor = 0;
+      this.closed = [];
       this.changed();
       try {
         await this.backend.replayExit();
@@ -323,11 +326,11 @@ export class ReplayController {
   }
 
   private async sync(): Promise<void> {
-    const st = await this.backend.replayState(this.cursor);
+    const st = await this.backend.replayState(this.cursor, this.closed.length);
     if (this.phase !== "on") return;
     if (st.from !== this.cursor) {
       // Not where the chart is: show everything again.
-      const all = await this.backend.replayState(0);
+      const all = await this.backend.replayState(0, 0);
       this.cursor = 0;
       this.show(all);
       return;
@@ -339,6 +342,7 @@ export class ReplayController {
   private show(st: ReplayState): void {
     this.feed?.show(st);
     this.view = null;
+    this.closed = [];
     this.apply(st);
   }
 
@@ -346,6 +350,10 @@ export class ReplayController {
     const n = st.bars.time.length;
     this.cursor = st.from + n;
     const prev = this.view;
+    const trades = [...this.closed.slice(0, st.tradesFrom), ...st.trades];
+    const last = trades.at(-1);
+    const open = last?.reason === "open" ? last : null;
+    this.closed = open ? trades.slice(0, -1) : trades;
     this.view = {
       instrument: st.instrument,
       tf: st.tf,
@@ -354,9 +362,9 @@ export class ReplayController {
       atEnd: st.atEnd,
       time: n > 0 ? st.bars.time[n - 1]! : (prev?.time ?? 0),
       close: n > 0 ? st.bars.close[n - 1]! : (prev?.close ?? 0),
-      trades: st.trades,
+      trades,
       stats: st.stats,
-      open: st.trades.find((t) => t.reason === "open") ?? null,
+      open,
     };
     if (st.atEnd) this.pause();
     this.changed();

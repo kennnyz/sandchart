@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMockBackend } from "../backend/mock";
-import type { CandleColumns, ReplayState } from "../backend/types";
+import type { CandleColumns, ReplayCommand, ReplayState } from "../backend/types";
 import { clampLevel, defaultLevels, ReplayController, replayKeyAction, validLevels, type ReplayKey } from "./replay";
 
 const id = { source: "mock", symbol: "BTCUSDT" };
@@ -146,6 +146,12 @@ describe("replay controller", () => {
 
   it("edits only changed levels, refuses invalid ones, and closes manually", async () => {
     const { c, backend } = await started();
+    const sent: ReplayCommand[] = [];
+    const send = backend.replayCommand.bind(backend);
+    vi.spyOn(backend, "replayCommand").mockImplementation((cmd) => {
+      sent.push(cmd);
+      return send(cmd);
+    });
     await c.sell();
     const t = c.view!.open!;
     const close = c.view!.close;
@@ -154,15 +160,13 @@ describe("replay controller", () => {
     // Far levels, so the next (noisy) mock bar reaches neither.
     await c.edit(t.stop + 2_000, t.take);
     await c.edit(t.stop + 2_000, t.take - 2_000);
-    let st = await backend.replayState(0);
-    expect(st.commands.slice(1)).toEqual([
+    expect(sent.slice(1)).toEqual([
       { kind: "edit", bar: 500, stop: t.stop + 2_000 },
       { kind: "edit", bar: 500, take: t.take - 2_000 },
     ]);
     await c.step();
     await c.closeTrade();
-    st = await backend.replayState(0);
-    expect(st.commands.at(-1)).toEqual({ kind: "close", bar: 501 });
+    expect(sent.at(-1)).toEqual({ kind: "close", bar: 501 });
     expect(c.view!.open).toBeNull();
     expect(c.view!.trades[0]).toMatchObject({ reason: "manual", exitBar: 501, initialStop: t.stop });
     expect(c.view!.stats.count).toBe(1);
@@ -195,7 +199,7 @@ describe("replay controller", () => {
     expect(c.phase).toBe("off");
     expect(c.view).toBeNull();
     expect(feed.reloads).toBe(1);
-    await expect(backend.replayState(0)).rejects.toMatchObject({ message: "no replay is open" });
+    await expect(backend.replayState(0, 0)).rejects.toMatchObject({ message: "no replay is open" });
 
     await c.open(new TextEncoder().encode(text));
     expect(c.phase).toBe("on");
@@ -212,7 +216,7 @@ describe("replay controller", () => {
     await c.open(new TextEncoder().encode("{}"));
     expect(c.error).toMatch(/./);
     expect(c.phase).toBe("on");
-    expect((await backend.replayState(0)).current).toBe(501);
+    expect((await backend.replayState(0, 0)).current).toBe(501);
     await c.step();
     expect(c.error).toBeNull();
   });
@@ -233,6 +237,27 @@ describe("replay controller", () => {
     await c.resync();
     expect(feed.shows).toBe(2);
     expect(shown).toHaveLength(502);
+  });
+
+  it("asks only for the trades after the closed ones it has, and keeps them all", async () => {
+    const { c, backend } = await started();
+    const asked: number[] = [];
+    const state = backend.replayState.bind(backend);
+    vi.spyOn(backend, "replayState").mockImplementation((cursor, from) => {
+      asked.push(from);
+      return state(cursor, from);
+    });
+    await c.buy();
+    await c.closeTrade();
+    await c.buy();
+    // Far levels: the next bar reaches neither, so the second trade stays open.
+    await c.edit(Math.round(c.view!.close / 2), c.view!.close * 2);
+    await c.step();
+    expect(asked).toEqual([0, 0, 1, 1, 1]);
+    expect(c.view!.trades).toHaveLength(2);
+    expect(c.view!.trades[0]).toMatchObject({ reason: "manual", exitBar: 500 });
+    expect(c.view!.open).toBe(c.view!.trades[1]);
+    expect(c.view!.trades).toEqual((await state(0, 0)).trades);
   });
 
   it("runs calls one after another, in the order given", async () => {

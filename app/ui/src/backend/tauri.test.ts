@@ -132,7 +132,7 @@ describe("tauri backend", () => {
     await tauriBackend.replayStart({ source: "binance", symbol: "BTCUSDT" }, "4h", 7);
     await tauriBackend.replayStep(2);
     await tauriBackend.replayCommand(command);
-    await tauriBackend.replayState(10);
+    await tauriBackend.replayState(10, 3);
     await tauriBackend.replaySave();
     await tauriBackend.replayOpen(file);
     await tauriBackend.replayExit();
@@ -140,7 +140,7 @@ describe("tauri backend", () => {
       ["replay_start", { source: "binance", symbol: "BTCUSDT", tf: "4h", startTime: 7 }],
       ["replay_step", { n: 2 }],
       ["replay_command", { command }],
-      ["replay_state", { cursor: 10 }],
+      ["replay_state", { cursor: 10, tradesFrom: 3 }],
       ["replay_save", undefined],
       ["replay_open", file],
       ["replay_exit", undefined],

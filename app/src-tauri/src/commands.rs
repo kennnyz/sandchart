@@ -383,10 +383,15 @@ pub async fn replay_command(state: State<'_, AppState>, command: Command) -> Cmd
     blocking(&state, move |e| e.replay_command(command)).await
 }
 
-/// The session with the revealed bars from index `cursor` on.
+/// The session with the revealed bars from index `cursor` on and the trades from index
+/// `trades_from` on.
 #[tauri::command]
-pub async fn replay_state(state: State<'_, AppState>, cursor: u32) -> CmdResult<ReplayStateDto> {
-    let st = blocking(&state, move |e| e.replay_state(cursor)).await?;
+pub async fn replay_state(
+    state: State<'_, AppState>,
+    cursor: u32,
+    trades_from: u32,
+) -> CmdResult<ReplayStateDto> {
+    let st = blocking(&state, move |e| e.replay_state(cursor, trades_from)).await?;
     Ok(to_replay_state_dto(st)?)
 }
 

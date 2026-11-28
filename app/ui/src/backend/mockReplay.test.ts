@@ -76,12 +76,12 @@ describe("mock replay session", () => {
     expect(st.bars.time.at(-1)).toBe(startTime);
     expect(st.atEnd).toBe(false);
     expect(await b.replayStep(2)).toBe(502);
-    const next = await b.replayState(501);
+    const next = await b.replayState(501, 0);
     expect(next.from).toBe(501);
     expect(next.bars.time).toEqual(page.time.slice(-99, -97));
-    expect((await b.replayState(10_000)).bars.time).toEqual([]);
+    expect((await b.replayState(10_000, 0)).bars.time).toEqual([]);
     expect(await b.replayStep(1_000)).toBe(599);
-    expect((await b.replayState(0)).atEnd).toBe(true);
+    expect((await b.replayState(0, 0)).atEnd).toBe(true);
     await expect(b.replayStart(id, "1h", startTime + 1)).rejects.toMatchObject({
       message: `no cached 1h bar opens at ${startTime + 1}`,
     });
@@ -98,10 +98,28 @@ describe("mock replay session", () => {
     await expect(b.replayCommand(open)).rejects.toMatchObject({ message: "command 2: a trade is already open" });
     await b.replayStep(1);
     await b.replayCommand({ kind: "close", bar: st.current + 1 });
-    const s = await b.replayState(0);
-    expect(s.commands).toHaveLength(2);
+    const s = await b.replayState(0, 0);
     expect(s.trades[0]).toMatchObject({ reason: "manual", entryPrice: close, exitBar: st.current + 1 });
     expect(s.stats.count).toBe(1);
+  });
+
+  it("sends closed trades from the index given and always the open one, as Rust", async () => {
+    const { b, st } = await started();
+    const close = st.bars.close.at(-1)!;
+    // Far levels: no mock bar reaches them, so the first trade is still open to close by hand.
+    const open = (bar: number): ReplayCommand => ({ kind: "open", bar, side: "long", stop: Math.round(close / 2), take: close * 2 });
+    await b.replayCommand(open(st.current));
+    await b.replayStep(1);
+    await b.replayCommand({ kind: "close", bar: st.current + 1 });
+    await b.replayCommand(open(st.current + 1));
+    const all = await b.replayState(0, 0);
+    expect([all.tradesFrom, all.trades.length]).toEqual([0, 2]);
+    expect(all).not.toHaveProperty("commands");
+    const later = await b.replayState(0, 1);
+    expect(later.tradesFrom).toBe(1);
+    expect(later.trades).toEqual(all.trades.slice(1));
+    const past = await b.replayState(0, 9);
+    expect([past.tradesFrom, past.trades.length]).toEqual([1, 1]);
   });
 
   it("saves only revealed bars and opens the file to the same state", async () => {
@@ -109,13 +127,13 @@ describe("mock replay session", () => {
     const close = st.bars.close.at(-1)!;
     await b.replayCommand({ kind: "open", bar: st.current, side: "short", stop: close + 1_000, take: close - 1_000 });
     await b.replayStep(3);
-    const before = await b.replayState(0);
+    const before = await b.replayState(0, 0);
     expect(await b.replaySave()).toBe("BTCUSDT-1h.replay");
     const text = b.replayFile()!;
     expect(text.match(/^ {4}\[\d+, /gm)).toHaveLength(before.current + 1);
 
     await b.replayExit();
-    await expect(b.replayState(0)).rejects.toMatchObject({ message: "no replay is open" });
+    await expect(b.replayState(0, 0)).rejects.toMatchObject({ message: "no replay is open" });
     const opened = await b.replayOpen(new TextEncoder().encode(text));
     expect(opened).toEqual({ ...before, atEnd: true });
     await expect(b.replayOpen(new TextEncoder().encode(text.replace('"version": 1', '"version": 2')))).rejects.toMatchObject({

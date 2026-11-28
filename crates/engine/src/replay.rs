@@ -4,7 +4,7 @@
 use std::sync::{MutexGuard, PoisonError};
 
 use sandchart_core::replay::{
-    Command, MAX_CANDLES, ReplayFile, Simulation, check_candles, simulate,
+    Command, ExitReason, MAX_CANDLES, ReplayFile, Simulation, Stats, Trade, check_candles, simulate,
 };
 use sandchart_core::{Candle, Instrument, InstrumentId, Timeframe};
 
@@ -21,9 +21,13 @@ pub(crate) struct Session {
     start: u32,
     current: u32,
     commands: Vec<Command>,
+    /// The simulation of `commands` up to `current`, until a step or a command changes it.
+    sim: Option<Simulation>,
 }
 
-/// What the UI gets: the revealed bars from `from` on, never a bar after `current`.
+/// What the UI gets: the revealed bars from `from` on, never a bar after `current`, and
+/// the trades from `trades_from` on (closed trades never change, so the UI keeps those it
+/// has; the open trade, always the last, always comes).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReplayState {
     pub instrument: Instrument,
@@ -35,8 +39,10 @@ pub struct ReplayState {
     /// Index of `bars[0]`.
     pub from: u32,
     pub bars: Vec<Candle>,
-    pub commands: Vec<Command>,
-    pub simulation: Simulation,
+    /// Index of `trades[0]` among all the trades.
+    pub trades_from: u32,
+    pub trades: Vec<Trade>,
+    pub stats: Stats,
 }
 
 fn no_session() -> EngineError {
@@ -48,9 +54,19 @@ impl Session {
         simulate(&self.candles, self.start, self.current, commands).map_err(EngineError::Replay)
     }
 
-    fn state(&self, cursor: u32) -> Result<ReplayState, EngineError> {
+    fn state(&mut self, cursor: u32, trades_from: u32) -> Result<ReplayState, EngineError> {
+        let sim = match self.sim.take() {
+            Some(sim) => sim,
+            None => self.simulate(&self.commands)?,
+        };
         let from = cursor.min(self.current + 1);
-        Ok(ReplayState {
+        let open = sim
+            .trades
+            .last()
+            .is_some_and(|t| t.reason == ExitReason::Open);
+        let closed = sim.trades.len() - usize::from(open);
+        let tf = (trades_from as usize).min(closed);
+        let st = ReplayState {
             instrument: self.instrument.clone(),
             tf: self.tf,
             start: self.start,
@@ -58,9 +74,12 @@ impl Session {
             at_end: self.current as usize + 1 >= self.candles.len(),
             from,
             bars: self.candles[from as usize..=self.current as usize].to_vec(),
-            commands: self.commands.clone(),
-            simulation: self.simulate(&self.commands)?,
-        })
+            trades_from: tf as u32,
+            trades: sim.trades[tf..].to_vec(),
+            stats: sim.stats,
+        };
+        self.sim = Some(sim);
+        Ok(st)
     }
 }
 
@@ -133,15 +152,16 @@ impl Engine {
         let start = context.len() as u32;
         let mut candles = context;
         candles.extend(rest);
-        let session = Session {
+        let mut session = Session {
             instrument,
             tf,
             candles,
             start,
             current: start,
             commands: Vec::new(),
+            sim: None,
         };
-        let state = session.state(0)?;
+        let state = session.state(0, 0)?;
         *self.shared.session() = Some(session);
         Ok(state)
     }
@@ -150,7 +170,11 @@ impl Engine {
     pub fn replay_step(&self, n: u32) -> Result<u32, EngineError> {
         self.with_session(|s| {
             let last = s.candles.len() as u32 - 1;
-            s.current = s.current.saturating_add(n).min(last);
+            let next = s.current.saturating_add(n).min(last);
+            if next != s.current {
+                s.current = next;
+                s.sim = None;
+            }
             Ok(s.current)
         })
     }
@@ -161,16 +185,18 @@ impl Engine {
         self.with_session(|s| {
             let mut next = s.commands.clone();
             next.push(cmd);
-            s.simulate(&next)?;
+            let sim = s.simulate(&next)?;
             s.commands = next;
+            s.sim = Some(sim);
             Ok(())
         })
     }
 
-    /// The session with the revealed bars from index `cursor` on (the UI passes how many
-    /// it already has), trades and statistics.
-    pub fn replay_state(&self, cursor: u32) -> Result<ReplayState, EngineError> {
-        self.with_session(|s| s.state(cursor))
+    /// The session with the revealed bars from index `cursor` on and the trades from index
+    /// `trades_from` on (the UI passes how many bars and closed trades it already has), and
+    /// the statistics.
+    pub fn replay_state(&self, cursor: u32, trades_from: u32) -> Result<ReplayState, EngineError> {
+        self.with_session(|s| s.state(cursor, trades_from))
     }
 
     /// The default name of the session's file, `<symbol>-<timeframe>.replay`, with only
@@ -213,15 +239,16 @@ impl Engine {
             }
             file.instrument = inst;
         }
-        let session = Session {
+        let mut session = Session {
             instrument: file.instrument,
             tf: file.timeframe,
             candles: file.candles,
             start: file.start,
             current: file.current,
             commands: file.commands,
+            sim: None,
         };
-        let state = session.state(0)?;
+        let state = session.state(0, 0)?;
         *self.shared.session() = Some(session);
         Ok(state)
     }

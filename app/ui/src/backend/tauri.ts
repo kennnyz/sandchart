@@ -113,7 +113,7 @@ export const tauriBackend: Backend = {
     invoke("replay_start", { source: id.source, symbol: id.symbol, tf, startTime }),
   replayStep: (n) => invoke("replay_step", { n }),
   replayCommand: (command) => invoke("replay_command", { command }),
-  replayState: (cursor) => invoke("replay_state", { cursor }),
+  replayState: (cursor, tradesFrom) => invoke("replay_state", { cursor, tradesFrom }),
   replaySave: () => invoke("replay_save"),
   // A typed array goes as the raw request body: up to 32 MiB without a JSON array of numbers.
   replayOpen: (bytes) => invoke("replay_open", bytes),

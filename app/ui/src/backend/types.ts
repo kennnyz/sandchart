@@ -288,7 +288,8 @@ export interface ReplayState {
   /** Index of `bars.time[0]`. */
   from: number;
   bars: CandleColumns;
-  commands: ReplayCommand[];
+  /** Index of `trades[0]` among all the trades: closed trades never change, the open one (the last) always comes. */
+  tradesFrom: number;
   trades: ReplayTrade[];
   stats: ReplayStats;
 }
@@ -364,8 +365,11 @@ export interface Backend {
   replayStep(n: number): Promise<number>;
   /** Appends a command; rejects one that breaks a rule (bar order, unrevealed bar, levels, one trade at a time). */
   replayCommand(command: ReplayCommand): Promise<void>;
-  /** The session with the revealed bars from index `cursor` on (pass how many bars the chart has). */
-  replayState(cursor: number): Promise<ReplayState>;
+  /**
+   * The session with the revealed bars from index `cursor` on and the trades from index `tradesFrom` on
+   * (pass how many bars and closed trades the UI has; an index past the closed trades is clamped to them).
+   */
+  replayState(cursor: number, tradesFrom: number): Promise<ReplayState>;
   /** Saves the session as a `.replay` file; resolves to where, or null when the user cancelled. */
   replaySave(): Promise<string | null>;
   /** Checks a `.replay` file and opens it as the session; resolves to the state with every revealed bar. */

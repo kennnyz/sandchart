@@ -75,7 +75,7 @@ async fn start_loads_context_and_reveals_only_the_start_bar() {
     assert_eq!(st.bars[0], bar(50));
     assert_eq!(*st.bars.last().unwrap(), bar(550));
     assert!(!st.at_end);
-    assert!(st.simulation.trades.is_empty());
+    assert!(st.trades.is_empty());
 
     // Near the start of the cache the context is shorter.
     let st = engine
@@ -100,7 +100,7 @@ async fn start_needs_a_cached_bar_at_that_time() {
     let msg = replay_err(engine.replay_start(&id(), Timeframe::H1, i64::MIN).await);
     assert_eq!(msg, format!("no cached 1h bar opens at {}", i64::MIN));
     assert!(matches!(
-        engine.replay_state(0),
+        engine.replay_state(0, 0),
         Err(EngineError::Replay(m)) if m == "no replay is open"
     ));
 }
@@ -114,14 +114,14 @@ async fn step_reveals_bars_and_state_sends_only_new_ones() {
         .unwrap();
     let have = st.bars.len() as u32;
     assert_eq!(engine.replay_step(3).unwrap(), st.start + 3);
-    let st = engine.replay_state(have).unwrap();
+    let st = engine.replay_state(have, 0).unwrap();
     assert_eq!(st.from, have);
     assert_eq!(st.bars, vec![bar(591), bar(592), bar(593)]);
     // A cursor past the current bar gets nothing, never a future bar.
-    assert!(engine.replay_state(have + 100).unwrap().bars.is_empty());
+    assert!(engine.replay_state(have + 100, 0).unwrap().bars.is_empty());
     // Steps stop at the newest cached bar.
     let last = engine.replay_step(1000).unwrap();
-    let st = engine.replay_state(last).unwrap();
+    let st = engine.replay_state(last, 0).unwrap();
     assert_eq!(st.bars, vec![bar(BARS - 1)]);
     assert!(st.at_end);
 }
@@ -157,20 +157,19 @@ async fn commands_are_checked_against_the_revealed_bars() {
     assert_eq!(msg, "command 2: a trade is already open");
 
     engine.replay_step(5).unwrap();
-    let st = engine.replay_state(u32::MAX).unwrap();
-    assert_eq!(st.commands, vec![open]);
-    let t = st.simulation.trades[0];
+    let st = engine.replay_state(u32::MAX, 0).unwrap();
+    let t = st.trades[0];
     // Bar s+5 closes at 10 555 with a high of 10 605: still open, marked to the close.
     assert_eq!((t.reason, t.entry_price), (ExitReason::Open, 10_550));
     assert!((t.r - 5.0 / 150.0).abs() < 1e-12);
 
     engine.replay_step(5).unwrap();
     // Bar s+10 reaches 10 610: the take.
-    let t = engine.replay_state(u32::MAX).unwrap().simulation.trades[0];
+    let t = engine.replay_state(u32::MAX, 0).unwrap().trades[0];
     assert_eq!((t.reason, t.exit_bar), (ExitReason::Take, Some(s + 10)));
     let msg = replay_err(engine.replay_command(Command::Close { bar: s + 10 }));
     assert_eq!(msg, "command 2: no open trade to close");
-    assert_eq!(engine.replay_state(0).unwrap().simulation.stats.count, 1);
+    assert_eq!(engine.replay_state(0, 0).unwrap().stats.count, 1);
 }
 
 #[tokio::test]
@@ -192,7 +191,7 @@ async fn export_holds_no_future_bar_and_opens_to_the_same_state() {
     engine
         .replay_command(Command::Close { bar: st.start + 7 })
         .unwrap();
-    let before = engine.replay_state(0).unwrap();
+    let before = engine.replay_state(0, 0).unwrap();
     assert_eq!(engine.replay_file_name().unwrap(), "BTCUSDT-1h.replay");
     let bytes = engine.replay_export().unwrap();
     let text = String::from_utf8(bytes.clone()).unwrap();
@@ -226,7 +225,7 @@ async fn broken_or_oversized_files_leave_the_session_alone() {
     assert_eq!(msg, "the candles do not match the file's sha256");
     let msg = replay_err(engine.replay_open(&vec![b' '; MAX_FILE_BYTES + 1]));
     assert!(msg.starts_with("the replay file is 32 MiB"), "{msg}");
-    assert!(engine.replay_state(0).is_ok());
+    assert!(engine.replay_state(0, 0).is_ok());
 }
 
 /// A file of `n` bars from bar 550 on, with prices at `price_scale` decimals (`bar` is at 2).
@@ -275,7 +274,7 @@ async fn a_file_at_another_tick_size_is_rescaled_to_the_stored_one() {
     // The store has the pair at 2 price and 5 quantity decimals: the file follows it.
     assert_eq!((st.instrument.price_scale, st.instrument.qty_scale), (2, 5));
     assert_eq!(st.bars, (550..555).map(bar).collect::<Vec<_>>());
-    let t = st.simulation.trades[0];
+    let t = st.trades[0];
     assert_eq!((t.entry_price, t.stop, t.take), (10_550, 10_400, 10_610));
     // Saved again, it is at the stored scale.
     let text = String::from_utf8(engine.replay_export().unwrap()).unwrap();
@@ -293,7 +292,7 @@ async fn a_file_that_does_not_fit_the_stored_tick_size_is_refused() {
         msg.starts_with("at the stored price scale 2: candle 1: "),
         "{msg}"
     );
-    assert!(engine.replay_state(0).is_err());
+    assert!(engine.replay_state(0, 0).is_err());
 }
 
 #[tokio::test]
@@ -304,4 +303,36 @@ async fn an_unknown_pair_keeps_the_file_instrument() {
     let st = engine.replay_open(file.to_json().as_bytes()).unwrap();
     assert_eq!(st.instrument.price_scale, 3);
     assert_eq!(st.bars[0].close, bar(550).close * 10);
+}
+
+#[tokio::test]
+async fn state_sends_closed_trades_from_the_index_given_and_always_the_open_one() {
+    let (engine, _dir) = engine();
+    let st = engine
+        .replay_start(&id(), Timeframe::H1, T0 + 550 * H)
+        .await
+        .unwrap();
+    let s = st.start;
+    let open = |bar| Command::Open {
+        bar,
+        side: Side::Long,
+        stop: 10_000,
+        take: 11_000,
+    };
+    engine.replay_command(open(s)).unwrap();
+    engine.replay_step(1).unwrap();
+    engine
+        .replay_command(Command::Close { bar: s + 1 })
+        .unwrap();
+    engine.replay_command(open(s + 1)).unwrap();
+    let all = engine.replay_state(0, 0).unwrap();
+    assert_eq!((all.trades_from, all.trades.len()), (0, 2));
+    // The UI has the closed trade: only the open one comes.
+    let st = engine.replay_state(0, 1).unwrap();
+    assert_eq!(st.trades_from, 1);
+    assert_eq!(st.trades, all.trades[1..]);
+    // An index past the closed trades is clamped to them: the open trade still comes.
+    let st = engine.replay_state(0, 9).unwrap();
+    assert_eq!((st.trades_from, st.trades.len()), (1, 1));
+    assert_eq!(st.stats, all.stats);
 }
