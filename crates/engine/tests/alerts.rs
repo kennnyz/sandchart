@@ -676,3 +676,40 @@ async fn alerts_another_process_sets_or_deletes_are_armed_or_disarmed() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn a_drawing_saved_as_another_kind_takes_its_alerts_with_it() {
+    let mut f = fixture(&["BTCUSDT"]).await;
+    let e = &f.engine;
+    e.save_drawing(drawing("h1", "BTCUSDT", DrawingBody::Hline { p: 10_000 }))
+        .await
+        .unwrap();
+    e.set_alert(line_alert("a", "BTCUSDT", "h1")).await.unwrap();
+    until("the alert stream opens", || {
+        !f.provider.open("BTCUSDT").is_empty()
+    })
+    .await;
+    // Fired, so nothing is armed on the line any more; the panel must still hear of it.
+    let p = &f.provider;
+    p.send("BTCUSDT", Timeframe::M1, bar(0, 9_990, 9_990, 9_990));
+    p.send("BTCUSDT", Timeframe::M1, bar(0, 9_990, 10_000, 10_000));
+    next_fired(&mut f.events).await;
+    while f.events.try_recv().is_ok() {}
+    let note = DrawingBody::Note {
+        t: 0,
+        text: "x".into(),
+    };
+    e.save_drawing(drawing("h1", "BTCUSDT", note)).await.unwrap();
+    assert!(e.alerts().await.unwrap().is_empty());
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), f.events.recv())
+            .await
+            .unwrap()
+            .unwrap(),
+        AlertEvent::Changed
+    );
+    until("the alert stream closes", || {
+        f.provider.open("BTCUSDT").is_empty()
+    })
+    .await;
+}

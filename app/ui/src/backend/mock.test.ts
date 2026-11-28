@@ -435,6 +435,19 @@ describe("mock alerts", () => {
     expect(await b.getAlerts()).toEqual([]);
   });
 
+  it("deletes the alerts of a drawing saved as a shape that is not a line", async () => {
+    const b = createMockBackend({ candles: 1 });
+    await b.saveDrawing(hline("h1", 10_000));
+    await b.setAlert({ id: "a", instrument: id, priceScale: 2, kind: { kind: "drawing", drawingId: "h1" }, direction: "cross" });
+    await b.saveDrawing(hline("h1", 10_500));
+    expect((await b.getAlerts()).map((a) => a.id)).toEqual(["a"]);
+    let changed = 0;
+    await b.onAlertsChanged(() => changed++);
+    await b.saveDrawing({ ...hline("h1", 1), body: { kind: "note", t: 0, text: "x" } });
+    expect(await b.getAlerts()).toEqual([]);
+    expect(changed).toBe(1);
+  });
+
   it("refuses past 100 active alerts", async () => {
     const b = createMockBackend({ candles: 1 });
     for (let i = 0; i < 100; i++) {

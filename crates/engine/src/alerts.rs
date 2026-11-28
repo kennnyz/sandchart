@@ -422,9 +422,14 @@ impl Engine {
         .await
     }
 
-    /// A drawing was saved: its armed alerts follow its new place.
-    pub(crate) async fn drawing_saved(&self, drawing_id: &str) -> Result<(), EngineError> {
-        if self.shared.alerts.follows(drawing_id) {
+    /// A drawing was saved: its armed alerts follow its new place, and `removed` says the
+    /// store deleted alerts that could no longer follow it.
+    pub(crate) async fn drawing_saved(
+        &self,
+        drawing_id: &str,
+        removed: bool,
+    ) -> Result<(), EngineError> {
+        if removed || self.shared.alerts.follows(drawing_id) {
             self.store_and_reload(|_| Ok(())).await?;
             self.shared.alerts.send(AlertEvent::Changed);
         }

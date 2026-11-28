@@ -40,7 +40,8 @@ impl Engine {
     /// Validates and stores a drawing whose prices are ticks at `d.price_scale`. When the
     /// instrument's scale has changed since (the UI loaded it before), the ticks are
     /// rescaled to the current one; a drawing that no longer fits or breaks a rule after
-    /// rounding is rejected. `updated_at` is set to now; the saved drawing is returned.
+    /// rounding is rejected. `updated_at` is set to now; the saved drawing is returned. Alerts
+    /// that can no longer follow it (it is no longer a line) are deleted with it.
     pub async fn save_drawing(&self, mut d: Drawing) -> Result<Drawing, EngineError> {
         let key = d.instrument.clone();
         let scale = blocking(&self.shared.store, move |s| s.instrument(&key))
@@ -55,8 +56,8 @@ impl Engine {
                 .map_err(|e| EngineError::Drawing(format!("at price scale {scale}: {e}")))?;
         }
         let saved = d.clone();
-        blocking(&self.shared.store, move |s| s.upsert_drawing(&saved)).await?;
-        self.drawing_saved(&d.id).await?;
+        let removed = blocking(&self.shared.store, move |s| s.upsert_drawing(&saved)).await?;
+        self.drawing_saved(&d.id, removed > 0).await?;
         Ok(d)
     }
 

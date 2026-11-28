@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sandchart_core::alert::{Alert, AlertKind, Direction};
-use sandchart_core::{Candle, Drawing, Instrument, InstrumentId, Timeframe};
+use sandchart_core::{Candle, Drawing, DrawingBody, Instrument, InstrumentId, Timeframe};
 
 /// Errors returned by [`Store`].
 #[derive(Debug, thiserror::Error)]
@@ -39,6 +39,14 @@ pub enum StoreError {
     TooManyAlertPairs { max: usize },
     #[error("at most {max} alerts can be kept; delete some fired ones first")]
     TooManyAlerts { max: usize },
+    /// A line alert whose drawing is missing, on another pair or not a line.
+    #[error("{0}")]
+    AlertDrawing(String),
+}
+
+/// Whether an alert can follow a drawing of this kind: only `hline` and `trend` have a level.
+fn is_line(body: &DrawingBody) -> bool {
+    matches!(body, DrawingBody::Hline { .. } | DrawingBody::Trend { .. })
 }
 
 /// Most drawings one instrument can hold.
@@ -532,8 +540,10 @@ impl Store {
     }
 
     /// Inserts or replaces a drawing by id. Fails when its instrument already holds
-    /// [`MAX_DRAWINGS_PER_INSTRUMENT`] other drawings.
-    pub fn upsert_drawing(&mut self, d: &Drawing) -> Result<(), StoreError> {
+    /// [`MAX_DRAWINGS_PER_INSTRUMENT`] other drawings. In the same transaction it deletes
+    /// the alerts that can no longer follow it (it is no longer an `hline` or `trend`, or
+    /// it moved to another pair); returns how many.
+    pub fn upsert_drawing(&mut self, d: &Drawing) -> Result<usize, StoreError> {
         let body = serde_json::to_string(&d.body)?;
         let style = serde_json::to_string(&d.style)?;
         let tx = write(&mut self.conn)?;
@@ -563,8 +573,16 @@ impl Store {
                 d.updated_at
             ],
         )?;
+        let removed = if is_line(&d.body) {
+            tx.execute(
+                "DELETE FROM alerts WHERE drawing_id = ?1 AND (source != ?2 OR symbol != ?3)",
+                params![d.id, d.instrument.source, d.instrument.symbol],
+            )?
+        } else {
+            tx.execute("DELETE FROM alerts WHERE drawing_id = ?1", [&d.id])?
+        };
         tx.commit()?;
-        Ok(())
+        Ok(removed)
     }
 
     /// Removes a drawing and its alerts, atomically; an unknown id is not an error.
@@ -678,9 +696,36 @@ impl Store {
     }
 
     /// Inserts or replaces an alert by id. An active one is refused past
-    /// [`MAX_ACTIVE_ALERTS`] or [`MAX_ALERT_PAIRS`], any one past [`MAX_ALERTS`].
+    /// [`MAX_ACTIVE_ALERTS`] or [`MAX_ALERT_PAIRS`], any one past [`MAX_ALERTS`]. A line
+    /// alert is refused unless its drawing exists, is on the same pair and is an `hline` or
+    /// a `trend`, checked in the same transaction, so another process deleting or changing
+    /// the drawing meanwhile cannot leave an alert behind.
     pub fn upsert_alert(&mut self, a: &Alert) -> Result<(), StoreError> {
         let tx = write(&mut self.conn)?;
+        if let AlertKind::Drawing { drawing_id } = &a.kind {
+            let row: Option<(String, String, String)> = tx
+                .query_row(
+                    "SELECT source, symbol, body FROM drawings WHERE id = ?1",
+                    [drawing_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()?;
+            let Some((source, symbol, body)) = row else {
+                return Err(StoreError::AlertDrawing(format!(
+                    "drawing {drawing_id:?} does not exist"
+                )));
+            };
+            if source != a.instrument.source || symbol != a.instrument.symbol {
+                return Err(StoreError::AlertDrawing(format!(
+                    "drawing {drawing_id:?} is on another pair"
+                )));
+            }
+            if !serde_json::from_str::<DrawingBody>(&body).is_ok_and(|b| is_line(&b)) {
+                return Err(StoreError::AlertDrawing(
+                    "an alert can follow only a horizontal or a trend line".into(),
+                ));
+            }
+        }
         let count = |sql: &str, p: &[&dyn rusqlite::ToSql]| -> Result<usize, StoreError> {
             let n: i64 = tx.query_row(sql, p, |row| row.get(0))?;
             Ok(usize::try_from(n).unwrap_or(usize::MAX))

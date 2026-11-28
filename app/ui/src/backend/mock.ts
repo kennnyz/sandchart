@@ -1073,6 +1073,15 @@ export function createMockBackend(opts: MockOptions): MockBackend {
       const saved: Drawing = { ...scaled, updatedAt: Date.now() };
       drawings.set(d.id, saved);
       keepDrawings();
+      // Alerts that can no longer follow it go in the same step, as in `upsert_drawing`.
+      const gone = [...alerts.values()].filter(
+        (a) =>
+          a.kind.kind === "drawing" &&
+          a.kind.drawingId === d.id &&
+          (!mockLevelOf(saved.body) || pairKey(a.instrument) !== pairKey(saved.instrument)),
+      );
+      for (const a of gone) alerts.delete(a.id);
+      if (gone.length > 0) keepAlerts();
       return structuredClone(saved);
     },
 

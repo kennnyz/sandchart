@@ -528,6 +528,7 @@ fn alert_migration_goes_down_to_3_and_up_again() {
 #[test]
 fn alerts_round_trip_and_replace_by_id() {
     let mut store = Store::open_in_memory().unwrap();
+    store.upsert_drawing(&drawing("d1", "ETHUSDT", 0)).unwrap();
     let mut fired = alert("b", "ETHUSDT", on_drawing("d1"));
     fired.direction = Direction::Below;
     fired.active = false;
@@ -618,6 +619,7 @@ fn a_firing_of_an_alert_that_was_replaced_meanwhile_is_ignored() {
 #[test]
 fn a_line_alert_fires_without_touching_its_drawing_id() {
     let mut store = Store::open_in_memory().unwrap();
+    store.upsert_drawing(&drawing("d1", "BTCUSDT", 0)).unwrap();
     store
         .upsert_alert(&alert("a", "BTCUSDT", on_drawing("d1")))
         .unwrap();
@@ -834,4 +836,107 @@ fn a_second_process_never_migrates_an_older_apps_database() {
 
 fn assert_contains_text(haystack: &str, needle: &str) {
     assert!(haystack.contains(needle), "{needle:?} not in {haystack:?}");
+}
+
+fn with_body(mut d: Drawing, body: DrawingBody) -> Drawing {
+    d.body = body;
+    d
+}
+
+fn rect() -> DrawingBody {
+    DrawingBody::Rect {
+        a: Anchor { t: 1, p: 100 },
+        b: Anchor { t: 2, p: 200 },
+        extend_right: false,
+    }
+}
+
+fn alert_ids(store: &Store) -> Vec<String> {
+    store.alerts().unwrap().into_iter().map(|a| a.id).collect()
+}
+
+#[test]
+fn a_line_alert_needs_an_hline_or_trend_drawing_of_its_pair() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.upsert_drawing(&drawing("t", "BTCUSDT", 0)).unwrap();
+    store
+        .upsert_drawing(&with_body(drawing("h", "BTCUSDT", 0), DrawingBody::Hline { p: 5 }))
+        .unwrap();
+    store
+        .upsert_drawing(&with_body(drawing("r", "BTCUSDT", 0), rect()))
+        .unwrap();
+    store.upsert_drawing(&drawing("e", "ETHUSDT", 0)).unwrap();
+    store.upsert_alert(&alert("a1", "BTCUSDT", on_drawing("t"))).unwrap();
+    store.upsert_alert(&alert("a2", "BTCUSDT", on_drawing("h"))).unwrap();
+    for (drawing_id, want) in [
+        ("none", "drawing \"none\" does not exist"),
+        ("e", "drawing \"e\" is on another pair"),
+        ("r", "an alert can follow only a horizontal or a trend line"),
+    ] {
+        let err = store
+            .upsert_alert(&alert("x", "BTCUSDT", on_drawing(drawing_id)))
+            .unwrap_err();
+        assert!(matches!(err, StoreError::AlertDrawing(_)), "{err:?}");
+        assert_contains_text(&err.to_string(), want);
+    }
+    assert_eq!(alert_ids(&store), ["a1", "a2"]);
+}
+
+#[test]
+fn a_drawing_that_stops_being_a_line_or_moves_pair_loses_its_alerts() {
+    let mut store = Store::open_in_memory().unwrap();
+    for d in ["d1", "d2", "d3"] {
+        store.upsert_drawing(&drawing(d, "BTCUSDT", 0)).unwrap();
+    }
+    for (a, d) in [("a1", "d1"), ("a2", "d2"), ("a3", "d3")] {
+        store.upsert_alert(&alert(a, "BTCUSDT", on_drawing(d))).unwrap();
+    }
+    // Moved or turned into an hline: still a line on the pair, the alerts stay.
+    assert_eq!(store.upsert_drawing(&drawing("d1", "BTCUSDT", 4)).unwrap(), 0);
+    let hline = with_body(drawing("d1", "BTCUSDT", 0), DrawingBody::Hline { p: 7 });
+    assert_eq!(store.upsert_drawing(&hline).unwrap(), 0);
+    // A rectangle now, and on another pair: their alerts go in the same write.
+    assert_eq!(
+        store
+            .upsert_drawing(&with_body(drawing("d2", "BTCUSDT", 0), rect()))
+            .unwrap(),
+        1
+    );
+    assert_eq!(store.upsert_drawing(&drawing("d3", "ETHUSDT", 0)).unwrap(), 1);
+    assert_eq!(alert_ids(&store), ["a1"]);
+}
+
+#[test]
+fn two_processes_racing_on_a_drawing_and_its_alert_leave_no_orphan() {
+    for round in 0..10 {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sandchart.db");
+        Store::open(&path)
+            .unwrap()
+            .upsert_drawing(&drawing("d", "BTCUSDT", 0))
+            .unwrap();
+        // Both start while a third connection holds the write lock, then run in any order.
+        let lock = hold_write_lock(&path, 100);
+        let (p1, p2) = (path.clone(), path.clone());
+        let agent = std::thread::spawn(move || {
+            Store::open(&p1)
+                .unwrap()
+                .upsert_alert(&alert("a", "BTCUSDT", on_drawing("d")))
+                .is_ok()
+        });
+        let app = std::thread::spawn(move || {
+            let mut s = Store::open(&p2).unwrap();
+            if round % 2 == 0 {
+                s.upsert_drawing(&with_body(drawing("d", "BTCUSDT", 0), rect()))
+                    .unwrap();
+            } else {
+                s.delete_drawing("d").unwrap();
+            }
+        });
+        lock.join().unwrap();
+        let _ = agent.join().unwrap();
+        app.join().unwrap();
+        let store = Store::open(&path).unwrap();
+        assert!(alert_ids(&store).is_empty(), "round {round}: an orphan alert");
+    }
 }

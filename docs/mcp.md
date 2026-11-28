@@ -210,7 +210,7 @@ Saves a drawing with the same rules as the app ([Drawing tools](drawings.md)): a
             "extendLeft": false, "extendRight": true } }
 ```
 
-An open chart shows the new drawing the next time it loads that pair (switch pairs or timeframes, or restart).
+An open chart shows the new drawing the next time it loads that pair (switch pairs or timeframes, or restart). Replacing a drawing that alerts follow with one that is not an `hline` or a `trend`, or that is on another pair, deletes those alerts in the same write.
 
 ### delete_drawing
 
