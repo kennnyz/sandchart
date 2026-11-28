@@ -68,7 +68,6 @@ fn assert_stats(got: &Stats, want: &Stats, name: &str) {
         ("winRate", got.win_rate, want.win_rate),
         ("totalR", got.total_r, want.total_r),
         ("averageR", got.average_r, want.average_r),
-        ("expectancy", got.expectancy, want.expectancy),
         ("maxDrawdownR", got.max_drawdown_r, want.max_drawdown_r),
     ];
     for (field, g, w) in pairs {

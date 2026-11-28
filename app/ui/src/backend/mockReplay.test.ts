@@ -19,7 +19,7 @@ function expectSim(got: Sim, want: Sim, name: string) {
     expect(t.r, name).toBeCloseTo(w.r, 9);
     expect({ ...t, r: 0 }, name).toEqual({ ...w, r: 0 });
   });
-  for (const k of ["winRate", "totalR", "averageR", "expectancy", "maxDrawdownR"] as const) {
+  for (const k of ["winRate", "totalR", "averageR", "maxDrawdownR"] as const) {
     expect(got.stats[k], `${name}: ${k}`).toBeCloseTo(want.stats[k], 9);
   }
   if (want.stats.profitFactor === null) expect(got.stats.profitFactor, name).toBeNull();

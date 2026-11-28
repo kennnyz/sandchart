@@ -187,16 +187,13 @@ export function mockStats(trades: ReplayTrade[]): ReplayStats {
     maxDd = Math.max(maxDd, peak - total);
   }
   const ratio = (a: number, b: number) => (b === 0 ? 0 : a / b);
-  const winRate = ratio(wins, count);
-  const lossRate = ratio(losses, count);
   return {
     count,
     wins,
     losses,
-    winRate,
+    winRate: ratio(wins, count),
     totalR: total,
     averageR: ratio(total, count),
-    expectancy: winRate * ratio(grossWin, wins) + lossRate * ratio(grossLoss, losses),
     profitFactor: losses > 0 ? grossWin / -grossLoss : null,
     maxDrawdownR: maxDd,
     longestLosingStreak: longest,

@@ -104,8 +104,6 @@ pub struct Stats {
     pub total_r: f64,
     /// total R / count, 0 without trades.
     pub average_r: f64,
-    /// win rate * average win + loss rate * average loss (a negative number).
-    pub expectancy: f64,
     /// Sum of wins over the absolute sum of losses; `None` without losses.
     pub profit_factor: Option<f64>,
     /// Deepest fall of the running R total below its peak (which starts at 0), as a
@@ -355,18 +353,13 @@ pub fn stats(trades: &[Trade]) -> Stats {
         max_dd = max_dd.max(peak - total);
     }
     let ratio = |a: f64, b: u32| if b == 0 { 0.0 } else { a / f64::from(b) };
-    let (win_rate, loss_rate) = (
-        ratio(f64::from(wins), count),
-        ratio(f64::from(losses), count),
-    );
     Stats {
         count,
         wins,
         losses,
-        win_rate,
+        win_rate: ratio(f64::from(wins), count),
         total_r: total,
         average_r: ratio(total, count),
-        expectancy: win_rate * ratio(gross_win, wins) + loss_rate * ratio(gross_loss, losses),
         profit_factor: (losses > 0).then(|| gross_win / -gross_loss),
         max_drawdown_r: max_dd,
         longest_losing_streak: longest,

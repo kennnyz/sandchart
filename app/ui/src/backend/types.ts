@@ -269,7 +269,6 @@ export interface ReplayStats {
   winRate: number;
   totalR: number;
   averageR: number;
-  expectancy: number;
   /** Null without losses. */
   profitFactor: number | null;
   /** Deepest fall of the running R total below its peak, as a positive number. */

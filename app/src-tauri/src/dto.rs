@@ -1037,7 +1037,7 @@ mod tests {
                 }],
                 "stats": {
                     "count": 0, "wins": 0, "losses": 0, "winRate": 0.0, "totalR": 0.0,
-                    "averageR": 0.0, "expectancy": 0.0, "profitFactor": null,
+                    "averageR": 0.0, "profitFactor": null,
                     "maxDrawdownR": 0.0, "longestLosingStreak": 0
                 }
             })

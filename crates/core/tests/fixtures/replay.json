@@ -11,7 +11,7 @@
         "trades": [
           {"side": "long", "entryBar": 1, "entryTime": 2000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitBar": 3, "exitTime": 4000, "exitPrice": 120, "reason": "take", "ambiguous": false, "r": 2}
         ],
-        "stats": {"count": 1, "wins": 1, "losses": 0, "winRate": 1, "totalR": 2, "averageR": 2, "expectancy": 2, "profitFactor": null, "maxDrawdownR": 0, "longestLosingStreak": 0}
+        "stats": {"count": 1, "wins": 1, "losses": 0, "winRate": 1, "totalR": 2, "averageR": 2, "profitFactor": null, "maxDrawdownR": 0, "longestLosingStreak": 0}
       }
     },
     {
@@ -24,7 +24,7 @@
         "trades": [
           {"side": "long", "entryBar": 1, "entryTime": 2000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitBar": 2, "exitTime": 3000, "exitPrice": 90, "reason": "stop", "ambiguous": false, "r": -1}
         ],
-        "stats": {"count": 1, "wins": 0, "losses": 1, "winRate": 0, "totalR": -1, "averageR": -1, "expectancy": -1, "profitFactor": 0, "maxDrawdownR": 1, "longestLosingStreak": 1}
+        "stats": {"count": 1, "wins": 0, "losses": 1, "winRate": 0, "totalR": -1, "averageR": -1, "profitFactor": 0, "maxDrawdownR": 1, "longestLosingStreak": 1}
       }
     },
     {
@@ -37,7 +37,7 @@
         "trades": [
           {"side": "long", "entryBar": 1, "entryTime": 2000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitBar": 2, "exitTime": 3000, "exitPrice": 90, "reason": "stop", "ambiguous": true, "r": -1}
         ],
-        "stats": {"count": 1, "wins": 0, "losses": 1, "winRate": 0, "totalR": -1, "averageR": -1, "expectancy": -1, "profitFactor": 0, "maxDrawdownR": 1, "longestLosingStreak": 1}
+        "stats": {"count": 1, "wins": 0, "losses": 1, "winRate": 0, "totalR": -1, "averageR": -1, "profitFactor": 0, "maxDrawdownR": 1, "longestLosingStreak": 1}
       }
     },
     {
@@ -50,7 +50,7 @@
         "trades": [
           {"side": "long", "entryBar": 1, "entryTime": 2000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitBar": null, "exitTime": null, "exitPrice": null, "reason": "open", "ambiguous": false, "r": 1.5}
         ],
-        "stats": {"count": 0, "wins": 0, "losses": 0, "winRate": 0, "totalR": 0, "averageR": 0, "expectancy": 0, "profitFactor": null, "maxDrawdownR": 0, "longestLosingStreak": 0}
+        "stats": {"count": 0, "wins": 0, "losses": 0, "winRate": 0, "totalR": 0, "averageR": 0, "profitFactor": null, "maxDrawdownR": 0, "longestLosingStreak": 0}
       }
     },
     {
@@ -63,7 +63,7 @@
         "trades": [
           {"side": "long", "entryBar": 1, "entryTime": 2000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitBar": 3, "exitTime": 4000, "exitPrice": 115, "reason": "manual", "ambiguous": false, "r": 1.5}
         ],
-        "stats": {"count": 1, "wins": 1, "losses": 0, "winRate": 1, "totalR": 1.5, "averageR": 1.5, "expectancy": 1.5, "profitFactor": null, "maxDrawdownR": 0, "longestLosingStreak": 0}
+        "stats": {"count": 1, "wins": 1, "losses": 0, "winRate": 1, "totalR": 1.5, "averageR": 1.5, "profitFactor": null, "maxDrawdownR": 0, "longestLosingStreak": 0}
       }
     },
     {
@@ -76,7 +76,7 @@
         "trades": [
           {"side": "long", "entryBar": 1, "entryTime": 2000, "entryPrice": 100, "initialStop": 90, "stop": 104, "take": 130, "exitBar": 3, "exitTime": 4000, "exitPrice": 104, "reason": "stop", "ambiguous": false, "r": 0.4}
         ],
-        "stats": {"count": 1, "wins": 1, "losses": 0, "winRate": 1, "totalR": 0.4, "averageR": 0.4, "expectancy": 0.4, "profitFactor": null, "maxDrawdownR": 0, "longestLosingStreak": 0}
+        "stats": {"count": 1, "wins": 1, "losses": 0, "winRate": 1, "totalR": 0.4, "averageR": 0.4, "profitFactor": null, "maxDrawdownR": 0, "longestLosingStreak": 0}
       }
     },
     {
@@ -91,7 +91,7 @@
           {"side": "short", "entryBar": 2, "entryTime": 3000, "entryPrice": 86, "initialStop": 96, "stop": 96, "take": 70, "exitBar": 3, "exitTime": 4000, "exitPrice": 96, "reason": "stop", "ambiguous": false, "r": -1},
           {"side": "long", "entryBar": 3, "entryTime": 4000, "entryPrice": 95, "initialStop": 90, "stop": 90, "take": 105, "exitBar": 4, "exitTime": 5000, "exitPrice": 90, "reason": "stop", "ambiguous": false, "r": -1}
         ],
-        "stats": {"count": 3, "wins": 1, "losses": 2, "winRate": 0.3333333333333333, "totalR": -0.5, "averageR": -0.16666666666666666, "expectancy": -0.16666666666666663, "profitFactor": 0.75, "maxDrawdownR": 2, "longestLosingStreak": 2}
+        "stats": {"count": 3, "wins": 1, "losses": 2, "winRate": 0.3333333333333333, "totalR": -0.5, "averageR": -0.16666666666666666, "profitFactor": 0.75, "maxDrawdownR": 2, "longestLosingStreak": 2}
       }
     },
     {
@@ -198,7 +198,7 @@
         "trades": [
           {"side": "long", "entryBar": 1, "entryTime": 2000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitBar": 3, "exitTime": 4000, "exitPrice": 120, "reason": "take", "ambiguous": false, "r": 2}
         ],
-        "stats": {"count": 1, "wins": 1, "losses": 0, "winRate": 1, "totalR": 2, "averageR": 2, "expectancy": 2, "profitFactor": null, "maxDrawdownR": 0, "longestLosingStreak": 0}
+        "stats": {"count": 1, "wins": 1, "losses": 0, "winRate": 1, "totalR": 2, "averageR": 2, "profitFactor": null, "maxDrawdownR": 0, "longestLosingStreak": 0}
       }
     },
     {
