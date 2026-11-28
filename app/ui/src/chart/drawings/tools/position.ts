@@ -1,4 +1,4 @@
-import { TrendingDown, TrendingUp } from "lucide-react";
+import { ChevronsDown, ChevronsUp } from "lucide-react";
 import type { Anchor, DrawingBody, PositionOutcome, Side } from "../../../backend/types";
 import { t } from "../../../i18n";
 import { formatChange } from "../../format";
@@ -101,7 +101,7 @@ function positionTool(side: Side): ToolDef<Position, PositionGeom> {
     id: side,
     kind: "position",
     labelKey: side === "long" ? "tools.long" : "tools.short",
-    icon: side === "long" ? TrendingUp : TrendingDown,
+    icon: side === "long" ? ChevronsUp : ChevronsDown,
     code: side === "long" ? "KeyL" : "KeyS",
     placement: { clicks: 1 },
 

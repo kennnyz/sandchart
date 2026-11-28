@@ -1,4 +1,4 @@
-import { Minus } from "lucide-react";
+import { HorizontalLevelIcon } from "../../../icons";
 import type { DrawingBody } from "../../../backend/types";
 import type { ToolDef } from "../registry";
 
@@ -15,7 +15,7 @@ export const hlineTool: ToolDef<Hline, HlineGeom> = {
   id: "hline",
   kind: "hline",
   labelKey: "tools.hline",
-  icon: Minus,
+  icon: HorizontalLevelIcon,
   code: "KeyH",
   placement: { clicks: 1 },
 

@@ -1,4 +1,4 @@
-import { Rows3 } from "lucide-react";
+import { FibonacciIcon } from "../../../icons";
 import type { DrawingBody } from "../../../backend/types";
 import { formatPrice } from "../../format";
 import { MONO_FAMILY } from "../../theme";
@@ -40,7 +40,7 @@ export const fibTool: ToolDef<Fib, FibGeom> = {
   id: "fib",
   kind: "fib",
   labelKey: "tools.fib",
-  icon: Rows3,
+  icon: FibonacciIcon,
   code: "KeyF",
   placement: { clicks: 2 },
 
