@@ -218,6 +218,25 @@ export class DrawingState {
     return true;
   }
 
+  /**
+   * The engine stored `sent` as `saved` (rescaled to a new price scale): `saved` takes its
+   * place in the history, and in the list unless a later change replaced it there. Not a
+   * new change, so nothing is committed. True when the list changed.
+   */
+  stored(sent: Drawing, saved: Drawing): boolean {
+    const swap = (d: Drawing | null) => (d === sent ? saved : d);
+    for (const stack of [this.undoStack, this.redoStack]) {
+      for (let i = 0; i < stack.length; i++) {
+        const c = stack[i]!;
+        if (c.before === sent || c.after === sent) stack[i] = { before: swap(c.before), after: swap(c.after) };
+      }
+    }
+    const i = this.drawings.indexOf(sent);
+    if (i < 0) return false;
+    this.drawings[i] = saved;
+    return true;
+  }
+
   /** Esc: drops the placed points, the draft, the tool and the selection; false when there was none. */
   cancel(): boolean {
     const any = this.points.length > 0 || this.tool !== null || this.selected !== null || this.draft !== null;

@@ -155,6 +155,13 @@ export class DrawingLayer {
     this.host.invalidateOverlay();
   }
 
+  /** The engine stored `sent` as `saved` (another price scale): show and keep that copy. */
+  stored(sent: Drawing, saved: Drawing): void {
+    if (!this.state.stored(sent, saved)) return;
+    this.syncStyle();
+    this.host.invalidate();
+  }
+
   /** Engine outcomes of the positions, painted with them; a position without one shows none. */
   setOutcomes(outcomes: ReadonlyMap<string, PositionOutcome>): void {
     this.outcomes = outcomes;

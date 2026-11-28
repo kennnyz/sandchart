@@ -292,3 +292,39 @@ describe("positions and notes", () => {
     expect(commits).toEqual([]);
   });
 });
+
+describe("a drawing the engine stored differently", () => {
+  it("takes the stored copy in the list and in the history, without a new commit", () => {
+    const { s, commits } = setup();
+    s.reset([stored("a", 1, 50)]);
+    const old = s.byId("a")!;
+    s.edit("a", { kind: "hline", p: 60 });
+    const sent = s.byId("a")!;
+    // The engine had moved to four decimals: it stored 6000 at scale 4.
+    const saved: Drawing = { ...sent, priceScale: 4, body: { kind: "hline", p: 6_000 }, updatedAt: 9 };
+    expect(s.stored(sent, saved)).toBe(true);
+    expect(s.byId("a")).toBe(saved);
+    expect(commits).toHaveLength(1);
+    // Undo goes back from the stored copy; redo brings the stored copy back.
+    s.undo();
+    expect(commits.at(-1)).toEqual({ before: saved, after: old });
+    s.redo();
+    expect(commits.at(-1)).toEqual({ before: old, after: saved });
+    expect(s.byId("a")).toBe(saved);
+  });
+
+  it("fixes the step after it too, and ignores a copy that was changed since", () => {
+    const { s, commits } = setup();
+    s.reset([stored("a", 1, 50)]);
+    s.edit("a", { kind: "hline", p: 60 });
+    const sent = s.byId("a")!;
+    s.edit("a", { kind: "hline", p: 70 });
+    const later = s.byId("a")!;
+    const saved: Drawing = { ...sent, priceScale: 4, body: { kind: "hline", p: 6_000 } };
+    // The list holds a newer edit: it stays, but undoing that edit returns to the stored copy.
+    expect(s.stored(sent, saved)).toBe(false);
+    expect(s.byId("a")).toBe(later);
+    s.undo();
+    expect(commits.at(-1)).toEqual({ before: later, after: saved });
+  });
+});

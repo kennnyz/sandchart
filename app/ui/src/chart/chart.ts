@@ -362,6 +362,11 @@ export class Chart {
   }
 
   /** Engine outcomes of the positions by drawing id; a position without one shows none. */
+  /** The engine stored `sent` as `saved` (rescaled to a new price scale). */
+  drawingStored(sent: Drawing, saved: Drawing): void {
+    this.drawings.stored(sent, saved);
+  }
+
   setPositionOutcomes(outcomes: ReadonlyMap<string, PositionOutcome>): void {
     this.drawings.setOutcomes(outcomes);
   }

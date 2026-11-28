@@ -20,6 +20,8 @@ export interface DrawingSurface {
   setDrawingTool(id: ToolId | null): void;
   drawingCommand(cmd: DrawingCommand): boolean;
   setPositionOutcomes(outcomes: ReadonlyMap<string, PositionOutcome>): void;
+  /** The engine stored `sent` as `saved`, rescaled to the instrument's new price scale. */
+  drawingStored(sent: Drawing, saved: Drawing): void;
   finishDrawingText(result: TextResult): void;
   drawingStyle(action: StyleAction): void;
   setDrawingsHidden(on: boolean): void;
@@ -368,8 +370,15 @@ export class DrawingController {
     this.commits++;
     this.trackPosition(c);
     const id = this.id;
-    const run = c.after
-      ? () => this.backend.saveDrawing(toInput(c.after!)).then(() => undefined)
+    const sent = c.after;
+    const run = sent
+      ? () =>
+          this.backend.saveDrawing(toInput(sent)).then((saved) => {
+            // Rescaled: the chart must not keep showing (and later send) the old-scale copy.
+            if (this.id !== id || saved.priceScale === sent.priceScale) return;
+            this.surface?.drawingStored(sent, saved);
+            this.trackPosition({ before: sent, after: saved });
+          })
       : () => this.backend.deleteDrawing(c.before!.id);
     this.saving = this.saving.then(run).then(
       () => {

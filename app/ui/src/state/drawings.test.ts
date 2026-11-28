@@ -31,6 +31,7 @@ function fakeSurface() {
   const texts: TextResult[] = [];
   const styles: StyleAction[] = [];
   const hidden: boolean[] = [];
+  const storedCopies: [Drawing, Drawing][] = [];
   let style: ((e: StyleEdit | null) => void) | null = null;
   let commit: ((c: DrawingChange) => void) | null = null;
   let tool: ((k: ToolId | null) => void) | null = null;
@@ -56,6 +57,7 @@ function fakeSurface() {
     onDrawingText: (cb) => (text = cb),
     drawingStyle: (a) => styles.push(a),
     setDrawingsHidden: (on) => hidden.push(on),
+    drawingStored: (sent, saved) => storedCopies.push([sent, saved]),
     onDrawingStyle: (cb) => (style = cb),
   };
   return {
@@ -68,6 +70,7 @@ function fakeSurface() {
     texts,
     styles,
     hidden,
+    storedCopies,
     openStyle: (e: StyleEdit | null) => style!(e),
     commit: (c: DrawingChange) => commit!(c),
     openText: (e: TextEdit | null) => text!(e),
@@ -81,7 +84,7 @@ interface Pending {
 }
 
 /** A backend whose saves and deletes wait until the test settles them. */
-function fakeBackend(stored: Drawing[]) {
+function fakeBackend(stored: Drawing[], scale = 2) {
   const calls: string[] = [];
   const pending: Pending[] = [];
   const loads: { id: InstrumentId; resolve: (l: Drawing[]) => void; reject: (e: unknown) => void }[] = [];
@@ -99,7 +102,9 @@ function fakeBackend(stored: Drawing[]) {
     saveDrawing: async (d: DrawingInput) => {
       calls.push(`save ${d.id} ${JSON.stringify(Object.keys(d).sort())}`);
       await wait();
-      return { ...d, priceScale: 2, updatedAt: 9 };
+      // At another scale the engine rescales (here: one decimal more, ×10).
+      const body = d.priceScale === scale || d.body.kind !== "hline" ? d.body : { ...d.body, p: d.body.p * 10 };
+      return { ...d, priceScale: scale, body, updatedAt: 9 };
     },
     deleteDrawing: async (id: string) => {
       calls.push(`delete ${id}`);
@@ -160,6 +165,28 @@ describe("DrawingController", () => {
     b.pending[0]!.resolve();
     await flush();
     expect(b.calls.at(-1)).toBe("delete x");
+  });
+
+  it("puts the engine's copy on the chart when it stored the drawing at a new price scale", async () => {
+    const b = fakeBackend([], 3);
+    const s = fakeSurface();
+    const c = new DrawingController(b.backend, () => {});
+    c.attach(s.surface);
+    const d = drawing("x", 100);
+    s.commit({ before: null, after: d });
+    await flush();
+    b.pending[0]!.resolve();
+    await flush();
+    expect(s.storedCopies).toEqual([[d, { ...d, priceScale: 3, body: { kind: "hline", p: 1_000 }, updatedAt: 9 }]]);
+    // Stored at the scale it was sent with: the chart keeps its own copy.
+    const same = fakeBackend([]);
+    const t = fakeSurface();
+    new DrawingController(same.backend, () => {}).attach(t.surface);
+    t.commit({ before: null, after: drawing("y") });
+    await flush();
+    same.pending[0]!.resolve();
+    await flush();
+    expect(t.storedCopies).toEqual([]);
   });
 
   it("loads only after the changes before it are stored", async () => {
