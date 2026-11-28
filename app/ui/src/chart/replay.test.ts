@@ -1,5 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { clampLevel, formatR, snapStart } from "./replay";
+import type { ReplayTrade } from "../backend/types";
+import { clampLevel, formatR, ReplayLayer, snapStart, type ReplayMarks } from "./replay";
+
+const trade = (entryBar: number, reason: ReplayTrade["reason"] = "open"): ReplayTrade => ({
+  side: "long",
+  entryBar,
+  entryTime: entryBar * 1000,
+  entryPrice: 100,
+  initialStop: 90,
+  stop: 90,
+  take: 120,
+  exitBar: reason === "open" ? null : entryBar + 2,
+  exitTime: reason === "open" ? null : (entryBar + 2) * 1000,
+  exitPrice: reason === "open" ? null : 90,
+  reason,
+  ambiguous: false,
+  r: reason === "open" ? 0.1 : -1,
+});
+const marks = (trades: ReplayTrade[], time: number): ReplayMarks => ({ trades, time, close: 101, label: "Replay" });
 
 describe("replay on the chart", () => {
   it("snaps a picked date to the first bar opening at or after it", () => {
@@ -26,5 +44,29 @@ describe("replay on the chart", () => {
     expect(clampLevel("short", "stop", 100, 50)).toBe(101);
     expect(clampLevel("short", "take", 100, 150)).toBe(99);
     expect(clampLevel("long", "stop", 100, 80)).toBe(80);
+  });
+
+  it("keeps a drag through new bars while its trade is open, and drops it once the trade closed", () => {
+    const l = new ReplayLayer();
+    l.set(marks([trade(5)], 5000));
+    l.startDrag("stop");
+    expect(l.dragging).toBe(true);
+    // Play reveals bars: the same trade, still open, marked to a new close.
+    l.set(marks([{ ...trade(5), r: 0.3 }], 6000));
+    expect(l.dragging).toBe(true);
+    // A close that fell under the dragged stop pushes it back under the close.
+    l.set({ ...marks([trade(5)], 6500), close: 89 });
+    expect(l.axisPrices()).toEqual([100, 88, 120]);
+    // The trade was stopped: the drag goes with it.
+    l.set(marks([trade(5, "stop")], 7000));
+    expect(l.dragging).toBe(false);
+    // Nor does a drag survive into another trade opened later.
+    l.set(marks([trade(5, "stop"), trade(8)], 8000));
+    l.startDrag("take");
+    l.set(marks([trade(5, "stop"), trade(8, "stop"), trade(10)], 10_000));
+    expect(l.dragging).toBe(false);
+    l.startDrag("take");
+    l.set(null);
+    expect(l.dragging).toBe(false);
   });
 });
