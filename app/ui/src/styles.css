@@ -1415,6 +1415,28 @@ button:disabled {
 .replay-trades table {
   width: 100%;
   border-collapse: collapse;
+  table-layout: fixed;
+}
+.replay-trades .c-n {
+  width: 44px;
+}
+.replay-trades .c-side {
+  width: 64px;
+}
+.replay-trades .c-time {
+  width: 150px;
+}
+.replay-trades .c-price {
+  width: 104px;
+}
+.replay-trades .c-exit {
+  width: 230px;
+}
+.replay-trades .c-r {
+  width: 72px;
+}
+.replay-trades .price {
+  text-align: right;
 }
 .replay-trades th {
   position: sticky;
@@ -1429,6 +1451,8 @@ button:disabled {
   height: 24px;
   padding: 0 12px;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .replay-trades tbody tr + tr td {
   border-top: 1px solid var(--fg-5);

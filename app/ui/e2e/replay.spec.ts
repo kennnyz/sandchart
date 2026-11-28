@@ -691,6 +691,9 @@ test("replay_results_sit_under_the_bar_collapse_and_scroll", async ({ page }) =>
   const panelBox = (await panel.boundingBox())!;
   expect(panelBox.y).toBeGreaterThanOrEqual(barBox.y + barBox.height - 1);
   expect(panelBox.width).toBeGreaterThan(barBox.width - 2);
+  // Folded until the first trade.
+  await expect(panel).toHaveAttribute("data-collapsed", "true");
+  await expect(page.getByTestId("replay-results-toggle")).toBeDisabled();
   // Eight trades, closed by hand: more than the list shows at once.
   for (let i = 0; i < 8; i++) {
     await page.keyboard.press("Shift+B");
@@ -700,7 +703,20 @@ test("replay_results_sit_under_the_bar_collapse_and_scroll", async ({ page }) =>
     await expect(page.getByTestId("replay-trade")).toHaveCount(i + 1);
     await expect(page.getByTestId("replay-buy")).toBeEnabled();
   }
+  await expect(panel).toHaveAttribute("data-collapsed", "false");
   const list = page.getByTestId("replay-trades");
+  // Entry, stop and exit prices; the columns keep their widths as rows come and go.
+  const row = page.getByTestId("replay-trade").first();
+  for (const id of ["entry-price", "stop", "exit-price"]) await expect(row.getByTestId(`replay-trade-${id}`)).toHaveText(/^\d[\d\u2009]*\.\d{2}$/);
+  const widths = () => list.locator("th").evaluateAll((ths) => ths.map((th) => Math.round(th.getBoundingClientRect().width)));
+  const before = await widths();
+  await page.keyboard.press("Shift+B");
+  await expect(page.getByTestId("replay-trade")).toHaveCount(9);
+  expect(await widths()).toEqual(before);
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("Shift+C");
+  await expect(page.getByTestId("replay-buy")).toBeEnabled();
+  expect(await widths()).toEqual(before);
   const sizes = await list.evaluate((el) => [el.scrollHeight, el.clientHeight]);
   expect(sizes[0]).toBeGreaterThan(sizes[1]!);
   await list.evaluate((el) => el.scrollTo(0, el.scrollHeight));
@@ -716,12 +732,14 @@ test("replay_results_sit_under_the_bar_collapse_and_scroll", async ({ page }) =>
   await page.getByTestId("replay-results-toggle").click();
   await expect(list).toHaveCount(0);
   await expect(panel).toHaveAttribute("data-collapsed", "true");
-  await expect(stat(page, "trades")).toHaveText("8");
+  await expect(stat(page, "trades")).toHaveText("9");
   expect(await page.evaluate(() => localStorage.getItem("sandchart.replay.resultsCollapsed"))).toBe("1");
-  // Remembered across a reload.
+  // Remembered across a reload, also once there is a trade.
   await page.reload();
   await expect(page.getByTestId("legend")).toHaveAttribute("data-time", /^\d+$/);
   await startAt(page, await plotOf(page), plot.width * 0.3);
+  await page.keyboard.press("Shift+B");
+  await expect(stat(page, "open-r")).not.toHaveText("—");
   await expect(panel).toHaveAttribute("data-collapsed", "true");
   await page.getByTestId("replay-results-toggle").click();
   await expect(page.getByTestId("replay-trades")).toBeVisible();

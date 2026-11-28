@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { memo } from "react";
 import type { ReplayTrade } from "../backend/types";
-import { formatCrosshairTime } from "../chart/format";
+import { formatCrosshairTime, formatPrice } from "../chart/format";
 import { formatR } from "../chart/replay";
 import { t, useLanguage, type Language } from "../i18n";
 import type { ReplayController } from "../state/replay";
@@ -44,7 +44,7 @@ const EXIT_LABEL: Record<ReplayTrade["reason"], string> = {
  * One row of the trades table. The controller keeps a closed trade's object as it is, so a step
  * renders only the open trade's row again, however long the list (`lang` changes the text).
  */
-const TradeRow = memo(function TradeRow({ tr, n }: { tr: ReplayTrade; n: number; lang: Language }) {
+const TradeRow = memo(function TradeRow({ tr, n, scale }: { tr: ReplayTrade; n: number; scale: number; lang: Language }) {
   return (
     <tr data-testid="replay-trade" data-reason={tr.reason}>
       <td className="mono">{n}</td>
@@ -52,10 +52,19 @@ const TradeRow = memo(function TradeRow({ tr, n }: { tr: ReplayTrade; n: number;
       <td className="mono" data-testid="replay-trade-entry" data-time={tr.entryFillTime}>
         {fillTime(tr.entryFillTime)}
       </td>
+      <td className="price mono" data-testid="replay-trade-entry-price">
+        {formatPrice(tr.entryPrice, scale)}
+      </td>
+      <td className="price mono" data-testid="replay-trade-stop">
+        {formatPrice(tr.initialStop, scale)}
+      </td>
       <td className={tr.exitFillTime === null ? "muted" : "mono"} data-testid="replay-trade-exit" data-time={tr.exitFillTime ?? ""}>
         {tr.exitFillTime === null
           ? t(EXIT_LABEL[tr.reason])
           : `${fillTime(tr.exitFillTime)} · ${t(EXIT_LABEL[tr.reason])}${tr.ambiguous ? " ?" : ""}`}
+      </td>
+      <td className="price mono" data-testid="replay-trade-exit-price">
+        {tr.exitPrice === null ? DASH : formatPrice(tr.exitPrice, scale)}
       </td>
       <td className={`num mono ${signClass(tr.r) ?? ""}`}>{formatR(tr.r)}</td>
     </tr>
@@ -74,7 +83,9 @@ export function ReplayStats({ replay: r }: { replay: ReplayController }) {
   const s = view.stats;
   const none = s.count === 0;
   const open = view.open;
-  const collapsed = r.resultsCollapsed;
+  // Folded until there is a trade to list, then as the user left it (remembered).
+  const empty = view.trades.length === 0;
+  const collapsed = r.resultsCollapsed || empty;
   const trades = view.trades.map((tr, i) => ({ tr, n: i + 1 })).reverse();
   return (
     <section className="replay-results" aria-label={t("replay.stats")} data-testid="replay-stats" data-collapsed={collapsed}>
@@ -84,7 +95,8 @@ export function ReplayStats({ replay: r }: { replay: ReplayController }) {
           data-testid="replay-results-toggle"
           aria-expanded={!collapsed}
           aria-controls="replay-trades"
-          title={collapsed ? t("replay.results.expand") : t("replay.results.collapse")}
+          title={empty ? t("replay.results.empty") : collapsed ? t("replay.results.expand") : t("replay.results.collapse")}
+          disabled={empty}
           onClick={() => r.toggleResults()}
         >
           {collapsed ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
@@ -117,28 +129,44 @@ export function ReplayStats({ replay: r }: { replay: ReplayController }) {
       </div>
       {!collapsed && (
         <div className="replay-trades" id="replay-trades" data-testid="replay-trades" tabIndex={0} aria-label={t("replay.stats")}>
-          {trades.length === 0 ? (
-            <div className="replay-trades-none">{t("replay.trades.none")}</div>
-          ) : (
-            <table>
-              <thead>
-                <tr>
-                  <th scope="col">#</th>
-                  <th scope="col">{t("replay.trades.side")}</th>
-                  <th scope="col">{t("replay.trades.entry")}</th>
-                  <th scope="col">{t("replay.trades.exit")}</th>
-                  <th scope="col" className="num" title={t("replay.trades.r.title")} data-testid="replay-trades-r">
-                    {t("replay.trades.r")}
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {trades.map(({ tr, n }) => (
-                  <TradeRow key={n} tr={tr} n={n} lang={lang} />
-                ))}
-              </tbody>
-            </table>
-          )}
+          <table>
+            {/* Fixed widths, so the columns never move as trades come and go. */}
+            <colgroup>
+              <col className="c-n" />
+              <col className="c-side" />
+              <col className="c-time" />
+              <col className="c-price" />
+              <col className="c-price" />
+              <col className="c-exit" />
+              <col className="c-price" />
+              <col className="c-r" />
+            </colgroup>
+            <thead>
+              <tr>
+                <th scope="col">#</th>
+                <th scope="col">{t("replay.trades.side")}</th>
+                <th scope="col">{t("replay.trades.entry")}</th>
+                <th scope="col" className="price">
+                  {t("replay.trades.entryPrice")}
+                </th>
+                <th scope="col" className="price" title={t("replay.trades.stopPrice.title")}>
+                  {t("replay.trades.stopPrice")}
+                </th>
+                <th scope="col">{t("replay.trades.exit")}</th>
+                <th scope="col" className="price">
+                  {t("replay.trades.exitPrice")}
+                </th>
+                <th scope="col" className="num" title={t("replay.trades.r.title")} data-testid="replay-trades-r">
+                  {t("replay.trades.r")}
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {trades.map(({ tr, n }) => (
+                <TradeRow key={n} tr={tr} n={n} scale={view.instrument.priceScale} lang={lang} />
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
     </section>
