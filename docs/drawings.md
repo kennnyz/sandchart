@@ -4,9 +4,11 @@ Sandchart can draw on the chart: trend lines, horizontal levels, rectangles, Fib
 
 - [The tools](#the-tools)
 - [Placing and editing](#placing-and-editing)
+- [Selecting several](#selecting-several)
+- [Context menu](#context-menu)
 - [Style, lock and delete](#style-lock-and-delete)
-- [Shift, magnet and ruler](#shift-magnet-and-ruler)
-- [Hide all](#hide-all)
+- [Shift, ⌘, magnet and ruler](#shift--magnet-and-ruler)
+- [Hide and show](#hide-and-show)
 - [Shortcuts](#shortcuts)
 - [Where drawings are kept](#where-drawings-are-kept)
 - [Position outcomes](#position-outcomes)
@@ -33,11 +35,35 @@ A position's zones are grey; only its numbers are coloured: the take and stop di
 
 - **Select** a drawing by clicking it. Its handles show. A click on empty space deselects it.
 - **Move** it by dragging its body. **Reshape** it by dragging a handle.
+- **Handles**: a trend line has one on each end and one in the middle, which moves the whole line. A rectangle has one on each corner and one in the middle of each edge; an edge handle moves only that side. A Fibonacci retracement has its two ends, a position its stop, take, entry and end. A brush stroke shows a marker on each end while it is selected, but has no handles: it only moves. A horizontal line has one in the middle.
 - **Delete** the selection with Delete or Backspace.
 - **Esc** drops a half-placed drawing and the tool, closes a popover, and deselects.
 - **Undo** with ⌘Z (Ctrl+Z), **redo** with ⇧⌘Z (Ctrl+Shift+Z). Every change counts: placing, moving, reshaping, deleting, and each change in the style popover. The history lasts for the session, up to 200 steps, and starts over when you open another pair.
 
 Every change is saved when you release the mouse, not while you drag.
+
+## Selecting several
+
+- **⌘-drag** (Ctrl-drag on Windows and Linux) on empty chart space draws a selection box. Every drawing the box touches is added to the selection.
+- **⌘-click** (Ctrl-click) a drawing to add it to the selection, or to take it out.
+- **Drag** any of them to move them all together. Locked ones stay where they are.
+- **Delete** or Backspace removes them all.
+- A click without a drag on one of them selects only that one; a click on empty space deselects all.
+
+Moving or deleting several is one step for undo.
+
+## Context menu
+
+Right-click a drawing to open its menu. When it is part of a selection, the menu acts on the whole selection; otherwise the drawing is selected alone first.
+
+| Item | What |
+| --- | --- |
+| Lock / Unlock | Lock them, or unlock them when all are locked. |
+| Hide | Hide them until you show them again (see [Hide and show](#hide-and-show)). |
+| Remove (Delete) | Delete them. |
+| Settings… (Enter) | The style popover, or the text editor of a note. Only for one drawing. |
+
+Arrow keys move between the items, Enter picks one, Esc or a click outside closes the menu. Each item is one undo step. The web view's own menu never opens over the app; in a text field you still get the usual edit menu.
 
 ## Style, lock and delete
 
@@ -53,20 +79,25 @@ Double-click a drawing, or select it and press Enter, to open its style popover.
 
 Tab moves between the controls and stays inside the popover; Esc or a click outside closes it.
 
-## Shift, magnet and ruler
+## Shift, ⌘, magnet and ruler
 
 **Shift** depends on what you are doing:
 
 - With no tool picked, Shift+drag on empty space measures with the ruler.
 - With a tool picked, or while dragging a handle, holding Shift puts the point at the price of the previous point: the line comes out horizontal.
 
-**The magnet** (Alt+M, or the magnet button) snaps every placed or dragged point to the open, high, low or close of the nearest bar, within 8 px. Hold ⌘ (Ctrl) to do the opposite of the magnet setting for that move. The magnet setting is remembered between sessions.
+**The magnet** (Alt+M, or the magnet button) snaps every placed or dragged point to the open, high, low or close of the nearest bar, within 8 px. The magnet setting is remembered between sessions.
+
+**⌘ (Ctrl)** held while you place a point or drag a handle snaps it to the bar under the pointer, magnet on or off: to the nearest of its open, high, low and close (a body end or a wick end), from anywhere between its high and low and up to 40 px above or below them. Keep ⌘ held while you drag and the point jumps from bar to bar. ⌘ on empty space starts a [selection box](#selecting-several) instead; ⌘ on a drawing's body adds it to the selection.
 
 **The ruler** measures from where you press to where you release: the price change, the change in percent, the number of bars and the time. Start it with Shift+drag on empty space, or press Alt+R and then drag (with any tool picked). It is not saved; the next press or Esc puts it away.
 
-## Hide all
+## Hide and show
 
-The eye button at the bottom of the tools rail hides every drawing, so you can look at the bare chart. Hidden drawings are not painted and cannot be clicked, dragged, deleted or undone until you show them again. Picking a tool shows them again, so a new drawing is never placed unseen. Hiding lasts for the session and changes nothing in storage.
+The eye button at the bottom of the tools rail opens a menu:
+
+- **Hide all drawings** hides every drawing, so you can look at the bare chart. They are not painted and cannot be clicked, dragged, deleted or undone until you pick **Show all drawings**. Picking a tool shows them again, so a new drawing is never placed unseen. This lasts for the session and changes nothing in storage.
+- **Show hidden drawings (n)** shows again every drawing hidden one by one with **Hide** in the [context menu](#context-menu). Such a drawing stays hidden after a restart, until you show it here (or undo). It is not painted and cannot be clicked, but it is still saved, and a line keeps firing its [alert](alerts.md).
 
 ## Shortcuts
 
@@ -75,10 +106,13 @@ The eye button at the bottom of the tools rail hides every drawing, so you can l
 | Alt+T, H, B, F, L, S, P, N | Pick the trend line, horizontal line, rectangle, Fibonacci, long, short, brush or note tool (press again to put it down) |
 | Alt+R | Arm the ruler for the next drag |
 | Alt+M | Magnet on or off |
-| ⌘ / Ctrl held | The magnet does the opposite for this move |
+| ⌘ / Ctrl held | Snap the point to the bar under the pointer while placing or dragging a handle |
+| ⌘-drag / Ctrl-drag on empty space | Selection box |
+| ⌘-click / Ctrl-click | Add a drawing to the selection or take it out |
+| Right click | Context menu of the drawing or the selection |
 | Shift held | Horizontal point with a tool or a handle; ruler with no tool |
 | Enter, double-click | Style popover, or the text editor of a note |
-| Delete, Backspace | Delete the selection |
+| Delete, Backspace | Delete the selection (every selected drawing) |
 | ⌘Z / Ctrl+Z | Undo |
 | ⇧⌘Z / Ctrl+Shift+Z | Redo |
 | ⌘Enter / Ctrl+Enter | Save a note |
