@@ -4,6 +4,7 @@ import {
   type Candles,
   type ConnectionState,
   type Drawing,
+  type DrawingBody,
   type DrawingInput,
   type Instrument,
   type IndicatorInfo,
@@ -434,6 +435,49 @@ export function mockValidateDrawing(d: DrawingInput): string | null {
   }
 }
 
+/** `v` ticks at `from` decimals expressed at `to`, rounded half away from zero (`rescale_ticks`); null past i64. */
+function rescaleTicks(v: number, from: number, to: number): number | null {
+  const big = BigInt(v);
+  let q: bigint;
+  if (to >= from) {
+    q = big * 10n ** BigInt(to - from);
+  } else {
+    const d = 10n ** BigInt(from - to);
+    q = big / d;
+    const r = big % d;
+    if ((r < 0n ? -r : r) * 2n >= d) q += big < 0n ? -1n : 1n;
+  }
+  return q >= -(2n ** 63n) && q < 2n ** 63n ? Number(q) : null;
+}
+
+/** `d` with its prices at scale `to`, validated (`at_scale` in the engine); the error is Rust's. */
+function mockAtScale<D extends DrawingInput>(d: D, to: number): D | string {
+  const from = d.priceScale;
+  if (from === to) return mockValidateDrawing(d) ?? d;
+  let fits = true;
+  const px = (v: number) => {
+    const r = rescaleTicks(v, from, to);
+    if (r === null) fits = false;
+    return r ?? 0;
+  };
+  const at = (a: { t: number; p: number }) => ({ t: a.t, p: px(a.p) });
+  const b = d.body;
+  const body: DrawingBody =
+    b.kind === "trend" || b.kind === "rect" || b.kind === "fib"
+      ? { ...b, a: at(b.a), b: at(b.b) }
+      : b.kind === "hline"
+        ? { ...b, p: px(b.p) }
+        : b.kind === "position"
+          ? { ...b, entry: at(b.entry), stop: px(b.stop), take: px(b.take) }
+          : b.kind === "brush"
+            ? { ...b, points: b.points.map(at) }
+            : b;
+  if (!fits) return `at price scale ${to}: its prices do not fit the new tick size`;
+  const r = { ...d, priceScale: to, body };
+  const bad = mockValidateDrawing(r);
+  return bad ? `at price scale ${to}: ${bad}` : r;
+}
+
 // TEST-ONLY CODE. The real outcome is `sandchart_core::position::resolve` in Rust; this copy
 // lets the browser mock answer, and mock.test.ts checks it against the same fixture as Rust
 // (crates/core/tests/fixtures/positions.json).
@@ -737,10 +781,16 @@ export function createMockBackend(opts: MockOptions): MockBackend {
 
     async getDrawings(id) {
       await delay();
+      const instrument = SYMBOLS.find((i) => i.id.source === id.source && i.id.symbol === id.symbol);
+      const scale = opts.priceScale ?? instrument?.priceScale ?? 2;
       return [...drawings.values()]
         .filter((d) => d.instrument.source === id.source && d.instrument.symbol === id.symbol)
         .sort((a, b) => a.z - b.z || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
-        .map((d) => structuredClone(d));
+        .flatMap((d) => {
+          // A drawing that does not fit the current scale is left out and stays stored, as in Rust.
+          const r = mockAtScale(structuredClone(d), scale);
+          return typeof r === "string" ? [] : [r];
+        });
     },
 
     async saveDrawing(d) {
@@ -748,16 +798,12 @@ export function createMockBackend(opts: MockOptions): MockBackend {
       const instrument = SYMBOLS.find((i) => i.id.source === d.instrument.source && i.id.symbol === d.instrument.symbol);
       if (!instrument) throw problem(`unknown instrument ${d.instrument.source}/${d.instrument.symbol}`);
       if (opts.drawingSaveError) throw problem("mock: cannot save the drawing");
-      const bad = mockValidateDrawing(d);
-      if (bad) throw problem(bad);
+      const scaled = mockAtScale(structuredClone(d), opts.priceScale ?? instrument.priceScale);
+      if (typeof scaled === "string") throw problem(scaled);
       const same = (o: Drawing) => o.instrument.source === d.instrument.source && o.instrument.symbol === d.instrument.symbol;
       const others = [...drawings.values()].filter((o) => same(o) && o.id !== d.id).length;
       if (others >= MAX_DRAWINGS) throw problem(`an instrument can hold at most ${MAX_DRAWINGS} drawings; delete some first`);
-      const saved: Drawing = {
-        ...structuredClone(d),
-        priceScale: opts.priceScale ?? instrument.priceScale,
-        updatedAt: Date.now(),
-      };
+      const saved: Drawing = { ...scaled, updatedAt: Date.now() };
       drawings.set(d.id, saved);
       keepDrawings();
       return structuredClone(saved);

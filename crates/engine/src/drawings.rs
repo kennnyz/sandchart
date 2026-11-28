@@ -25,15 +25,11 @@ impl Engine {
                 if d.price_scale == scale {
                     return Some(d);
                 }
-                let rescaled = d
-                    .rescaled(scale)
-                    .ok_or_else(|| "its prices do not fit the new tick size".to_owned())
-                    .and_then(|r| validate(&r).map(|()| r));
-                rescaled
+                let (id, from) = (d.id.clone(), d.price_scale);
+                at_scale(d, scale)
                     .inspect_err(|e| {
                         eprintln!(
-                            "drawing {} cannot move from price scale {} to {scale}: {e}",
-                            d.id, d.price_scale
+                            "drawing {id} cannot move from price scale {from} to {scale}: {e}"
                         );
                     })
                     .ok()
@@ -41,16 +37,23 @@ impl Engine {
             .collect())
     }
 
-    /// Validates and stores a drawing. The engine sets `price_scale` to the instrument's
-    /// and `updated_at` to now; the saved drawing is returned.
+    /// Validates and stores a drawing whose prices are ticks at `d.price_scale`. When the
+    /// instrument's scale has changed since (the UI loaded it before), the ticks are
+    /// rescaled to the current one; a drawing that no longer fits or breaks a rule after
+    /// rounding is rejected. `updated_at` is set to now; the saved drawing is returned.
     pub async fn save_drawing(&self, mut d: Drawing) -> Result<Drawing, EngineError> {
         let key = d.instrument.clone();
-        d.price_scale = blocking(&self.shared.store, move |s| s.instrument(&key))
+        let scale = blocking(&self.shared.store, move |s| s.instrument(&key))
             .await?
             .ok_or_else(|| EngineError::UnknownInstrument(d.instrument.clone()))?
             .price_scale;
         d.updated_at = self.now_ms();
-        validate(&d).map_err(EngineError::Drawing)?;
+        if d.price_scale == scale {
+            validate(&d).map_err(EngineError::Drawing)?;
+        } else {
+            d = at_scale(d, scale)
+                .map_err(|e| EngineError::Drawing(format!("at price scale {scale}: {e}")))?;
+        }
         let saved = d.clone();
         blocking(&self.shared.store, move |s| s.upsert_drawing(&saved)).await?;
         Ok(d)
@@ -92,4 +95,16 @@ impl Engine {
         })
         .await
     }
+}
+
+/// `d` with its prices at `scale`, validated after any rounding.
+fn at_scale(d: Drawing, scale: u8) -> Result<Drawing, String> {
+    if d.price_scale == scale {
+        return Ok(d);
+    }
+    let r = d
+        .rescaled(scale)
+        .ok_or_else(|| "its prices do not fit the new tick size".to_owned())?;
+    validate(&r)?;
+    Ok(r)
 }

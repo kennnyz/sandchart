@@ -131,7 +131,7 @@ describe("DrawingController", () => {
     expect(s.sets).toEqual([[], [], [drawing("e", 1, ETH)]]);
   });
 
-  it("stores every change in order, without the fields the engine sets", async () => {
+  it("stores every change in order, with its price scale and without the update time", async () => {
     const b = fakeBackend([]);
     const s = fakeSurface();
     const c = new DrawingController(b.backend, () => {});
@@ -140,7 +140,7 @@ describe("DrawingController", () => {
     s.commit({ before: null, after: d });
     s.commit({ before: d, after: null });
     await flush();
-    expect(b.calls).toEqual([`save x ${JSON.stringify(["body", "id", "instrument", "locked", "style", "z"])}`]);
+    expect(b.calls).toEqual([`save x ${JSON.stringify(["body", "id", "instrument", "locked", "priceScale", "style", "z"])}`]);
     b.pending[0]!.resolve();
     await flush();
     expect(b.calls.at(-1)).toBe("delete x");

@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use sandchart_core::{
-    Anchor, Candle, Drawing, DrawingBody, Instrument, InstrumentId, PositionBody, Side, Status,
-    Style, Timeframe,
+    Anchor, Candle, Drawing, DrawingBody, Instrument, InstrumentId, JS_SAFE_MAX, PositionBody,
+    Side, Status, Style, Timeframe,
 };
 use sandchart_engine::{Engine, EngineError};
 use sandchart_store::Store;
@@ -33,7 +33,7 @@ fn drawing(drawing_id: &str, body: DrawingBody) -> Drawing {
     Drawing {
         id: drawing_id.into(),
         instrument: id("BTCUSDT"),
-        price_scale: 0,
+        price_scale: 2,
         body,
         style: Style {
             color: 1,
@@ -85,7 +85,6 @@ impl Fixture {
 async fn save_sets_scale_and_time_and_lists_it_back() {
     let f = Fixture::new();
     let mut d = drawing("a", DrawingBody::Hline { p: 12_345 });
-    d.price_scale = 9;
     d.updated_at = 1;
     let saved = f.engine.save_drawing(d.clone()).await.unwrap();
     assert_eq!(saved.price_scale, 2);
@@ -97,6 +96,82 @@ async fn save_sets_scale_and_time_and_lists_it_back() {
 
     f.engine.delete_drawing("a").await.unwrap();
     assert!(f.engine.drawings(&id("BTCUSDT")).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn save_rescales_a_drawing_made_at_an_older_tick_size() {
+    let f = Fixture::new();
+    // The UI loaded the drawing at scale 2; meanwhile the exchange moved to four decimals.
+    f.store().upsert_instruments(&[inst("BTCUSDT", 4)]).unwrap();
+    let saved = f
+        .engine
+        .save_drawing(drawing("pos", DrawingBody::Position(long(NOW, NOW + H))))
+        .await
+        .unwrap();
+    assert_eq!(saved.price_scale, 4);
+    let DrawingBody::Position(p) = &saved.body else {
+        panic!("{saved:?}");
+    };
+    assert_eq!((p.stop, p.entry.p, p.take), (900_000, 1_000_000, 1_200_000));
+    assert_eq!(
+        f.store().drawings(&id("BTCUSDT")).unwrap(),
+        vec![saved.clone()]
+    );
+
+    // Down to scale 0: 12 345 (123.45) is stored as 123.
+    f.store().upsert_instruments(&[inst("BTCUSDT", 0)]).unwrap();
+    let saved = f
+        .engine
+        .save_drawing(drawing("line", DrawingBody::Hline { p: 12_345 }))
+        .await
+        .unwrap();
+    assert_eq!(
+        (saved.price_scale, &saved.body),
+        (0, &DrawingBody::Hline { p: 123 })
+    );
+}
+
+#[tokio::test]
+async fn save_rejects_a_drawing_that_does_not_fit_the_new_tick_size() {
+    let f = Fixture::new();
+    f.store().upsert_instruments(&[inst("BTCUSDT", 4)]).unwrap();
+    // Past ±(2^53 - 1) once multiplied by 100.
+    let big = drawing(
+        "big",
+        DrawingBody::Hline {
+            p: JS_SAFE_MAX / 10,
+        },
+    );
+    let err = f.engine.save_drawing(big).await.unwrap_err();
+    assert!(
+        matches!(&err, EngineError::Drawing(m) if m.contains("price scale 4") && m.contains("±(2^53 - 1)")),
+        "{err:?}"
+    );
+    // Past i64 itself.
+    let mut huge = drawing("huge", DrawingBody::Hline { p: i64::MAX / 2 });
+    huge.price_scale = 0;
+    let err = f.engine.save_drawing(huge).await.unwrap_err();
+    assert!(
+        matches!(&err, EngineError::Drawing(m) if m.contains("price scale 4") && m.contains("do not fit")),
+        "{err:?}"
+    );
+    // A rounded stop that meets the entry breaks the position's rules.
+    f.store().upsert_instruments(&[inst("BTCUSDT", 0)]).unwrap();
+    let tight = PositionBody {
+        stop: 9_999,
+        take: 10_001,
+        ..long(NOW, NOW + H)
+    };
+    let err = f
+        .engine
+        .save_drawing(drawing("tight", DrawingBody::Position(tight)))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, EngineError::Drawing(m) if m.contains("price scale 0") && m.contains("stop < entry < take")),
+        "{err:?}"
+    );
+    assert!(f.store().drawings(&id("BTCUSDT")).unwrap().is_empty());
 }
 
 #[tokio::test]

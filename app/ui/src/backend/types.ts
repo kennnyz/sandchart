@@ -208,15 +208,19 @@ export type DrawingKind = DrawingBody["kind"];
 export interface DrawingInput {
   id: string;
   instrument: InstrumentId;
+  /**
+   * The scale the prices are ticks at: the one the drawing was loaded or made at. The
+   * engine rescales to the instrument's current scale, and rejects a drawing that no longer fits.
+   */
+  priceScale: number;
   body: DrawingBody;
   style: DrawingStyle;
   locked: boolean;
   /** Paint order, lowest first. */
   z: number;
 }
-/** A stored drawing; the engine sets `priceScale` (the instrument's) and `updatedAt` on save. */
+/** A stored drawing, at the instrument's price scale; the engine sets `updatedAt` on save. */
 export interface Drawing extends DrawingInput {
-  priceScale: number;
   updatedAt: number;
 }
 /** A bar that touched both stop and take counts as a stop and is `ambiguous`. */

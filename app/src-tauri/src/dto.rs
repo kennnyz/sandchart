@@ -516,12 +516,14 @@ impl From<Drawing> for DrawingDto {
     }
 }
 
-/// A drawing to save. The engine sets the price scale and the update time.
+/// A drawing to save, its prices in ticks at `price_scale` (the scale the UI got it at;
+/// the engine rescales to the instrument's current one). The engine sets the update time.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DrawingInputDto {
     pub id: String,
     pub instrument: InstrumentIdDto,
+    pub price_scale: u8,
     pub body: DrawingBody,
     pub style: Style,
     pub locked: bool,
@@ -533,7 +535,7 @@ impl From<DrawingInputDto> for Drawing {
         Self {
             id: d.id,
             instrument: d.instrument.into(),
-            price_scale: 0,
+            price_scale: d.price_scale,
             body: d.body,
             style: d.style,
             locked: d.locked,
@@ -892,6 +894,7 @@ mod tests {
         let input = serde_json::json!({
             "id": "d1",
             "instrument": { "source": "binance", "symbol": "BTCUSDT" },
+            "priceScale": 2,
             "body": {
                 "kind": "position", "side": "long", "entry": { "t": 10, "p": 100 },
                 "stop": 90, "take": 120, "endT": 20
@@ -903,16 +906,15 @@ mod tests {
         let mut d = Drawing::from(dto);
         assert_eq!(d.instrument.symbol, "BTCUSDT");
         assert!(matches!(d.body, DrawingBody::Position(p) if p.end_t == 20));
-        d.price_scale = 2;
+        assert_eq!(d.price_scale, 2);
         d.updated_at = 1_700_000_000_000;
         let out = serde_json::to_value(DrawingDto::from(d)).unwrap();
         let mut expected = input;
-        expected["priceScale"] = 2.into();
         expected["updatedAt"] = 1_700_000_000_000i64.into();
         assert_eq!(out, expected);
 
         let bad = serde_json::json!({
-            "id": "d1", "instrument": { "source": "b", "symbol": "s" },
+            "id": "d1", "instrument": { "source": "b", "symbol": "s" }, "priceScale": 2,
             "body": { "kind": "spiral" }, "style": { "color": 0, "width": 1, "dash": false },
             "locked": false, "z": 0
         });

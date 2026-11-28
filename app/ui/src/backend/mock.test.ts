@@ -183,6 +183,7 @@ describe("mock backend", () => {
     const input = (drawingId: string, body: DrawingBody, z = 0): DrawingInput => ({
       id: drawingId,
       instrument: id,
+      priceScale: 2,
       body,
       style: { color: 2, width: 1, dash: false },
       locked: false,
@@ -199,9 +200,9 @@ describe("mock backend", () => {
     });
 
     it("saves, lists in z then id order, replaces and deletes", async () => {
-      const b = createMockBackend({ candles: 10, priceScale: 4 });
+      const b = createMockBackend({ candles: 10 });
       const saved = await b.saveDrawing(input("b", { kind: "hline", p: 5 }));
-      expect(saved.priceScale).toBe(4);
+      expect(saved.priceScale).toBe(2);
       expect(saved.updatedAt).toBeGreaterThan(0);
       await b.saveDrawing(input("a", { kind: "note", t: 1, text: "hi" }));
       await b.saveDrawing(input("c", long(), -1));
@@ -218,6 +219,37 @@ describe("mock backend", () => {
       await b.deleteDrawing("b");
       await b.deleteDrawing("b");
       expect((await b.getDrawings(id)).map((d) => d.id)).toEqual(["c", "a"]);
+    });
+
+    it("rescales a drawing made at another tick size, as the engine does", async () => {
+      // The UI got the drawings at scale 2; the instrument now quotes four decimals.
+      const b = createMockBackend({ candles: 10, priceScale: 4 });
+      const saved = await b.saveDrawing(input("p", long()));
+      expect(saved.priceScale).toBe(4);
+      expect(saved.body).toMatchObject({ entry: { t: 1_000, p: 10_000 }, stop: 9_000, take: 12_000, endT: 2_000 });
+      // Down to scale 0: 12 345 (123.45) is stored as 123, and -12 350 as -124.
+      const down = createMockBackend({ candles: 10, priceScale: 0 });
+      expect((await down.saveDrawing(input("h", { kind: "hline", p: 12_345 }))).body).toEqual({ kind: "hline", p: 123 });
+      expect((await down.saveDrawing(input("n", { kind: "hline", p: -12_350 }))).body).toEqual({ kind: "hline", p: -124 });
+      await expect(b.saveDrawing(input("big", { kind: "hline", p: Math.floor(Number.MAX_SAFE_INTEGER / 10) }))).rejects.toMatchObject({
+        message: expect.stringMatching(/price scale 4.*±\(2\^53 - 1\)/),
+      });
+      await expect(down.saveDrawing(input("tight", long({ stop: 9_999, entry: { t: 1_000, p: 10_000 }, take: 10_001 })))).rejects.toMatchObject({
+        message: expect.stringMatching(/price scale 0.*stop < entry < take/),
+      });
+      expect((await b.getDrawings(id)).map((d) => d.id)).toEqual(["p"]);
+    });
+
+    it("lists drawings stored at another tick size rescaled, leaving out those that do not fit", async () => {
+      let kept: Drawing[] | null = null;
+      const store = { load: () => kept, save: (all: Drawing[]) => (kept = structuredClone(all)) };
+      const first = createMockBackend({ candles: 10, latencyMs: 0, drawingStore: store });
+      await first.saveDrawing(input("h", { kind: "hline", p: 12_345 }));
+      await first.saveDrawing(input("tight", long({ stop: 9_999, entry: { t: 1_000, p: 10_000 }, take: 10_001 })));
+      const later = createMockBackend({ candles: 10, latencyMs: 0, priceScale: 0, drawingStore: store });
+      const list = await later.getDrawings(id);
+      expect(list.map((d) => [d.id, d.priceScale, d.body])).toEqual([["h", 0, { kind: "hline", p: 123 }]]);
+      expect(kept!.length).toBe(2);
     });
 
     it("keeps drawings in the given store across backends", async () => {
