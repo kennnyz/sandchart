@@ -228,3 +228,80 @@ async fn broken_or_oversized_files_leave_the_session_alone() {
     assert!(msg.starts_with("the replay file is 32 MiB"), "{msg}");
     assert!(engine.replay_state(0).is_ok());
 }
+
+/// A file of `n` bars from bar 550 on, with prices at `price_scale` decimals (`bar` is at 2).
+fn file_at(price_scale: u8, n: i64) -> sandchart_core::replay::ReplayFile {
+    let k = 10i64.pow(u32::from(price_scale)) / 100;
+    let candles = (550..550 + n)
+        .map(|i| {
+            let c = bar(i);
+            Candle {
+                open: c.open * k,
+                high: c.high * k,
+                low: c.low * k,
+                close: c.close * k,
+                volume: c.volume * 10,
+                ..c
+            }
+        })
+        .collect();
+    sandchart_core::replay::ReplayFile {
+        instrument: Instrument {
+            id: id(),
+            base: "BTC".into(),
+            quote: "USDT".into(),
+            price_scale,
+            qty_scale: 6,
+        },
+        timeframe: Timeframe::H1,
+        candles,
+        start: 0,
+        current: n as u32 - 1,
+        commands: vec![Command::Open {
+            bar: 0,
+            side: Side::Long,
+            stop: 10_400 * k,
+            take: 10_610 * k,
+        }],
+    }
+}
+
+#[tokio::test]
+async fn a_file_at_another_tick_size_is_rescaled_to_the_stored_one() {
+    let (engine, _dir) = engine();
+    let st = engine
+        .replay_open(file_at(3, 5).to_json().as_bytes())
+        .unwrap();
+    // The store has the pair at 2 price and 5 quantity decimals: the file follows it.
+    assert_eq!((st.instrument.price_scale, st.instrument.qty_scale), (2, 5));
+    assert_eq!(st.bars, (550..555).map(bar).collect::<Vec<_>>());
+    let t = st.simulation.trades[0];
+    assert_eq!((t.entry_price, t.stop, t.take), (10_550, 10_400, 10_610));
+    // Saved again, it is at the stored scale.
+    let text = String::from_utf8(engine.replay_export().unwrap()).unwrap();
+    assert!(text.contains("\"priceScale\":2"), "{text}");
+}
+
+#[tokio::test]
+async fn a_file_that_does_not_fit_the_stored_tick_size_is_refused() {
+    let (engine, _dir) = engine();
+    let mut file = file_at(2, 3);
+    file.instrument.price_scale = 0;
+    file.candles[1].high = sandchart_core::JS_SAFE_MAX / 10;
+    let msg = replay_err(engine.replay_open(file.to_json().as_bytes()));
+    assert!(
+        msg.starts_with("at the stored price scale 2: candle 1: "),
+        "{msg}"
+    );
+    assert!(engine.replay_state(0).is_err());
+}
+
+#[tokio::test]
+async fn an_unknown_pair_keeps_the_file_instrument() {
+    let (engine, _dir) = engine();
+    let mut file = file_at(3, 3);
+    file.instrument.id.symbol = "ETHUSDT".into();
+    let st = engine.replay_open(file.to_json().as_bytes()).unwrap();
+    assert_eq!(st.instrument.price_scale, 3);
+    assert_eq!(st.bars[0].close, bar(550).close * 10);
+}

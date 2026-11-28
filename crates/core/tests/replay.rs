@@ -261,3 +261,35 @@ fn broken_files_are_refused_with_a_reason() {
         format!("candle 2: {} is outside ±(2^53 - 1)", 1i64 << 53)
     );
 }
+
+#[test]
+fn rescaled_moves_prices_volumes_and_levels_but_no_time_or_bar() {
+    let file = session(4);
+    let down = file.rescaled(1, 4).unwrap();
+    assert_eq!(
+        (down.instrument.price_scale, down.instrument.qty_scale),
+        (1, 4)
+    );
+    // 10 001 at 2 decimals is 1000.1 at 1, rounded half away from zero: 1 000.
+    assert_eq!(down.candles[0].close, 1_000);
+    assert_eq!(down.candles[0].open_time, file.candles[0].open_time);
+    assert_eq!(down.candles[0].volume, 1);
+    assert_eq!(
+        down.commands,
+        vec![
+            Command::Open {
+                bar: 2,
+                side: Side::Long,
+                stop: 990,
+                take: 1_030,
+            },
+            Command::Edit {
+                bar: 3,
+                stop: Some(995),
+                take: None,
+            },
+        ]
+    );
+    assert_eq!(file.rescaled(2, 5).unwrap(), file);
+    assert_eq!(file.rescaled(19, 5), None);
+}

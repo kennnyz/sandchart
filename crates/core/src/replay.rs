@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::decimal::JS_SAFE_MAX;
-use crate::drawing::Anchor;
+use crate::drawing::{Anchor, rescale_ticks};
 use crate::model::{Candle, Instrument, InstrumentId};
 use crate::position::{Side, Status, resolve_iter};
 use crate::timeframe::Timeframe;
@@ -485,6 +485,67 @@ fn capped_candles<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<[i64; 6]
 }
 
 impl ReplayFile {
+    /// The session with every price at `price_scale` and every volume at `qty_scale`
+    /// decimals (rounded half away from zero); `None` when a value overflows. The result
+    /// may break a rule after rounding: check its candles and simulate it again.
+    pub fn rescaled(&self, price_scale: u8, qty_scale: u8) -> Option<ReplayFile> {
+        let (pf, qf) = (self.instrument.price_scale, self.instrument.qty_scale);
+        let px = |v: i64| rescale_ticks(v, pf, price_scale);
+        let candles = self
+            .candles
+            .iter()
+            .map(|c| {
+                Some(Candle {
+                    open_time: c.open_time,
+                    open: px(c.open)?,
+                    high: px(c.high)?,
+                    low: px(c.low)?,
+                    close: px(c.close)?,
+                    volume: rescale_ticks(c.volume, qf, qty_scale)?,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        // `Some(None)`: no level to move; `None`: it overflowed.
+        let level = |v: Option<i64>| match v {
+            None => Some(None),
+            Some(x) => px(x).map(Some),
+        };
+        let commands = self
+            .commands
+            .iter()
+            .map(|c| {
+                Some(match *c {
+                    Command::Open {
+                        bar,
+                        side,
+                        stop,
+                        take,
+                    } => Command::Open {
+                        bar,
+                        side,
+                        stop: px(stop)?,
+                        take: px(take)?,
+                    },
+                    Command::Edit { bar, stop, take } => Command::Edit {
+                        bar,
+                        stop: level(stop)?,
+                        take: level(take)?,
+                    },
+                    Command::Close { bar } => Command::Close { bar },
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let mut instrument = self.instrument.clone();
+        instrument.price_scale = price_scale;
+        instrument.qty_scale = qty_scale;
+        Some(ReplayFile {
+            instrument,
+            candles,
+            commands,
+            ..self.clone()
+        })
+    }
+
     /// The file text: JSON with one command and one candle (`[time, open, high, low,
     /// close, volume]`) per line, so two files diff well.
     pub fn to_json(&self) -> String {

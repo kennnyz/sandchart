@@ -3,10 +3,12 @@
 
 use std::sync::{MutexGuard, PoisonError};
 
-use sandchart_core::replay::{Command, MAX_CANDLES, ReplayFile, Simulation, simulate};
+use sandchart_core::replay::{
+    Command, MAX_CANDLES, ReplayFile, Simulation, check_candles, simulate,
+};
 use sandchart_core::{Candle, Instrument, InstrumentId, Timeframe};
 
-use crate::{Engine, EngineError, blocking};
+use crate::{Engine, EngineError, blocking, lock};
 
 /// Bars shown before the start, for context.
 pub const REPLAY_CONTEXT: usize = 500;
@@ -192,8 +194,24 @@ impl Engine {
     }
 
     /// Checks a `.replay` file and opens it as the session, revealed up to its current bar.
+    /// When the pair is stored, the session takes the stored instrument, and a file at
+    /// another tick or lot size is rescaled to it, so drawings and outcomes of the pair
+    /// stay at one scale; a file that no longer fits or simulates after rounding is refused.
     pub fn replay_open(&self, bytes: &[u8]) -> Result<ReplayState, EngineError> {
-        let (file, _) = ReplayFile::from_json(bytes).map_err(EngineError::Replay)?;
+        let (mut file, _) = ReplayFile::from_json(bytes).map_err(EngineError::Replay)?;
+        if let Some(inst) = lock(&self.shared.store).instrument(&file.instrument.id)? {
+            let (ps, qs) = (inst.price_scale, inst.qty_scale);
+            if (file.instrument.price_scale, file.instrument.qty_scale) != (ps, qs) {
+                let at =
+                    |e: String| EngineError::Replay(format!("at the stored price scale {ps}: {e}"));
+                file = file
+                    .rescaled(ps, qs)
+                    .ok_or_else(|| at("a value does not fit".into()))?;
+                check_candles(&file.candles).map_err(at)?;
+                simulate(&file.candles, file.start, file.current, &file.commands).map_err(at)?;
+            }
+            file.instrument = inst;
+        }
         let session = Session {
             instrument: file.instrument,
             tf: file.timeframe,
