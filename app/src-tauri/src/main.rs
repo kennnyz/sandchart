@@ -1,6 +1,7 @@
 // No console window on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod alerts;
 mod commands;
 mod dto;
 mod update;
@@ -52,6 +53,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(UpdaterState::default())
         .setup(|app| {
             let dirs = directories::ProjectDirs::from("", "", "Sandchart")
@@ -83,7 +85,17 @@ fn main() {
                 }
             });
 
-            app.manage(AppState::new(engine, ready));
+            // Alerts: arm the stored ones, keep their streams, report what fires.
+            let russian = Arc::new(AtomicBool::new(false));
+            let service = engine.clone();
+            tauri::async_runtime::spawn(async move { service.run_alerts().await });
+            tauri::async_runtime::spawn(alerts::forward(
+                engine.alert_events(),
+                app.handle().clone(),
+                russian.clone(),
+            ));
+
+            app.manage(AppState::new(engine, ready, russian));
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -124,6 +136,11 @@ fn main() {
             commands::replay_save,
             commands::replay_open,
             commands::replay_exit,
+            commands::get_alerts,
+            commands::set_alert,
+            commands::rearm_alert,
+            commands::delete_alert,
+            commands::set_language,
             update::check_update,
             update::install_update,
         ])
