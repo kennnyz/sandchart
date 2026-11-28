@@ -108,13 +108,13 @@ All results are worked out by the app's engine, from the bars and the commands y
 - the candles: the context before the start and every revealed bar, as whole numbers in the pair's tick and lot size, and **no bar after the current one**;
 - the index of the first replayed bar and of the current bar;
 - every command you gave, in order: open (side, bar, stop, take), edit (bar and the new stop or take) and close (bar);
-- a SHA-256 hash of the candles.
+- a SHA-256 hash of the candles. It covers the candles only, not the pair, the timeframe, the indices or the commands.
 
 It holds no results. **Open** reads the file, checks its version, its limits and the hash of its candles, and plays the commands again to get the trades and statistics. A file that fails a check is refused with the reason, and the replay you had open stays as it was. An opened file switches the chart to its pair and timeframe, and since it has no bar after its current one, it cannot be stepped further.
 
 ## Sharing
 
-Send the `.replay` file. Whoever opens it gets the same chart, the same trades and the same numbers, on any computer, without a network connection and without the pair being cached: the file carries its own candles. The hash catches a file that was damaged or had a candle changed; it is a check, not a signature, so it proves nothing about who made the file.
+Send the `.replay` file. Whoever opens it gets the same chart, the same trades and the same numbers, on any computer, without a network connection and without the pair being cached: the file carries its own candles. The hash catches a file whose candles were damaged or changed; an edited command or pair is not caught, since the hash covers the candles only. It is a check, not a signature, so it proves nothing about who made the file.
 
 ## Limits
 
