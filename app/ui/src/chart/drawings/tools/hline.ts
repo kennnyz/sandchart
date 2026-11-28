@@ -12,6 +12,7 @@ interface HlineGeom {
 
 /** A level across the whole plot, with its price tagged on the axis. */
 export const hlineTool: ToolDef<Hline, HlineGeom> = {
+  id: "hline",
   kind: "hline",
   labelKey: "tools.hline",
   icon: Minus,

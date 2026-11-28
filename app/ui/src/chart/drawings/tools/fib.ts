@@ -30,6 +30,7 @@ interface FibGeom {
 
 /** Fibonacci levels of a move, from its start to its end, each a line between the two times. */
 export const fibTool: ToolDef<Fib, FibGeom> = {
+  id: "fib",
   kind: "fib",
   labelKey: "tools.fib",
   icon: Rows3,

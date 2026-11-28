@@ -1,7 +1,8 @@
-import type { CandleColumns, Candles, Drawing, DrawingKind, Instrument, LiveCandle, TimeframeCode } from "../backend/types";
+import type { CandleColumns, Candles, Drawing, Instrument, LiveCandle, PositionOutcome, TimeframeCode } from "../backend/types";
 import { chartDebug } from "./debug";
 import { Coords } from "./drawings/geometry";
-import { DrawingLayer, type DrawingCommand } from "./drawings/layer";
+import { DrawingLayer, type DrawingCommand, type TextEdit, type TextResult } from "./drawings/layer";
+import type { ToolId } from "./drawings/registry";
 import type { DrawingChange } from "./drawings/state";
 import { alignOffset, hasOwnPane, layoutPanes, overlayRange, paneRange, seriesValues, type IndicatorLayer } from "./indicators";
 import { draw, drawingTag, drawOverlay, plotSize, priceAxisWidth, RenderBuffers, type Crosshair, type FrameInput, type Series } from "./render";
@@ -123,13 +124,15 @@ export class Chart {
   /** Plot height `ind.priceH` and the pane rows were laid out for; -1 forces a new layout. */
   private layoutH = -1;
   private drawingCommitCb: ((c: DrawingChange) => void) | null = null;
-  private drawingToolCb: ((kind: DrawingKind | null) => void) | null = null;
+  private drawingToolCb: ((id: ToolId | null) => void) | null = null;
+  private drawingTextCb: ((edit: TextEdit | null) => void) | null = null;
   /** Drawings: painted on both layers, and first in line for pointer input on the price plot. */
   private readonly drawings = new DrawingLayer({
     invalidate: () => this.invalidate(),
     invalidateOverlay: () => this.invalidateOverlay(),
     commit: (c) => this.drawingCommitCb?.(c),
     tool: (k) => this.drawingToolCb?.(k),
+    text: (e) => this.drawingTextCb?.(e),
   });
 
   constructor(
@@ -352,11 +355,26 @@ export class Chart {
   }
 
   /** Picks the tool the next clicks on the price plot place, or none. */
-  setDrawingTool(kind: DrawingKind | null): void {
-    this.drawings.setTool(kind);
+  setDrawingTool(id: ToolId | null): void {
+    this.drawings.setTool(id);
   }
 
-  /** Undo, redo, delete the selection, cancel, or arm the ruler; false when there was nothing to do. */
+  /** Engine outcomes of the positions by drawing id; a position without one shows none. */
+  setPositionOutcomes(outcomes: ReadonlyMap<string, PositionOutcome>): void {
+    this.drawings.setOutcomes(outcomes);
+  }
+
+  /** The text editor of a drawing opens (where, in CSS px of the chart) or closes (null). */
+  onDrawingText(cb: ((edit: TextEdit | null) => void) | null): void {
+    this.drawingTextCb = cb;
+  }
+
+  /** Closes the open text editor: save with the text, delete the drawing, or cancel (null). */
+  finishDrawingText(result: TextResult): void {
+    this.drawings.finishText(result);
+  }
+
+  /** Undo, redo, delete the selection, cancel, arm the ruler, or edit the text of the selection; false when there was nothing to do. */
   drawingCommand(cmd: DrawingCommand): boolean {
     return this.drawings.command(cmd);
   }
@@ -367,7 +385,7 @@ export class Chart {
   }
 
   /** The active tool changed on the chart (placed, cancelled). */
-  onDrawingTool(cb: ((kind: DrawingKind | null) => void) | null): void {
+  onDrawingTool(cb: ((id: ToolId | null) => void) | null): void {
     this.drawingToolCb = cb;
   }
 
@@ -413,6 +431,7 @@ export class Chart {
     this.crosshairCb = null;
     this.drawingCommitCb = null;
     this.drawingToolCb = null;
+    this.drawingTextCb = null;
   }
 
   // ---- Internals ----
@@ -794,6 +813,10 @@ export class Chart {
 
   private readonly onDoubleClick = (e: MouseEvent): void => {
     const p = this.local(e);
+    if (this.inPricePlot(p)) {
+      this.drawings.doubleClick(p.x, p.y);
+      return;
+    }
     if (p.x < this.plot().plotW || p.y >= this.priceH()) return;
     this.autoScale = true;
     this.invalidate();

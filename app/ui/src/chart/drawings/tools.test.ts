@@ -20,13 +20,13 @@ const mover = (dx: number, dy: number): Mover => ({
 
 describe("registry", () => {
   it("lists the tools with distinct shortcuts and i18n keys", () => {
-    expect(TOOLS.map((t) => t.kind)).toEqual(["trend", "hline", "rect", "fib", "brush"]);
+    expect(TOOLS.map((t) => t.id)).toEqual(["trend", "hline", "rect", "fib", "long", "short", "brush", "note"]);
+    expect(new Set(TOOLS.map((t) => t.id)).size).toBe(TOOLS.length);
     expect(new Set(TOOLS.map((t) => t.labelKey)).size).toBe(TOOLS.length);
     expect(new Set(TOOLS.map((t) => t.code)).size).toBe(TOOLS.length);
     expect(toolFor("trend")?.code).toBe("KeyT");
     expect(toolFor("hline")?.code).toBe("KeyH");
-    expect(TOOLS.map((t) => t.code)).toEqual(["KeyT", "KeyH", "KeyB", "KeyF", "KeyP"]);
-    expect(toolFor("position")).toBeUndefined();
+    expect(TOOLS.map((t) => t.code)).toEqual(["KeyT", "KeyH", "KeyB", "KeyF", "KeyL", "KeyS", "KeyP", "KeyN"]);
     // Only the brush stays picked after a placement.
     expect(TOOLS.filter((t) => t.sticky).map((t) => t.kind)).toEqual(["brush"]);
   });

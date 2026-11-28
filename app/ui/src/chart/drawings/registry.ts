@@ -1,10 +1,12 @@
 import type { LucideIcon } from "lucide-react";
-import type { Anchor, DrawingBody, DrawingKind } from "../../backend/types";
+import type { Anchor, DrawingBody, DrawingKind, PositionOutcome } from "../../backend/types";
 import type { ChartTheme } from "../theme";
 import type { Coords } from "./geometry";
 import { brushTool } from "./tools/brush";
 import { fibTool } from "./tools/fib";
 import { hlineTool } from "./tools/hline";
+import { noteTool } from "./tools/note";
+import { longTool, shortTool } from "./tools/position";
 import { rectTool } from "./tools/rect";
 import { trendTool } from "./tools/trend";
 
@@ -32,6 +34,12 @@ export interface Look {
   theme: ChartTheme;
 }
 
+/**
+ * A tool in the rail: one per drawing kind, except the position, which is placed as a
+ * long or as a short.
+ */
+export type ToolId = Exclude<DrawingKind, "position"> | "long" | "short";
+
 /** A point in CSS px of the price plot. */
 export interface Point {
   x: number;
@@ -45,6 +53,7 @@ export interface Point {
  * then used by `paint`, `hitTest` and `handles`; it may cache a Path2D inside itself.
  */
 export interface ToolDef<B extends DrawingBody = DrawingBody, G = unknown> {
+  id: ToolId;
   kind: B["kind"];
   /** i18n key of the tool's name. */
   labelKey: string;
@@ -58,7 +67,8 @@ export interface ToolDef<B extends DrawingBody = DrawingBody, G = unknown> {
   create(points: Anchor[], c: Coords): B;
   /** Times the drawing spans, for culling; ±Infinity where it runs to the plot edge. */
   timeSpan(body: B): [number, number];
-  layout(body: B, c: Coords): G;
+  /** `outcome` is the engine's result for a stored position; none while it is placed or dragged. */
+  layout(body: B, c: Coords, outcome?: PositionOutcome): G;
   /** Draws on a context in CSS px, clipped to the price plot. */
   paint(ctx: CanvasRenderingContext2D, g: G, look: Look): void;
   /** Whether (x, y) is on the body, within `tol` px. Handles are tested by the core. */
@@ -73,6 +83,18 @@ export interface ToolDef<B extends DrawingBody = DrawingBody, G = unknown> {
   moveHandle(body: B, index: number, a: Anchor, horizontal: boolean): B;
   /** Prices to tag on the price axis in the drawing's colour. */
   axisPrices?(body: B): number[];
+  /** Extra painting on the overlay while the pointer is over the drawing (a tooltip). */
+  paintHover?(ctx: CanvasRenderingContext2D, g: G, look: Look, c: Coords): void;
+  /**
+   * The drawing holds text written in an editor. Placing it opens the editor first, and
+   * nothing is stored until it is saved with text; Enter or a double-click edits it.
+   */
+  text?: {
+    get(body: B): string;
+    set(body: B, text: string): B;
+    /** Where the editor opens, in CSS px of the price plot. */
+    at(g: G): Point;
+  };
 }
 
 /** Erases a tool's own body and geometry types: the registry hands each tool only its own kind. */
@@ -86,12 +108,23 @@ export const TOOLS: readonly ToolDef[] = [
   erase(hlineTool),
   erase(rectTool),
   erase(fibTool),
+  erase(longTool),
+  erase(shortTool),
   erase(brushTool),
+  erase(noteTool),
 ];
 
-const BY_KIND = new Map<DrawingKind, ToolDef>(TOOLS.map((t) => [t.kind, t]));
+// The first tool of a kind paints it: the long and the short paint any position alike.
+const BY_KIND = new Map<DrawingKind, ToolDef>();
+for (const t of TOOLS) if (!BY_KIND.has(t.kind)) BY_KIND.set(t.kind, t);
+const BY_ID = new Map<ToolId, ToolDef>(TOOLS.map((t) => [t.id, t]));
 
-/** The tool of a drawing kind; undefined for a kind this version cannot draw yet. */
+/** The tool that paints and edits a drawing kind; undefined for a kind this version cannot draw. */
 export function toolFor(kind: DrawingKind): ToolDef | undefined {
   return BY_KIND.get(kind);
+}
+
+/** The rail tool with this id. */
+export function toolById(id: ToolId): ToolDef | undefined {
+  return BY_ID.get(id);
 }

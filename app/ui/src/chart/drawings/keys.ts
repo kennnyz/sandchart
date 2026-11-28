@@ -1,5 +1,5 @@
-import type { DrawingKind } from "../../backend/types";
 import type { DrawingCommand } from "./layer";
+import type { ToolId } from "./registry";
 
 /** The parts of a KeyboardEvent the shortcuts read. */
 export interface KeyLike {
@@ -11,7 +11,7 @@ export interface KeyLike {
   target: unknown;
 }
 
-export type DrawingKeyAction = { tool: DrawingKind } | { command: DrawingCommand } | { magnet: true };
+export type DrawingKeyAction = { tool: ToolId } | { command: DrawingCommand } | { magnet: true };
 
 /** Alt + these keys: the ruler (not a stored drawing, so not in the registry) and the magnet. */
 export const RULER_CODE = "KeyR";
@@ -27,10 +27,11 @@ function typing(target: unknown): boolean {
 /**
  * What a key press does to drawings: Alt + a tool's key picks the tool, Alt+R arms the
  * ruler, Alt+M toggles the magnet, ⌘Z / Ctrl+Z
- * undoes, with Shift redoes, Delete / Backspace removes the selection, Esc cancels.
+ * undoes, with Shift redoes, Delete / Backspace removes the selection, Enter edits its
+ * text, Esc cancels.
  * Keys are matched by `code` (the physical key): on macOS Alt changes the typed character.
  */
-export function drawingKeyAction(e: KeyLike, tools: readonly { kind: DrawingKind; code: string }[]): DrawingKeyAction | null {
+export function drawingKeyAction(e: KeyLike, tools: readonly { id: ToolId; code: string }[]): DrawingKeyAction | null {
   if (typing(e.target)) return null;
   const cmd = e.metaKey || e.ctrlKey;
   if (cmd && !e.altKey && e.code === "KeyZ") return { command: e.shiftKey ? "redo" : "undo" };
@@ -39,9 +40,10 @@ export function drawingKeyAction(e: KeyLike, tools: readonly { kind: DrawingKind
     if (e.code === RULER_CODE) return { command: "ruler" };
     if (e.code === MAGNET_CODE) return { magnet: true };
     const tool = tools.find((t) => t.code === e.code);
-    return tool ? { tool: tool.kind } : null;
+    return tool ? { tool: tool.id } : null;
   }
   if (e.code === "Delete" || e.code === "Backspace") return { command: "delete" };
   if (e.code === "Escape") return { command: "cancel" };
+  if (e.code === "Enter" || e.code === "NumpadEnter") return { command: "edit" };
   return null;
 }

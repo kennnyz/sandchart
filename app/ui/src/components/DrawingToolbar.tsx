@@ -34,13 +34,13 @@ export function DrawingToolbar({ store }: { store: DrawingStore }) {
         const name = t(tool.labelKey);
         return (
           <button
-            key={tool.kind}
+            key={tool.id}
             className="tool-button"
-            data-testid={`tool-${tool.kind}`}
+            data-testid={`tool-${tool.id}`}
             aria-label={name}
-            aria-pressed={s.tool === tool.kind}
+            aria-pressed={s.tool === tool.id}
             title={t("tools.title", { name, shortcut: altShortcutLabel(keyName(tool.code)) })}
-            onClick={() => s.toggleTool(tool.kind)}
+            onClick={() => s.toggleTool(tool.id)}
           >
             <Icon size={18} strokeWidth={1.75} />
           </button>

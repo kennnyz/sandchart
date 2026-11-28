@@ -30,6 +30,8 @@ export interface ChartDebug {
   hoveredDrawing: string | null;
   /** The ruler's numbers at the last overlay frame ("+1.00 (+0.50%)|12 bars, 12h"), null when it is not shown. */
   ruler: string | null;
+  /** Position outcomes the chart was last given, by drawing id: "take", "stop", "open", with "?" when ambiguous. */
+  outcomes: Record<string, string>;
 }
 
 let debug: ChartDebug | null = null;
@@ -52,6 +54,7 @@ export function enableChartDebug(): void {
     selectedDrawing: null,
     hoveredDrawing: null,
     ruler: null,
+    outcomes: {},
   };
   (window as unknown as { __sandchartDebug: ChartDebug }).__sandchartDebug = debug;
 }

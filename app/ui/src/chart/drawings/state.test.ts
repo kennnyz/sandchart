@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { Anchor, Drawing, DrawingKind } from "../../backend/types";
+import type { Anchor, Drawing } from "../../backend/types";
 import { PriceScale } from "../scale";
 import { Coords } from "./geometry";
+import type { ToolId } from "./registry";
 import { DrawingState, HISTORY_LIMIT, type DrawingChange } from "./state";
 
 const H = 3_600_000;
@@ -13,7 +14,7 @@ const B: Anchor = { t: 3 * H, p: 40 };
 
 function setup() {
   const commits: DrawingChange[] = [];
-  const tools: (DrawingKind | null)[] = [];
+  const tools: (ToolId | null)[] = [];
   let n = 0;
   const s = new DrawingState({ commit: (ch) => commits.push(ch), tool: (k) => tools.push(k) }, () => `d${++n}`);
   s.setOwner({ instrument: BTC, priceScale: 2 });
@@ -232,5 +233,47 @@ describe("cancel", () => {
     expect(s.tool).toBeNull();
     expect(s.selected).toBeNull();
     expect(tools).toEqual(["trend", null]);
+  });
+});
+
+describe("positions and notes", () => {
+  it("places a long or a short with one click and its defaults", () => {
+    const { s, commits } = setup();
+    s.setTool("short");
+    const d = s.place({ t: 2 * H, p: 1000 }, false, c)!;
+    expect(d.body).toEqual({ kind: "position", side: "short", entry: { t: 2 * H, p: 1000 }, stop: 1015, take: 955, endT: 22 * H });
+    expect(commits).toHaveLength(1);
+    expect(s.tool).toBeNull();
+  });
+
+  it("keeps a new note as a draft until it has text, then stores and selects it", () => {
+    const { s, commits, tools } = setup();
+    s.setTool("note");
+    const draft = s.place(A, false, c)!;
+    expect(draft.body).toEqual({ kind: "note", t: 1 * H, text: "" });
+    expect(s.draft).toBe(draft);
+    expect(commits).toEqual([]);
+    expect(s.drawings).toEqual([]);
+    expect(s.tool).toBeNull();
+    expect(tools).toEqual(["note", null]);
+    const d = s.commitDraft({ kind: "note", t: 1 * H, text: "breakout" })!;
+    expect(d).toMatchObject({ id: draft.id, body: { kind: "note", text: "breakout" } });
+    expect(commits).toEqual([{ before: null, after: d }]);
+    expect(s.draft).toBeNull();
+    expect(s.selected).toBe(d.id);
+    expect(s.commitDraft({ kind: "note", t: 1, text: "x" })).toBeNull();
+  });
+
+  it("drops the draft on Esc and on a new list", () => {
+    const { s, commits } = setup();
+    s.setTool("note");
+    s.place(A, false, c);
+    expect(s.cancel()).toBe(true);
+    expect(s.draft).toBeNull();
+    s.setTool("note");
+    s.place(A, false, c);
+    s.reset([]);
+    expect(s.draft).toBeNull();
+    expect(commits).toEqual([]);
   });
 });

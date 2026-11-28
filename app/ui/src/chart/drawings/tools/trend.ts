@@ -28,6 +28,7 @@ function ends(body: Trend): { extA: boolean; extB: boolean } {
 
 /** A segment between two points; extended to a ray or a line by its extend flags. */
 export const trendTool: ToolDef<Trend, TrendGeom> = {
+  id: "trend",
   kind: "trend",
   labelKey: "tools.trend",
   icon: Slash,

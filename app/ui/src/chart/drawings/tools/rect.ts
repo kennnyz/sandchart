@@ -25,6 +25,7 @@ const same = (a: Anchor, b: Anchor) => a.t === b.t && a.p === b.p;
 
 /** A zone between two corners, filled lightly in its colour; it can run on to the right edge. */
 export const rectTool: ToolDef<Rect, RectGeom> = {
+  id: "rect",
   kind: "rect",
   labelKey: "tools.rect",
   icon: RectangleHorizontal,

@@ -1,6 +1,6 @@
-import type { Anchor, Drawing, DrawingBody, DrawingKind, DrawingStyle, InstrumentId } from "../../backend/types";
+import type { Anchor, Drawing, DrawingBody, DrawingStyle, InstrumentId } from "../../backend/types";
 import type { Coords } from "./geometry";
-import { toolFor, type ToolDef } from "./registry";
+import { toolById, type ToolDef, type ToolId } from "./registry";
 
 /** One stored change: a new drawing (`before` null), an edit, or a delete (`after` null). */
 export interface DrawingChange {
@@ -21,7 +21,7 @@ export interface StateListener {
   /** A change to store; undo and redo come through here too. */
   commit(change: DrawingChange): void;
   /** The active tool changed (picked, placed, cancelled). */
-  tool(kind: DrawingKind | null): void;
+  tool(id: ToolId | null): void;
 }
 
 /** Palette slot 0 (blue in both themes), 2 px, solid. */
@@ -42,9 +42,11 @@ export class DrawingState {
   drawings: Drawing[] = [];
   selected: string | null = null;
   hover: { id: string; part: Part } | null = null;
-  tool: DrawingKind | null = null;
+  tool: ToolId | null = null;
   /** Points placed so far with the active tool. */
   points: Anchor[] = [];
+  /** A new drawing of a text tool waiting for its text (see `ToolDef.text`); not stored yet. */
+  draft: Drawing | null = null;
   private owner: Owner | null = null;
   private undoStack: DrawingChange[] = [];
   private redoStack: DrawingChange[] = [];
@@ -64,6 +66,7 @@ export class DrawingState {
     this.selected = null;
     this.hover = null;
     this.points = [];
+    this.draft = null;
     this.undoStack = [];
     this.redoStack = [];
   }
@@ -72,12 +75,12 @@ export class DrawingState {
     return this.drawings.find((d) => d.id === id);
   }
 
-  setTool(kind: DrawingKind | null): void {
+  setTool(id: ToolId | null): void {
     this.points = [];
-    if (kind !== null) this.selected = null;
-    if (kind === this.tool) return;
-    this.tool = kind;
-    this.listener.tool(kind);
+    if (id !== null) this.selected = null;
+    if (id === this.tool) return;
+    this.tool = id;
+    this.listener.tool(id);
   }
 
   select(id: string | null): void {
@@ -92,9 +95,10 @@ export class DrawingState {
   /**
    * Places the next point of the active tool. Returns the drawing once it is complete:
    * it is stored, selected, and the tool is put down (a sticky tool stays, nothing is selected).
+   * A text tool's drawing is not stored but becomes the `draft`.
    */
   place(a: Anchor, horizontal: boolean, c: Coords): Drawing | null {
-    const tool = this.tool ? toolFor(this.tool) : undefined;
+    const tool = this.tool ? toolById(this.tool) : undefined;
     if (!tool || !this.owner) return null;
     const p = this.nextPoint(a, horizontal);
     const last = this.points.at(-1);
@@ -106,7 +110,7 @@ export class DrawingState {
 
   /** The pressed pointer of a stroke tool reached `a`; a repeated point is dropped. */
   stroke(a: Anchor): void {
-    const tool = this.tool ? toolFor(this.tool) : undefined;
+    const tool = this.tool ? toolById(this.tool) : undefined;
     if (!tool?.placement.stroke) return;
     const last = this.points.at(-1);
     if (!last || last.t !== a.t || last.p !== a.p) this.points.push({ t: a.t, p: a.p });
@@ -114,7 +118,7 @@ export class DrawingState {
 
   /** The stroke ended: the drawing when it has enough points (see `place`), else nothing. */
   endStroke(c: Coords): Drawing | null {
-    const tool = this.tool ? toolFor(this.tool) : undefined;
+    const tool = this.tool ? toolById(this.tool) : undefined;
     if (!tool?.placement.stroke || !this.owner || this.points.length < tool.placement.clicks) {
       this.points = [];
       return null;
@@ -136,6 +140,12 @@ export class DrawingState {
       updatedAt: 0,
     };
     this.points = [];
+    if (tool.text) {
+      this.draft = d;
+      this.selected = null;
+      this.setTool(null);
+      return d;
+    }
     this.record({ before: null, after: d });
     if (tool.sticky) {
       this.selected = null;
@@ -143,6 +153,16 @@ export class DrawingState {
       this.selected = d.id;
       this.setTool(null);
     }
+    return d;
+  }
+
+  /** Stores the draft with this body (its text written) and selects it; null without a draft. */
+  commitDraft(body: DrawingBody): Drawing | null {
+    const draft = this.draft;
+    if (!draft) return null;
+    this.draft = null;
+    const d = { ...draft, body };
+    this.record({ before: null, after: d });
     return d;
   }
 
@@ -177,9 +197,10 @@ export class DrawingState {
     return true;
   }
 
-  /** Esc: drops the placed points, the tool and the selection; false when there was none. */
+  /** Esc: drops the placed points, the draft, the tool and the selection; false when there was none. */
   cancel(): boolean {
-    const any = this.points.length > 0 || this.tool !== null || this.selected !== null;
+    const any = this.points.length > 0 || this.tool !== null || this.selected !== null || this.draft !== null;
+    this.draft = null;
     this.selected = null;
     this.setTool(null);
     return any;

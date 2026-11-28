@@ -108,5 +108,20 @@
   "ruler.d": "{n}д",
   "ruler.h": "{n}ч",
   "ruler.m": "{n}м",
-  "tools.magnet": "Магнит"
+  "tools.magnet": "Магнит",
+  "tools.long": "Длинная позиция",
+  "tools.short": "Короткая позиция",
+  "tools.note": "Заметка",
+  "position.take": "Тейк",
+  "position.stop": "Стоп",
+  "position.rr": "RR",
+  "position.open": "Открыта",
+  "note.title": "Заметка",
+  "note.text": "Текст заметки",
+  "note.placeholder": "Заметка к этому бару",
+  "note.bytes": "{n} / {max} байт",
+  "note.save": "Сохранить",
+  "note.saveHint": "Сохранить ({shortcut})",
+  "note.cancel": "Отмена",
+  "note.delete": "Удалить"
 }

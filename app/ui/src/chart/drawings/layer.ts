@@ -1,9 +1,9 @@
-import type { Anchor, Drawing, DrawingBody, DrawingKind, DrawingStyle } from "../../backend/types";
+import type { Anchor, Drawing, DrawingBody, DrawingStyle, PositionOutcome } from "../../backend/types";
 import { chartDebug } from "../debug";
 import type { ChartTheme } from "../theme";
 import type { Coords } from "./geometry";
 import { snapToBar } from "./magnet";
-import { toolFor, type Look, type Mover, type Point, type ToolDef } from "./registry";
+import { toolById, toolFor, type Look, type Mover, type Point, type ToolDef, type ToolId } from "./registry";
 import { paintRuler } from "./ruler";
 import { DEFAULT_STYLE, DrawingState, type DrawingChange, type Owner, type Part } from "./state";
 
@@ -18,8 +18,24 @@ const HALO_ALPHA = 0.25;
 const DASH = [6, 4];
 const NO_DASH: number[] = [];
 
-/** `ruler` arms the ruler for the next drag, whatever the tool (pressed again, disarms it). */
-export type DrawingCommand = "undo" | "redo" | "delete" | "cancel" | "ruler";
+/**
+ * `ruler` arms the ruler for the next drag, whatever the tool (pressed again, disarms it);
+ * `edit` opens the text editor of the selected drawing when it holds text.
+ */
+export type DrawingCommand = "undo" | "redo" | "delete" | "cancel" | "ruler" | "edit";
+
+/** The text editor of a drawing is open: its text, and where to show it (CSS px of the price plot). */
+export interface TextEdit {
+  id: string;
+  text: string;
+  /** A new drawing: nothing is stored until it is saved with text. */
+  isNew: boolean;
+  x: number;
+  y: number;
+}
+
+/** How the text editor was closed: saved with this text, deleted, or cancelled (null). */
+export type TextResult = { text: string } | { delete: true } | null;
 
 /** What the layer needs from the chart. */
 export interface LayerHost {
@@ -27,7 +43,9 @@ export interface LayerHost {
   invalidate(): void;
   invalidateOverlay(): void;
   commit(change: DrawingChange): void;
-  tool(kind: DrawingKind | null): void;
+  tool(id: ToolId | null): void;
+  /** Open (or move) the text editor, or close it with null. */
+  text(edit: TextEdit | null): void;
 }
 
 /** Draws a price tag on the axis of the given canvas: price in ticks, background colour. */
@@ -68,6 +86,10 @@ export class DrawingLayer {
   /** The ruler on the overlay: `live` while its drag lasts, then shown until the next press or Esc. */
   private ruler: { a: Anchor; b: Anchor; live: boolean } | null = null;
   private rulerArmed = false;
+  /** Engine outcomes of positions by drawing id. */
+  private outcomes: ReadonlyMap<string, PositionOutcome> = new Map();
+  /** The drawing whose text editor is open. */
+  private textEdit: { id: string; isNew: boolean } | null = null;
 
   constructor(private readonly host: LayerHost) {
     this.state = new DrawingState({ commit: (c) => host.commit(c), tool: (k) => host.tool(k) });
@@ -79,6 +101,7 @@ export class DrawingLayer {
     this.edit = null;
     this.press = null;
     this.ruler = null;
+    this.closeText();
     this.state.reset(list);
     this.cache.clear();
     this.host.invalidate();
@@ -88,10 +111,55 @@ export class DrawingLayer {
     this.state.setOwner(owner);
   }
 
-  setTool(kind: DrawingKind | null): void {
+  setTool(id: ToolId | null): void {
     this.abort();
-    this.state.setTool(kind);
+    this.finishText(null);
+    this.state.setTool(id);
     this.host.invalidateOverlay();
+  }
+
+  /** Engine outcomes of the positions, painted with them; a position without one shows none. */
+  setOutcomes(outcomes: ReadonlyMap<string, PositionOutcome>): void {
+    this.outcomes = outcomes;
+    this.cache.clear();
+    const debug = chartDebug();
+    if (debug) {
+      debug.outcomes = {};
+      for (const [id, o] of outcomes) debug.outcomes[id] = o.status + (o.ambiguous ? "?" : "");
+    }
+    this.host.invalidate();
+  }
+
+  /** Closes the text editor: stores the text, deletes the drawing, or (null) drops the change. */
+  finishText(result: TextResult): void {
+    const te = this.textEdit;
+    if (!te) return;
+    this.closeText();
+    const s = this.state;
+    const draft = te.isNew ? s.draft : null;
+    const d = draft ?? s.byId(te.id);
+    const tool = d && toolFor(d.body.kind);
+    if (!d || !tool?.text) return;
+    // An empty text means no note: a new one is dropped, an existing one deleted.
+    const text = result && "text" in result ? result.text : null;
+    if (te.isNew) {
+      if (text) s.commitDraft(tool.text.set(d.body, text));
+      else s.draft = null;
+    } else if (result && (text === "" || "delete" in result)) {
+      s.select(d.id);
+      s.deleteSelected();
+    } else if (text !== null) {
+      s.edit(d.id, tool.text.set(d.body, text));
+    }
+    this.host.invalidate();
+  }
+
+  /** A double-click on the price plot: opens the text editor of a drawing with text; false when none is there. */
+  doubleClick(x: number, y: number): boolean {
+    const hit = this.state.tool ? null : this.hitAt(x, y);
+    if (!hit) return false;
+    this.state.select(hit.id);
+    return this.openText(hit.id);
   }
 
   /** Snaps placed and dragged points to bar prices (see `snapToBar`). */
@@ -106,6 +174,7 @@ export class DrawingLayer {
       this.ruler = null;
       this.rulerArmed = false;
       this.abort();
+      this.closeText();
       const any = this.state.cancel() || ruler;
       this.host.invalidateOverlay();
       return any;
@@ -115,6 +184,7 @@ export class DrawingLayer {
       this.rulerArmed = !this.rulerArmed;
       return true;
     }
+    if (cmd === "edit") return this.state.selected !== null && !this.edit && this.openText(this.state.selected);
     // Not in the middle of a drag: the history would change under it.
     if (this.edit || this.press) return false;
     const done = cmd === "undo" ? this.state.undo() : cmd === "redo" ? this.state.redo() : this.state.deleteSelected();
@@ -178,6 +248,11 @@ export class DrawingLayer {
     const hoverTool = hovered && this.visibleTool(hovered);
     if (hovered && hoverTool) paintOne(ctx, hoverTool, this.geom(hoverTool, hovered), hovered.style, dpr, theme, true);
 
+    // A new drawing waiting for its text in the editor.
+    const draft = s.draft;
+    const draftTool = draft && toolFor(draft.body.kind);
+    if (draft && draftTool) paintOne(ctx, draftTool, draftTool.layout(draft.body, c), draft.style, dpr, theme, false);
+
     if (e) {
       const d = s.byId(e.id);
       const tool = d && toolFor(e.body.kind);
@@ -196,7 +271,7 @@ export class DrawingLayer {
 
     // The shape being placed: the points so far and the mouse as the next one. A stroke
     // shows only once it is pressed, and without a handle on every point.
-    const placing = s.tool ? toolFor(s.tool) : undefined;
+    const placing = s.tool ? toolById(s.tool) : undefined;
     const stroke = placing?.placement.stroke === true;
     if (placing && this.mouse && !this.ruler?.live && (!stroke || s.points.length > 0)) {
       const m = this.mouse;
@@ -211,6 +286,10 @@ export class DrawingLayer {
     if (this.ruler) {
       const text = paintRuler(ctx, c, this.ruler.a, this.ruler.b, theme);
       if (debug) debug.ruler = text;
+    }
+    // A tooltip goes over everything else.
+    if (hovered && hoverTool?.paintHover && !this.press) {
+      hoverTool.paintHover(ctx, this.geom(hoverTool, hovered), look(theme, hovered.style, dpr), c);
     }
     ctx.restore();
     for (const [p, col] of tags) tag(p, col);
@@ -227,6 +306,8 @@ export class DrawingLayer {
     if (!c || c.count === 0) return false;
     this.mouse = { x, y, shift, invert };
     const s = this.state;
+    // A press on the chart while a text editor is open closes it without saving.
+    this.finishText(null);
     // Any press puts a shown ruler away.
     if (this.ruler) {
       this.ruler = null;
@@ -247,6 +328,10 @@ export class DrawingLayer {
         s.stroke(this.rawAnchor(x, y));
         this.strokeAt = { x, y };
       } else if (s.place(this.anchorAt(x, y, invert), shift, c)) {
+        if (s.draft) {
+          this.press = null;
+          this.openText(s.draft.id);
+        }
         this.host.invalidate();
         return true;
       }
@@ -386,9 +471,31 @@ export class DrawingLayer {
 
   /** The active tool places by stroke. */
   private placingStroke(): boolean {
-    const tool = this.state.tool ? toolFor(this.state.tool) : undefined;
+    const tool = this.state.tool ? toolById(this.state.tool) : undefined;
     return tool?.placement.stroke === true;
   }
+
+  /** Opens the text editor of drawing `id` (or of the draft); false when it holds no text. */
+  private openText(id: string): boolean {
+    const s = this.state;
+    const c = this.coords;
+    const isNew = s.draft?.id === id;
+    const d = isNew ? s.draft : s.byId(id);
+    const tool = d && toolFor(d.body.kind);
+    if (!c || !d || !tool?.text || (!isNew && d.locked)) return false;
+    const at = tool.text.at(tool.layout(d.body, c, this.outcomes.get(d.id)));
+    this.textEdit = { id, isNew };
+    this.host.text({ id, text: tool.text.get(d.body), isNew, x: at.x, y: at.y });
+    this.host.invalidateOverlay();
+    return true;
+  }
+
+  private closeText(): void {
+    if (!this.textEdit) return;
+    this.textEdit = null;
+    this.host.text(null);
+  }
+
 
   /** The tool of a drawing that is shown and inside the visible times. */
   private visibleTool(d: Drawing): ToolDef | undefined {
@@ -403,7 +510,7 @@ export class DrawingLayer {
     const c = this.coords!;
     const hit = this.cache.get(d.id);
     if (hit && hit.drawing === d && hit.coords === c) return hit.geom;
-    const geom = tool.layout(d.body, c);
+    const geom = tool.layout(d.body, c, this.outcomes.get(d.id));
     this.cache.set(d.id, { drawing: d, coords: c, geom });
     return geom;
   }
@@ -459,6 +566,10 @@ function begin(ctx: CanvasRenderingContext2D, c: Coords, dpr: number): void {
   ctx.clip();
 }
 
+function look(theme: ChartTheme, style: DrawingStyle, dpr: number): Look {
+  return { color: color(theme, style), width: style.width, dash: style.dash, dpr, theme };
+}
+
 function paintOne(
   ctx: CanvasRenderingContext2D,
   tool: ToolDef,
@@ -468,14 +579,14 @@ function paintOne(
   theme: ChartTheme,
   halo: boolean,
 ): void {
-  const look: Look = { color: color(theme, style), width: style.width, dash: style.dash, dpr, theme };
-  ctx.strokeStyle = look.color;
-  ctx.fillStyle = look.color;
+  const lk = look(theme, style, dpr);
+  ctx.strokeStyle = lk.color;
+  ctx.fillStyle = lk.color;
   ctx.lineWidth = halo ? style.width + HALO_EXTRA : style.width;
   ctx.globalAlpha = halo ? HALO_ALPHA : 1;
   ctx.setLineDash(style.dash && !halo ? DASH : NO_DASH);
   ctx.lineCap = "butt";
-  tool.paint(ctx, g, look);
+  tool.paint(ctx, g, lk);
   ctx.globalAlpha = 1;
   ctx.setLineDash(NO_DASH);
 }

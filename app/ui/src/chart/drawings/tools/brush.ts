@@ -22,6 +22,7 @@ interface BrushGeom {
 
 /** A free-hand stroke: press, drag and release. The tool stays picked until Esc. */
 export const brushTool: ToolDef<BrushBody, BrushGeom> = {
+  id: "brush",
   kind: "brush",
   labelKey: "tools.brush",
   icon: Brush,

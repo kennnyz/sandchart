@@ -50,6 +50,16 @@ describe("drawingKeyAction", () => {
     expect(drawingKeyAction(key("Escape"), TOOLS)).toEqual({ command: "cancel" });
   });
 
+  it("picks the long, the short and the note, and edits a note's text with Enter", () => {
+    expect(drawingKeyAction(key("KeyL", { altKey: true }), TOOLS)).toEqual({ tool: "long" });
+    expect(drawingKeyAction(key("KeyS", { altKey: true }), TOOLS)).toEqual({ tool: "short" });
+    expect(drawingKeyAction(key("KeyN", { altKey: true }), TOOLS)).toEqual({ tool: "note" });
+    expect(drawingKeyAction(key("Enter"), TOOLS)).toEqual({ command: "edit" });
+    expect(drawingKeyAction(key("NumpadEnter"), TOOLS)).toEqual({ command: "edit" });
+    expect(drawingKeyAction(key("Enter", { metaKey: true }), TOOLS)).toBeNull();
+    expect(drawingKeyAction(key("Enter", { target: { tagName: "TEXTAREA" } }), TOOLS)).toBeNull();
+  });
+
   it("ignores keys typed into a field", () => {
     for (const target of [{ tagName: "INPUT" }, { tagName: "TEXTAREA" }, { tagName: "SELECT" }, { tagName: "DIV", isContentEditable: true }]) {
       expect(drawingKeyAction(key("Backspace", { target }), TOOLS)).toBeNull();

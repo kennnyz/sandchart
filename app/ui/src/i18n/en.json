@@ -108,5 +108,20 @@
   "ruler.d": "{n}d",
   "ruler.h": "{n}h",
   "ruler.m": "{n}m",
-  "tools.magnet": "Magnet"
+  "tools.magnet": "Magnet",
+  "tools.long": "Long position",
+  "tools.short": "Short position",
+  "tools.note": "Note",
+  "position.take": "Take",
+  "position.stop": "Stop",
+  "position.rr": "RR",
+  "position.open": "Open",
+  "note.title": "Note",
+  "note.text": "Note text",
+  "note.placeholder": "Write a note for this bar",
+  "note.bytes": "{n} / {max} bytes",
+  "note.save": "Save",
+  "note.saveHint": "Save ({shortcut})",
+  "note.cancel": "Cancel",
+  "note.delete": "Delete"
 }
