@@ -186,8 +186,20 @@ test("replay_start_step_play_trade_save_open_exit", async ({ page }) => {
     mimeType: "application/json",
     buffer: Buffer.from(text.replace('"version": 2', '"version": 9')),
   });
-  await expect(page.getByTestId("replay-error")).toContainText("replay file version 9 is not supported");
+  // A broken file says so in plain words, the engine's in the tooltip, and closes with ×.
+  const refused = page.getByTestId("replay-file-error");
+  await expect(refused).toContainText("from a newer Sandchart");
+  await expect(refused).toHaveAttribute("title", /replay file version 9 is not supported/);
   expect(await lastBar(page)).toBe(revealed);
+  await refused.getByRole("button", { name: "Close" }).click();
+  await expect(refused).toHaveCount(0);
+  for (const [bytes, says] of [
+    ["not json", "not a Sandchart replay file"],
+    [text.replace(/"sha256": "[0-9a-f]+"/, `"sha256": "${"0".repeat(64)}"`), "damaged or was edited"],
+  ] as const) {
+    await page.getByTestId("replay-file").setInputFiles({ name: "bad.replay", mimeType: "application/json", buffer: Buffer.from(bytes) });
+    await expect(refused).toContainText(says);
+  }
 
   await page.getByTestId("replay-exit").click();
   await expect.poll(() => lastBar(page)).toBe(live);

@@ -624,6 +624,11 @@
       "error": "replay file version 3 is not supported (this app reads versions 1 and 2)"
     },
     {
+      "name": "a file without a version is not a replay file",
+      "file": {"instrument": {"source": "binance", "symbol": "BTCUSDT"}, "candles": []},
+      "error": "not a replay file: missing field `version`"
+    },
+    {
       "name": "commands are checked when the file opens",
       "file": {
         "version": 1,

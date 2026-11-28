@@ -448,6 +448,9 @@ export async function mockReadReplay(bytes: Uint8Array): Promise<MockReplayFile>
     throw new Error(`not a replay file: ${e instanceof Error ? e.message : String(e)}`);
   }
   const version = raw.version;
+  // As serde reads the version first: missing, or not a whole number, it is no replay file at all.
+  if (version === undefined) throw new Error("not a replay file: missing field `version`");
+  if (!Number.isInteger(version) || (version as number) < 0) throw new Error(`not a replay file: invalid type for \`version\`: ${JSON.stringify(version)}`);
   if (version !== 1 && version !== MOCK_REPLAY_VERSION) {
     throw new Error(`replay file version ${String(version)} is not supported (this app reads versions 1 and ${MOCK_REPLAY_VERSION})`);
   }

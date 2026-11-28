@@ -8,6 +8,7 @@ import {
   defaultLevels,
   RESULTS_COLLAPSED_KEY,
   ReplayController,
+  replayFileProblem,
   replayKeyAction,
   validLevels,
   type KeyValue,
@@ -356,11 +357,11 @@ describe("replay controller", () => {
     expect(c.view!.atEnd).toBe(true);
   });
 
-  it("shows the engine's message for a broken file and keeps the session", async () => {
+  it("says why a broken file was refused and keeps the session", async () => {
     const { c, backend } = await started();
     await c.step();
     await c.open(new TextEncoder().encode("{}"));
-    expect(c.error).toMatch(/./);
+    expect(c.fileError?.detail).toMatch(/./);
     expect(c.phase).toBe("on");
     expect((await backend.replayState("1h", 0, 0)).current).toBe(501);
     await c.step();
@@ -899,5 +900,30 @@ describe("replay keys", () => {
     expect(replayKeyAction(key("Space", { target: { tagName: "BUTTON" } }), "on")).toBeNull();
     expect(replayKeyAction(key("Space", { repeat: true }), "on")).toBeNull();
     expect(replayKeyAction(key("ArrowRight", { repeat: true }), "on")).toBe("step");
+  });
+});
+
+describe("refused replay files", () => {
+  it("sorts the engine's words into what the user is told", () => {
+    expect(replayFileProblem("not a replay file: expected value at line 1 column 1")).toBe("notFile");
+    expect(replayFileProblem("not a replay file: missing field `version`")).toBe("notFile");
+    expect(replayFileProblem("replay file version 3 is not supported (this app reads versions 1 and 2)")).toBe("version");
+    expect(replayFileProblem("the replay file is 40 MiB; the limit is 32 MiB")).toBe("tooLarge");
+    expect(replayFileProblem("the candles do not match the file's sha256")).toBe("damaged");
+    expect(replayFileProblem("command 2: no open trade to close")).toBe("damaged");
+  });
+
+  it("keeps the open replay, says why, and forgets it on dismiss or the next file", async () => {
+    const { c } = await started();
+    await c.buy();
+    await c.open(new TextEncoder().encode("{}"));
+    expect(c.fileError).toEqual({ kind: "notFile", detail: "not a replay file: missing field `version`" });
+    expect(c.error).toBeNull();
+    expect(c.phase).toBe("on");
+    expect(c.view!.trades).toHaveLength(1);
+    c.dismissFileError();
+    expect(c.fileError).toBeNull();
+    await c.open(new TextEncoder().encode('{"version": 9}'));
+    expect(c.fileError?.kind).toBe("version");
   });
 });

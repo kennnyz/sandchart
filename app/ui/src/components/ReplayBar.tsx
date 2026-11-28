@@ -58,7 +58,6 @@ const DAY = 86_400_000;
 export function ReplayBar({ replay: r, range, onDate }: ReplayBarProps) {
   const fileRef = useRef<HTMLInputElement>(null);
   const dateRef = useRef<HTMLInputElement>(null);
-  const [fileError, setFileError] = useState<string | null>(null);
   /** The open dropdown, under the button it belongs to (window px). */
   const [menu, setMenu] = useState<{ id: MenuId; x: number; y: number } | null>(null);
   /** "Pick a date" was chosen: the date field takes focus once picking starts. */
@@ -126,10 +125,10 @@ export function ReplayBar({ replay: r, range, onDate }: ReplayBarProps) {
     const file = e.target.files?.[0];
     // Cleared so that picking the same file again fires `change` again.
     e.target.value = "";
-    setFileError(null);
     if (!file) return;
     if (file.size > MAX_REPLAY_FILE_MIB * 1024 * 1024) {
-      setFileError(t("replay.tooLarge", { mib: MAX_REPLAY_FILE_MIB }));
+      // In the engine's words, so it reads the same as a refusal from the engine.
+      r.refuseFile(`the replay file is ${Math.floor(file.size / 2 ** 20)} MiB; the limit is ${MAX_REPLAY_FILE_MIB} MiB`);
       return;
     }
     void file.arrayBuffer().then((b) => r.open(new Uint8Array(b)));
@@ -178,7 +177,6 @@ export function ReplayBar({ replay: r, range, onDate }: ReplayBarProps) {
       />
     </>
   );
-  const error = fileError && <span className="replay-file-error">{fileError}</span>;
 
   if (picking) {
     return (
@@ -238,7 +236,6 @@ export function ReplayBar({ replay: r, range, onDate }: ReplayBarProps) {
           )}
           <div className="divider" />
           {openButton}
-          {error}
         </div>
         <button
           className="icon-button replay-exit"
@@ -481,7 +478,6 @@ export function ReplayBar({ replay: r, range, onDate }: ReplayBarProps) {
             )
           )}
         </span>
-        {error}
       </div>
       <button
         className="icon-button replay-exit"

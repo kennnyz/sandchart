@@ -92,6 +92,21 @@ export interface ReplayView {
   open: ReplayTrade | null;
 }
 
+/** Why a `.replay` file was refused, for the message: the engine's own words go in its tooltip. */
+export type ReplayFileProblem = "notFile" | "version" | "tooLarge" | "damaged";
+
+/**
+ * Sorts the engine's refusal of a file (`ReplayFile::from_json`): not JSON of a replay file, a
+ * version this app does not read, too large, or anything else (a hash, a limit, a command), which
+ * means it was damaged or edited.
+ */
+export function replayFileProblem(message: string): ReplayFileProblem {
+  if (message.startsWith("not a replay file")) return "notFile";
+  if (/^replay file version .* is not supported/.test(message)) return "version";
+  if (message.startsWith("the replay file is ")) return "tooLarge";
+  return "damaged";
+}
+
 /** What a question about dropping the trades is for: a new start, an exit, or another pair. */
 export type ConfirmKind = "select" | "exit" | "switch";
 
@@ -189,6 +204,8 @@ export class ReplayController {
   view: ReplayView | null = null;
   /** The engine's message for the last call that failed; cleared by the next action. */
   error: string | null = null;
+  /** The last `.replay` file that was refused, until dismissed or another opens. */
+  fileError: { kind: ReplayFileProblem; detail: string } | null = null;
   /** Select bar, exit or a pair switch asked whether the trades so far may be dropped; waiting for the answer. */
   confirming: ConfirmKind | null = null;
   /** The pair switch held until the answer. */
@@ -538,14 +555,34 @@ export class ReplayController {
   /** Opens a `.replay` file and shows it on its own instrument and timeframe. A bad file leaves everything as it was. */
   open(bytes: Uint8Array): Promise<void> {
     this.pause();
+    this.fileError = null;
     return this.run(async () => {
-      const st = await this.backend.replayOpen(bytes);
+      let st: ReplayState;
+      try {
+        st = await this.backend.replayOpen(bytes);
+      } catch (e) {
+        // The replay that was open stays as it was; the message says what is wrong with the file.
+        this.refuseFile(toProblem(e).message);
+        return;
+      }
       this.cursor = 0;
       this.phase = "on";
       this.show(st);
       this.markSaved();
       this.switchTo?.(st.instrument.id, st.tf);
     });
+  }
+
+  /** A file was refused (by the engine, or before it was read): says why until dismissed. */
+  refuseFile(detail: string): void {
+    this.fileError = { kind: replayFileProblem(detail), detail };
+    this.changed();
+  }
+
+  dismissFileError(): void {
+    if (this.fileError === null) return;
+    this.fileError = null;
+    this.changed();
   }
 
   /**

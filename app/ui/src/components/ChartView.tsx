@@ -15,7 +15,7 @@ import type { DrawingPatch } from "../chart/drawings/state";
 import type { AlertStore } from "../state/alerts";
 import type { DrawingStore } from "../state/drawings";
 import type { IndicatorStore } from "../state/indicators";
-import type { ReplayStore } from "../state/replay";
+import { MAX_REPLAY_FILE_MIB, type ReplayStore } from "../state/replay";
 import { Banner } from "./Banner";
 import { DrawingStyle, type LineAlert } from "./DrawingStyle";
 import { IndicatorLegend } from "./IndicatorLegend";
@@ -487,6 +487,20 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
           retryAt={null}
           retryLabel={() => ""}
           dismiss={{ label: t("alerts.errorClose"), onDismiss: () => alerts.state.dismissError() }}
+        />
+      )}
+      {rp.fileError !== null && (
+        <Banner
+          testId="replay-file-error"
+          text={
+            rp.fileError.kind === "tooLarge"
+              ? t("replay.tooLarge", { mib: MAX_REPLAY_FILE_MIB })
+              : t(`replay.file.${rp.fileError.kind}`)
+          }
+          retryAt={null}
+          retryLabel={() => ""}
+          detail={rp.fileError.detail}
+          dismiss={{ label: t("replay.file.close"), onDismiss: () => rp.dismissFileError() }}
         />
       )}
       {rp.error !== null && (
