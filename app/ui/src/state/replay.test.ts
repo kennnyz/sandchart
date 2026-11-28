@@ -233,6 +233,39 @@ describe("replay controller", () => {
     expect(c.view!.stats.count).toBe(1);
   });
 
+  it("drops an edit queued behind a close, without a message and without stopping Play", async () => {
+    vi.useFakeTimers();
+    const { c, backend } = await started();
+    await c.buy();
+    const t = c.view!.open!;
+    const sent = vi.spyOn(backend, "replayCommand");
+    c.play();
+    await Promise.all([c.closeTrade(), c.edit(t.stop - 10, t.take)]);
+    expect(sent).toHaveBeenCalledTimes(1);
+    expect(c.error).toBeNull();
+    expect(c.playing).toBe(true);
+    c.pause();
+  });
+
+  it("checks a queued edit against the close of the bar it is sent at", async () => {
+    const { c, backend, page } = await started();
+    await c.buy();
+    const t0 = c.view!.open!;
+    // Far levels first, so the next bar reaches neither.
+    await c.edit(Math.round(t0.entryPrice / 2), t0.entryPrice * 2);
+    const t = c.view!.open!;
+    const now = c.view!.close;
+    const next = page.close[page.time.length - 99]!;
+    // Valid at this close, not at the next one: the level the next close crosses.
+    const [stop, take] = next < now ? [next, t.take] : [t.stop, next];
+    const sent = vi.spyOn(backend, "replayCommand");
+    await Promise.all([c.step(), c.edit(stop, take)]);
+    expect(c.view!.close).toBe(next);
+    expect(sent).not.toHaveBeenCalled();
+    expect(c.error).toBeNull();
+    expect(c.view!.open).toMatchObject({ stop: t.stop, take: t.take });
+  });
+
   it("keeps the engine's message when a command is refused and stops Play", async () => {
     const { c, backend } = await started();
     vi.spyOn(backend, "replayCommand").mockRejectedValueOnce({ code: "other", message: "command 1: refused" });

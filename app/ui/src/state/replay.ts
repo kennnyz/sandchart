@@ -257,13 +257,20 @@ export class ReplayController {
     return this.command(() => (this.view!.open ? { kind: "close", bar: this.view!.current } : null));
   }
 
-  /** New stop and take of the open trade, in force from the next bar; a level that did not change is not sent. */
+  /**
+   * New stop and take of the open trade, in force from the next bar; a level that did not change is
+   * not sent. It is checked when its turn comes, against the trade and the close then: an edit
+   * whose trade closed in the meantime, or whose levels no longer hold, is dropped without a word.
+   */
   edit(stop: number, take: number): Promise<void> {
-    const t = this.view?.open;
-    if (!t || !this.view || !validLevels(t.side, this.view.close, stop, take)) return Promise.resolve();
-    if (stop === t.stop && take === t.take) return Promise.resolve();
+    const entryBar = this.view?.open?.entryBar;
+    if (entryBar === undefined) return Promise.resolve();
     return this.command(() => {
-      const cmd: ReplayCommand = { kind: "edit", bar: this.view!.current };
+      const v = this.view!;
+      const t = v.open;
+      if (!t || t.entryBar !== entryBar || !validLevels(t.side, v.close, stop, take)) return null;
+      if (stop === t.stop && take === t.take) return null;
+      const cmd: ReplayCommand = { kind: "edit", bar: v.current };
       if (stop !== t.stop) cmd.stop = stop;
       if (take !== t.take) cmd.take = take;
       return cmd;
