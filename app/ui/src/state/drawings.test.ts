@@ -591,6 +591,15 @@ describe("position outcomes", () => {
     expect(b.resolves.at(-1)!.positions.map((p) => p.id)).toEqual(["p1", "p2"]);
   });
 
+  it("does not ask for hidden positions until they are shown again", async () => {
+    const hiddenPos = { ...drawing("hp", 0, BTC, pos()), hidden: true };
+    const { b, s, c } = await loaded([hiddenPos, drawing("p", 0, BTC, pos(80))]);
+    c.candles(BTC, "1h", 0, 100 * H);
+    expect(b.resolves.map((r) => r.positions.map((p) => p.id))).toEqual([["p"]]);
+    s.commit({ before: hiddenPos, after: { ...hiddenPos, hidden: false } });
+    expect(b.resolves.at(-1)!.positions.map((p) => p.id)).toContain("hp");
+  });
+
   it("asks a closed position again when older bars before its entry came in", async () => {
     const early = { ...(pos() as PositionBody), entry: { t: 2 * H, p: 100 } };
     const { b, s, c } = await loaded([drawing("early", 0, BTC, { kind: "position", ...early }), drawing("late", 0, BTC, pos())]);

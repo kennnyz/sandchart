@@ -1,7 +1,6 @@
 import type {
   Backend,
   Drawing,
-  DrawingBody,
   DrawingInput,
   InstrumentId,
   PositionBody,
@@ -77,8 +76,10 @@ function toInput(d: Drawing): DrawingInput {
   return { id: d.id, instrument: d.instrument, priceScale: d.priceScale, body: d.body, style: d.style, locked: d.locked, hidden: d.hidden, z: d.z };
 }
 
-function positionOf(body: DrawingBody | undefined): PositionBody | null {
-  if (body?.kind !== "position") return null;
+/** The position of a shown position drawing; null for any other, and for a hidden one (not painted, so not asked). */
+function positionOf(d: Drawing | null | undefined): PositionBody | null {
+  const body = d?.body;
+  if (body?.kind !== "position" || d!.hidden) return null;
   const { side, entry, stop, take, endT } = body;
   return { side, entry, stop, take, endT };
 }
@@ -124,7 +125,7 @@ export class DrawingController {
   private stale = false;
   /** Stores run one after another, and a load waits for them. */
   private saving: Promise<void> = Promise.resolve();
-  /** The positions of the shown drawings, by id; a body is replaced, never changed in place. */
+  /** The positions of the shown drawings (not hidden one by one), by id; a body is replaced, never changed in place. */
   private positions = new Map<string, PositionBody>();
   private outcomes = new Map<string, PositionOutcome>();
   /** Timeframe of the outcomes, and of the candles last shown with their first and last bar time. */
@@ -344,7 +345,7 @@ export class DrawingController {
     this.positions = new Map();
     this.asked.clear();
     for (const d of list) {
-      const p = positionOf(d.body);
+      const p = positionOf(d);
       if (p) this.positions.set(d.id, p);
     }
     this.setOutcomes(new Map());
@@ -400,7 +401,7 @@ export class DrawingController {
     let ask = false;
     for (const c of step) {
       const id = (c.after ?? c.before)!.id;
-      const after = positionOf(c.after?.body);
+      const after = positionOf(c.after);
       if (!after && !this.positions.has(id)) continue;
       if (after) this.positions.set(id, after);
       else this.positions.delete(id);
