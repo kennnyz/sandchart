@@ -16,14 +16,19 @@ import {
   type ParamValue,
   type PositionBody,
   type PositionOutcome,
+  type ReplayCommand,
+  type ReplayState,
   type SeriesData,
   type SeriesSpec,
   type Problem,
   type TimeframeCode,
   type UpdateInfo,
 } from "./types";
+import { MOCK_MAX_REPLAY_CANDLES, type MockCandle, mockReadReplay, mockSimulate, mockWriteReplay } from "./mockReplay";
 
 const PAGE = 1000;
+/** Bars of context before a replay's start, as `REPLAY_CONTEXT` in the engine. */
+const REPLAY_CONTEXT = 500;
 const MINUTE = 60_000;
 const STEP_MS: Record<TimeframeCode, number> = {
   "1m": MINUTE,
@@ -517,7 +522,25 @@ function column(): CandleColumns {
 
 /** The mock plus a way for tests to push live events into its open subscriptions. */
 export interface MockBackend extends Backend {
+  /** To every open subscription, except those of an instrument being replayed. */
   emitLive(e: LiveEvent): void;
+  /** The text of the last `replaySave`, or null. */
+  replayFile(): string | null;
+}
+
+/** A replay session over the mock's candles (made as they are revealed) or a file's. */
+interface MockSession {
+  instrument: Instrument;
+  tf: TimeframeCode;
+  /** Bars made so far, at least up to `current`. */
+  candles: MockCandle[];
+  /** How many bars the session has in all. */
+  total: number;
+  /** Makes bar `k`; null for a file, whose bars are all in `candles`. */
+  make: ((k: number) => MockCandle) | null;
+  start: number;
+  current: number;
+  commands: ReplayCommand[];
 }
 
 export function createMockBackend(opts: MockOptions): MockBackend {
@@ -532,7 +555,9 @@ export function createMockBackend(opts: MockOptions): MockBackend {
     ? SYMBOLS.filter((i) => opts.watchlist!.includes(i.id.symbol)).map((i) => i.id)
     : SYMBOLS.slice(0, 5).map((i) => i.id);
   let watchlist: InstrumentId[] = opts.watchlistStore?.load() ?? initial;
-  const live = new Set<(e: LiveEvent) => void>();
+  const live = new Map<(e: LiveEvent) => void, InstrumentId>();
+  let session: MockSession | null = null;
+  let savedReplay: string | null = null;
   const synced = new Set<() => void>();
   let ready = !opts.instrumentsAfterMs;
   if (!ready) {
@@ -617,6 +642,51 @@ export function createMockBackend(opts: MockOptions): MockBackend {
     return { time: raw.time, open: px(raw.open), high: px(raw.high), low: px(raw.low), close: px(raw.close) };
   }
 
+  function openSession(): MockSession {
+    if (!session) throw problem("no replay is open");
+    return session;
+  }
+
+  /** Makes the bars up to the current one. */
+  function reveal(s: MockSession) {
+    while (s.make && s.candles.length <= s.current) s.candles.push(s.make(s.candles.length));
+  }
+
+  function simulateOrThrow(s: MockSession, commands: ReplayCommand[]) {
+    reveal(s);
+    try {
+      return mockSimulate(s.candles, s.start, s.current, commands);
+    } catch (e) {
+      throw problem(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  function replayStateOf(s: MockSession, cursor: number): ReplayState {
+    const { trades, stats } = simulateOrThrow(s, s.commands);
+    const from = Math.min(cursor, s.current + 1);
+    const bars = column();
+    for (const c of s.candles.slice(from, s.current + 1)) {
+      bars.time.push(c.time);
+      bars.open.push(c.open);
+      bars.high.push(c.high);
+      bars.low.push(c.low);
+      bars.close.push(c.close);
+      bars.volume.push(c.volume);
+    }
+    return {
+      instrument: { ...s.instrument },
+      tf: s.tf,
+      start: s.start,
+      current: s.current,
+      atEnd: s.current + 1 >= s.total,
+      from,
+      bars,
+      commands: structuredClone(s.commands),
+      trades,
+      stats,
+    };
+  }
+
   function computeInstance(inst: IndicatorInstance, bars: MockBars, fromTime: number): IndicatorResult {
     if (opts.indicatorError) return { instance: inst.instance, result: { err: "mock: out of fuel" } };
     const found = infos().find((i) => i.meta.id === inst.moduleId);
@@ -678,14 +748,86 @@ export function createMockBackend(opts: MockOptions): MockBackend {
 
     async subscribeLive(id, _tf, onEvent) {
       await delayFor(id.symbol);
-      live.add(onEvent);
+      live.set(onEvent, id);
       return () => {
         live.delete(onEvent);
       };
     },
 
     emitLive(e) {
-      for (const cb of live) cb(e);
+      for (const [cb, sub] of live) {
+        const paused = session?.instrument.id.source === sub.source && session.instrument.id.symbol === sub.symbol;
+        if (!paused) cb(e);
+      }
+    },
+
+    replayFile: () => savedReplay,
+
+    async replayStart(id, tf, startTime) {
+      await delayFor(id.symbol);
+      const instrument = SYMBOLS.find((i) => i.id.source === id.source && i.id.symbol === id.symbol);
+      if (!instrument) throw problem(`unknown instrument ${id.source}/${id.symbol}`);
+      const { step, timeOf, first } = timeline(tf);
+      const i = (startTime - timeOf(0)) / step;
+      if (!Number.isInteger(i) || i < first || i >= opts.candles) throw problem(`no cached ${tf} bar opens at ${startTime}`);
+      const ctx = Math.max(first, i - REPLAY_CONTEXT);
+      const make = (k: number) => candleAt(ctx + k, timeOf(ctx + k));
+      session = {
+        instrument: { ...instrument, priceScale: opts.priceScale ?? instrument.priceScale },
+        tf,
+        candles: [],
+        total: Math.min(opts.candles - ctx, MOCK_MAX_REPLAY_CANDLES),
+        make,
+        start: i - ctx,
+        current: i - ctx,
+        commands: [],
+      };
+      return replayStateOf(session, 0);
+    },
+
+    async replayStep(n) {
+      await delay();
+      const s = openSession();
+      s.current = Math.min(s.current + n, s.total - 1);
+      return s.current;
+    },
+
+    async replayCommand(command) {
+      await delay();
+      const s = openSession();
+      const next = [...s.commands, structuredClone(command)];
+      simulateOrThrow(s, next);
+      s.commands = next;
+    },
+
+    async replayState(cursor) {
+      await delay();
+      return replayStateOf(openSession(), cursor);
+    },
+
+    async replaySave() {
+      await delay();
+      const s = openSession();
+      reveal(s);
+      savedReplay = await mockWriteReplay({ ...s, candles: s.candles.slice(0, s.current + 1) });
+      return `${s.instrument.id.symbol}-${s.tf}.replay`;
+    },
+
+    async replayOpen(bytes) {
+      await delay();
+      let f;
+      try {
+        f = await mockReadReplay(bytes);
+      } catch (e) {
+        throw problem(e instanceof Error ? e.message : String(e));
+      }
+      session = { ...f, total: f.candles.length, make: null };
+      return replayStateOf(session, 0);
+    },
+
+    async replayExit() {
+      await delay();
+      session = null;
     },
 
     async getWatchlist() {

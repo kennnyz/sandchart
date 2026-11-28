@@ -233,6 +233,67 @@ export interface PositionOutcome {
   r: number;
 }
 
+// Replay (dto.rs, sandchart_core::replay). `bar` indexes the session's candles: context
+// before `start`, then the revealed bars up to `current`.
+/** Open fills at the close of `bar`; an edit is in force from the next bar; close fills at the close of `bar`. */
+export type ReplayCommand =
+  | { kind: "open"; bar: number; side: Side; stop: number; take: number }
+  | { kind: "edit"; bar: number; stop?: number; take?: number }
+  | { kind: "close"; bar: number };
+export type ExitReason = "take" | "stop" | "manual" | "open";
+/** One trade. An open trade has no exit; its `r` is marked to the close of the current bar. */
+export interface ReplayTrade {
+  side: Side;
+  entryBar: number;
+  entryTime: number;
+  entryPrice: number;
+  /** The stop at entry; R is measured against it. */
+  initialStop: number;
+  /** The levels in force at the exit (or now, while open). */
+  stop: number;
+  take: number;
+  exitBar: number | null;
+  exitTime: number | null;
+  exitPrice: number | null;
+  reason: ExitReason;
+  /** The exit bar touched both stop and take; it counts as a stop. */
+  ambiguous: boolean;
+  /** (exit - entry) / (entry - initialStop), for longs and shorts alike. */
+  r: number;
+}
+/** Over closed trades only, in R. Wins have R > 0, losses R < 0. */
+export interface ReplayStats {
+  count: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  totalR: number;
+  averageR: number;
+  expectancy: number;
+  /** Null without losses. */
+  profitFactor: number | null;
+  /** Deepest fall of the running R total below its peak, as a positive number. */
+  maxDrawdownR: number;
+  longestLosingStreak: number;
+}
+/** The session as the engine shows it: bars from index `from` to `current`, never a later one. */
+export interface ReplayState {
+  instrument: Instrument;
+  tf: TimeframeCode;
+  /** Index of the first replayed bar. */
+  start: number;
+  /** Index of the last revealed bar. */
+  current: number;
+  /** No bar is left to reveal. */
+  atEnd: boolean;
+  /** Index of `bars.time[0]`. */
+  from: number;
+  bars: CandleColumns;
+  commands: ReplayCommand[];
+  trades: ReplayTrade[];
+  stats: ReplayStats;
+}
+
 // Updates (dto.rs).
 /** Why this copy cannot update itself; the UI links to the release page instead. */
 export type InstallBlocker = "not_appimage" | "translocated";
@@ -294,6 +355,23 @@ export interface Backend {
     tf: TimeframeCode,
     positions: { id: string; position: PositionBody }[],
   ): Promise<{ id: string; outcome: PositionOutcome }[]>;
+  /**
+   * Starts a replay (replacing any open one) at the cached bar opening at `startTime`, with
+   * up to 500 bars of context before it. Live events of the instrument pause until `replayExit`.
+   * Resolves to the state with every revealed bar.
+   */
+  replayStart(id: InstrumentId, tf: TimeframeCode, startTime: number): Promise<ReplayState>;
+  /** Reveals up to `n` more bars; resolves to the index of the current bar. */
+  replayStep(n: number): Promise<number>;
+  /** Appends a command; rejects one that breaks a rule (bar order, unrevealed bar, levels, one trade at a time). */
+  replayCommand(command: ReplayCommand): Promise<void>;
+  /** The session with the revealed bars from index `cursor` on (pass how many bars the chart has). */
+  replayState(cursor: number): Promise<ReplayState>;
+  /** Saves the session as a `.replay` file; resolves to where, or null when the user cancelled. */
+  replaySave(): Promise<string | null>;
+  /** Checks a `.replay` file and opens it as the session; resolves to the state with every revealed bar. */
+  replayOpen(bytes: Uint8Array): Promise<ReplayState>;
+  replayExit(): Promise<void>;
   /** A newer version than this one, or null. Also remembers it for `installUpdate`. */
   checkUpdate(): Promise<UpdateInfo | null>;
   /**
