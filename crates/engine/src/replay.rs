@@ -173,9 +173,10 @@ impl Engine {
         self.with_session(|s| s.state(cursor))
     }
 
-    /// The default name of the session's file, `<symbol>-<timeframe>.replay`.
+    /// The default name of the session's file, `<symbol>-<timeframe>.replay`, with only
+    /// file-safe characters (a CSV symbol is whatever the user typed).
     pub fn replay_file_name(&self) -> Result<String, EngineError> {
-        self.with_session(|s| Ok(format!("{}-{}.replay", s.instrument.id.symbol, s.tf.code())))
+        self.with_session(|s| Ok(file_name(&s.instrument.id.symbol, s.tf)))
     }
 
     /// The `.replay` file: context and revealed bars only, never a bar after the current one.
@@ -228,5 +229,34 @@ impl Engine {
     /// Closes the session; live updates of its instrument flow again.
     pub fn replay_exit(&self) {
         *self.shared.session() = None;
+    }
+}
+
+/// `<symbol>-<tf>.replay` keeping only A-Z, a-z, 0-9, `.`, `_` and `-` of the symbol, and no
+/// leading dot (a hidden file); `replay` when nothing is left.
+fn file_name(symbol: &str, tf: Timeframe) -> String {
+    let safe: String = symbol
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        .collect();
+    let safe = safe.trim_start_matches('.');
+    let stem = if safe.is_empty() { "replay" } else { safe };
+    format!("{stem}-{}.replay", tf.code())
+}
+
+#[cfg(test)]
+mod tests {
+    use sandchart_core::Timeframe;
+
+    use super::file_name;
+
+    #[test]
+    fn file_names_keep_only_safe_characters() {
+        assert_eq!(file_name("BTCUSDT", Timeframe::H1), "BTCUSDT-1h.replay");
+        assert_eq!(
+            file_name("../a b/c:d.e_f-g", Timeframe::D1),
+            "abcd.e_f-g-1d.replay"
+        );
+        assert_eq!(file_name("/ \\", Timeframe::H4), "replay-4h.replay");
     }
 }
