@@ -463,6 +463,8 @@ select:focus-visible {
   padding: 0 12px 0 14px;
 }
 .wl-columns {
+  /* Room for the rows' remove button, so the columns line up. */
+  padding-right: 28px;
   height: 28px;
   flex: none;
   font-size: 11px;
@@ -512,21 +514,22 @@ select:focus-visible {
 .wl-row .wl-last {
   color: var(--fg);
 }
+/* A slot of its own at the row's end, shown on hover: it never covers the 24h change. */
 .wl-remove {
-  position: absolute;
-  right: 6px;
-  top: 8px;
+  flex: none;
   width: 20px;
   height: 20px;
+  margin: 0 -8px 0 4px;
   border-radius: 4px;
-  display: none;
+  display: flex;
+  visibility: hidden;
   align-items: center;
   justify-content: center;
   color: var(--muted);
-  background: var(--panel);
 }
-.wl-row:hover .wl-remove {
-  display: flex;
+.wl-row:hover .wl-remove,
+.wl-remove:focus-visible {
+  visibility: visible;
 }
 .wl-remove:hover {
   color: var(--fg);

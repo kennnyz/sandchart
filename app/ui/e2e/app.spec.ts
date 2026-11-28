@@ -315,3 +315,18 @@ test("question_mark_lists_the_keyboard_shortcuts_in_the_ui_language", async ({ p
   await sheet.getByRole("button").click();
   await expect(sheet).toHaveCount(0);
 });
+
+test("the_watchlist_remove_button_never_covers_the_24h_change", async ({ page }) => {
+  await openApp(page);
+  const row = page.locator('[data-testid="watchlist-row"][data-symbol="ETHUSDT"]');
+  await row.hover();
+  const remove = row.getByTestId("watchlist-remove");
+  await expect(remove).toBeVisible();
+  const x = (await remove.boundingBox())!;
+  const chg = (await row.locator(".wl-chg").boundingBox())!;
+  expect(x.x).toBeGreaterThanOrEqual(chg.x + chg.width);
+  await expect(row.locator(".wl-chg")).toContainText("%");
+  // The column headers line up with the values.
+  const head = (await page.locator(".wl-columns span").last().boundingBox())!;
+  expect(Math.abs(head.x + head.width - (chg.x + chg.width))).toBeLessThan(1.5);
+});
