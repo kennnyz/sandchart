@@ -23,6 +23,8 @@ export class AlertController {
   toast: Alert | null = null;
   /** Why the last change was refused; null once one succeeds. */
   error: string | null = null;
+  /** The alert picked on the chart or in the panel, highlighted there. */
+  selected: string | null = null;
   private token = 0;
   private toastTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -61,6 +63,7 @@ export class AlertController {
       this.list = list;
       // A fired alert that was deleted or armed again is no longer news.
       for (const id of this.unseen) if (!list.some((a) => a.id === id && !a.active)) this.unseen.delete(id);
+      if (this.selected !== null && !list.some((a) => a.id === this.selected)) this.selected = null;
       return true;
     } catch (e) {
       console.error("loading the alerts failed", e);
@@ -107,6 +110,13 @@ export class AlertController {
     this.unseen.delete(id);
     if (this.toast?.id === id) this.dismissToast();
     return this.change(() => this.backend.deleteAlert(id));
+  }
+
+  /** Highlights an alert in the panel (a press on its level on the chart, or on its row). */
+  select(id: string): void {
+    if (this.selected === id) return;
+    this.selected = id;
+    this.onChange();
   }
 
   /** The fired alert was looked at: no highlight any more. */

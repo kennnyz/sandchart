@@ -1362,6 +1362,10 @@ button:disabled {
   display: flex;
   color: var(--muted);
 }
+.al-row[data-selected="true"] {
+  background: var(--fg-8);
+  box-shadow: inset 2px 0 0 var(--muted);
+}
 .al-row[data-unseen="true"] .al-icon {
   color: var(--fg);
 }

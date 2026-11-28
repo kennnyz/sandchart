@@ -1,5 +1,5 @@
 import { Bell, BellRing, RotateCcw, X } from "lucide-react";
-import { useSyncExternalStore } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 import type { Alert, InstrumentId } from "../backend/types";
 import { formatPrice, formatUtcClock } from "../chart/format";
 import { t } from "../i18n";
@@ -10,8 +10,21 @@ export function alertLevel(a: Alert): string {
   return a.kind.kind === "price" ? formatPrice(a.kind.price, a.priceScale) : t("alerts.line");
 }
 
-function Row({ a, unseen, store, onOpen }: { a: Alert; unseen: boolean; store: AlertStore; onOpen(id: InstrumentId): void }) {
+interface RowProps {
+  a: Alert;
+  unseen: boolean;
+  selected: boolean;
+  store: AlertStore;
+  onOpen(id: InstrumentId): void;
+}
+
+function Row({ a, unseen, selected, store, onOpen }: RowProps) {
   const s = store.state;
+  const ref = useRef<HTMLDivElement>(null);
+  // Picked on the chart: bring it into view in the list.
+  useEffect(() => {
+    if (selected) ref.current?.scrollIntoView({ block: "nearest" });
+  }, [selected]);
   const state = a.active
     ? t("alerts.state.active")
     : t("alerts.state.fired", {
@@ -20,13 +33,17 @@ function Row({ a, unseen, store, onOpen }: { a: Alert; unseen: boolean; store: A
       });
   return (
     <div
+      ref={ref}
       className="al-row"
       data-testid="alert-row"
       data-symbol={a.instrument.symbol}
       data-state={a.active ? "active" : "fired"}
       data-unseen={unseen}
+      data-selected={selected}
+      aria-selected={selected}
       onClick={() => {
         s.seen(a.id);
+        s.select(a.id);
         onOpen(a.instrument);
       }}
     >
@@ -89,7 +106,7 @@ export function AlertsPanel({ store, onOpen }: { store: AlertStore; onOpen(id: I
           </div>
         )}
         {[...s.list].reverse().map((a) => (
-          <Row key={a.id} a={a} unseen={s.unseen.has(a.id)} store={store} onOpen={onOpen} />
+          <Row key={a.id} a={a} unseen={s.unseen.has(a.id)} selected={s.selected === a.id} store={store} onOpen={onOpen} />
         ))}
       </div>
     </section>

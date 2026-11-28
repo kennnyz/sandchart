@@ -22,6 +22,7 @@ interface Debug {
   baseDraws: number;
   overlayDraws: number;
   lastBarTime: number | null;
+  alertLevels: { id: string; y: number }[];
 }
 
 async function openChart(page: Page): Promise<Plot> {
@@ -230,4 +231,41 @@ test("a_refused_alert_shows_its_reason_once_until_closed", async ({ page }) => {
   await strip.getByRole("button").click();
   await expect(strip).toHaveCount(0);
   expect(await alerts(page)).toHaveLength(100);
+});
+
+test("an_active_price_alert_is_a_level_on_the_chart_that_picks_it_in_the_panel", async ({ page }) => {
+  const plot = await openChart(page);
+  const cx = Math.round(plot.left + plot.width / 2);
+  const y = Math.round(plot.top + plot.height * 0.4);
+  await page.mouse.move(cx, y);
+  await nextFrame(page);
+  await page.keyboard.press("Alt+KeyA");
+  const [set] = await alertCount(page, 1);
+  await expect.poll(async () => (await debug(page)).alertLevels.length).toBe(1);
+  const [level] = (await debug(page)).alertLevels;
+  expect(level!.id).toBe(set!.id);
+  expect(Math.abs(plot.top + level!.y - y)).toBeLessThan(1.5);
+
+  // Hovering the level and moving about redraws only the overlay.
+  const before = await debug(page);
+  for (let i = 0; i < 10; i++) {
+    await page.mouse.move(cx - 100 + i * 20, plot.top + level!.y + (i % 3) - 1);
+    await nextFrame(page);
+  }
+  const after = await debug(page);
+  expect(after.baseDraws).toBe(before.baseDraws);
+  await expect(page.getByTestId("chart").locator("canvas").first()).toHaveCSS("cursor", "pointer");
+
+  // A press on it picks the alert in the panel.
+  const row = page.getByTestId("alert-row");
+  await expect(row).toHaveAttribute("data-selected", "false");
+  await page.mouse.click(cx - 150, plot.top + level!.y);
+  await expect(row).toHaveAttribute("data-selected", "true");
+
+  // Fired: nothing left to watch, so no level.
+  const price = (set!.kind as { price: number }).price;
+  await feed(page, price - 300, price - 100, price - 100);
+  await feed(page, price - 300, price + 150, price + 120);
+  await expect(row).toHaveAttribute("data-state", "fired");
+  await expect.poll(async () => (await debug(page)).alertLevels.length).toBe(0);
 });

@@ -115,4 +115,18 @@ describe("AlertController", () => {
     expect(c.error).toBeNull();
     stop();
   });
+
+  it("selects an alert picked on the chart until it is gone", async () => {
+    const { c, stop, changes } = setup();
+    await c.createPrice(id, 2, 10_000);
+    changes.count = 0;
+    c.select("a1");
+    expect(c.selected).toBe("a1");
+    expect(changes.count).toBe(1);
+    c.select("a1");
+    expect(changes.count).toBe(1);
+    await c.remove("a1");
+    expect(c.selected).toBeNull();
+    stop();
+  });
 });

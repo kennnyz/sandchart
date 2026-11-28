@@ -219,6 +219,17 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
     // `state` is read for its id and tf, which change only together with `version`.
   }, [chart, drawings, version, state?.status]);
 
+  // Active price alerts as levels on the chart, not over a replay's past bars; a press on
+  // one picks it in the panel.
+  const alertList = alerts.state.list;
+  const replaying = rp.phase !== "off";
+  useEffect(() => {
+    if (!chart) return;
+    chart.setAlerts(replaying ? [] : alertList);
+    chart.onAlertClick((alertId) => alerts.state.select(alertId));
+    return () => chart.onAlertClick(null);
+  }, [chart, alerts, alertList, replaying]);
+
   // Alt+A: a price alert at the crosshair price, on the pair the chart shows.
   useEffect(() => {
     if (!chart) return;

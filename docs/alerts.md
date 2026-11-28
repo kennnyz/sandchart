@@ -4,6 +4,7 @@ An alert tells you when the price reaches a level: a price you pick, or a horizo
 
 - [Kinds](#kinds)
 - [Set an alert](#set-an-alert)
+- [On the chart](#on-the-chart)
 - [The alerts panel](#the-alerts-panel)
 - [When an alert fires](#when-an-alert-fires)
 - [Trend lines](#trend-lines)
@@ -34,6 +35,10 @@ Rectangles, Fibonacci levels and the other drawings have no alerts.
 - **Line alert:** double-click a horizontal or trend line (or select it and press Enter) to open its style. In the **Alert** row pick the direction and press **Set**. While it is set, the same row changes its direction (which arms it again) or **Remove**s it.
 
 The first alert you create may make your operating system ask whether Sandchart may show notifications. Allow it to get notifications outside the window; the message in the window and the panel work either way.
+
+## On the chart
+
+Every active price alert of the pair on the chart shows as a thin dashed line at its price, with a bell tag and the price on the price axis. Click the line to pick the alert in the alerts panel. A fired alert has no line; a line alert is its own line. During a replay the levels are hidden.
 
 ## The alerts panel
 
