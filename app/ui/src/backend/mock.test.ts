@@ -281,6 +281,16 @@ describe("mock backend", () => {
       expect(await b.getDrawings(id)).toEqual([]);
     });
 
+    it("requires the lock and hiding flags as the Tauri command does", async () => {
+      const b = createMockBackend({ candles: 10 });
+      const { hidden: _h, ...noHidden } = input("a", { kind: "hline", p: 1 });
+      await expect(b.saveDrawing(noHidden as DrawingInput)).rejects.toMatchObject({ message: "missing field `hidden`" });
+      await expect(b.saveDrawings([{ ...input("b", { kind: "hline", p: 1 }), locked: "yes" as unknown as boolean }])).rejects.toMatchObject({
+        message: "invalid type for field `locked`: expected a boolean",
+      });
+      expect(await b.getDrawings(id)).toEqual([]);
+    });
+
     it("validates as Rust does: the shared fixture, with the same messages", () => {
       type Case = { name: string; drawing: Omit<DrawingInput, "instrument" | "priceScale" | "locked" | "hidden"> & { hidden?: boolean }; error?: string };
       const full = (c: Case): DrawingInput => ({ ...c.drawing, instrument: id, priceScale: 2, locked: false, hidden: c.drawing.hidden ?? false });

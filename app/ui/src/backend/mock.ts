@@ -598,6 +598,11 @@ export function createMockBackend(opts: MockOptions): MockBackend {
     if (list.length > MAX_DRAWINGS) throw problem(`at most ${MAX_DRAWINGS} drawings per request, not ${list.length}`);
     const now = Date.now();
     const out = list.map((d): Drawing => {
+      // The Tauri command's DTO has no default for these: it refuses a call without them.
+      for (const field of ["locked", "hidden"] as const) {
+        if (d[field] === undefined) throw problem(`missing field \`${field}\``);
+        if (typeof d[field] !== "boolean") throw problem(`invalid type for field \`${field}\`: expected a boolean`);
+      }
       const instrument = SYMBOLS.find((i) => i.id.source === d.instrument.source && i.id.symbol === d.instrument.symbol);
       if (!instrument) throw problem(`unknown instrument ${d.instrument.source}/${d.instrument.symbol}`);
       if (opts.drawingSaveError) throw problem("mock: cannot save the drawing");
