@@ -4260,6 +4260,7 @@ name = "sandchart-mcp"
 version = "0.2.0"
 dependencies = [
  "directories",
+ "libc",
  "rmcp",
  "rusqlite",
  "sandchart-core",

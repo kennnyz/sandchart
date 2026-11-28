@@ -194,9 +194,23 @@ fn read_replay(path: &str) -> Result<Vec<u8>, String> {
     if meta.len() > MAX_FILE_BYTES as u64 {
         return Err(too_big());
     }
-    let file = std::fs::File::open(p).map_err(cannot)?;
-    if !file.metadata().map_err(cannot)?.is_file() {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    // The path may have been swapped for a FIFO since the check: opened non-blocking it
+    // opens at once instead of waiting for a writer, and the fstat below refuses it. No
+    // device becomes the controlling terminal. Regular files ignore both flags.
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::custom_flags(
+        &mut options,
+        libc::O_NONBLOCK | libc::O_NOCTTY,
+    );
+    let file = options.open(p).map_err(cannot)?;
+    let meta = file.metadata().map_err(cannot)?;
+    if !meta.is_file() {
         return Err(format!("{path:?} is not a regular file"));
+    }
+    if meta.len() > MAX_FILE_BYTES as u64 {
+        return Err(too_big());
     }
     let mut bytes = Vec::new();
     file.take(MAX_FILE_BYTES as u64 + 1)
