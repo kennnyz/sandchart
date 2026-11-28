@@ -112,11 +112,6 @@ export class Coords {
     const v = Math.round(this.scale.fromY(y));
     return Math.min(MAX_TICKS, Math.max(this.scale.mode === "log" ? 1 : -MAX_TICKS, v));
   }
-
-  /** Times at the left and right edge of the plot. */
-  visibleTimes(): [number, number] {
-    return [this.t(0), this.t(this.plotW)];
-  }
 }
 
 /** Distance from (px, py) to the segment a-b. */

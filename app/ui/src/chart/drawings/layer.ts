@@ -84,6 +84,7 @@ export class DrawingLayer {
   readonly state: DrawingState;
   /** Mapping of the last base frame; null until the first one with bars. */
   private coords: Coords | null = null;
+  /** Times a drawing must reach into to be painted and hit: the plot's, with a margin. */
   private span: [number, number] = [0, 0];
   /** Screen geometry per drawing id, valid for that drawing object and that frame. */
   private readonly cache = new Map<string, { drawing: Drawing; coords: Coords; geom: unknown }>();
@@ -276,7 +277,10 @@ export class DrawingLayer {
     this.coords = c;
     let painted = 0;
     if (c.count > 0 && c.plotW > 0 && c.priceH > 0) {
-      this.span = c.visibleTimes();
+      // A marker or handle just outside the plot still shows, and a note sits at the open of
+      // the bar that holds its time, up to one bar before it: cull with that much margin.
+      const m = HANDLE_RADIUS + HIT_TOLERANCE;
+      this.span = [c.t(-m) - c.step, c.t(c.plotW + m) + c.step];
       if (this.cache.size > this.state.drawings.length + 32) this.pruneCache();
       const dragged = this.edit?.moved ? this.edit.id : null;
       begin(ctx, c, dpr);

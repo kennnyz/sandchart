@@ -72,7 +72,6 @@ describe("Coords", () => {
     expect(lin.y(1500)).toBe(250);
     expect(lin.p(250)).toBe(1500);
     expect(lin.p(250.2)).toBe(1500);
-    expect(lin.visibleTimes()).toEqual([lin.t(0), lin.t(400)]);
   });
 
   it("uses the log scale", () => {
