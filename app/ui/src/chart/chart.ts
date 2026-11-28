@@ -19,7 +19,7 @@ import { alignOffset, hasOwnPane, layoutPanes, overlayRange, paneRange, seriesVa
 import { draw, drawingTag, drawOverlay, plotSize, priceAxisWidth, RenderBuffers, type Crosshair, type FrameInput, type Series } from "./render";
 import { onPlus, paintPlus, plusX } from "./plus";
 import type { IndicatorFrame } from "./renderIndicators";
-import { ReplayLayer, snapStart, type Level, type ReplayMarks } from "./replay";
+import { drawingCut, ReplayLayer, snapStart, type Level, type ReplayMarks } from "./replay";
 import { autoscale, PriceScale, type PriceScaleMode } from "./scale";
 import { AXIS_FONT, PRICE_AXIS_WIDTH, type ChartTheme } from "./theme";
 import { gestureZoomFactor, indexToX, panBy, visibleRange, xToIndex, zoomAt, type Viewport } from "./viewport";
@@ -516,8 +516,8 @@ export class Chart {
     const entering = m !== null && !this.replayOn;
     this.replayOn = m !== null;
     this.replay.set(m);
-    // No drawing anchored at or after the cut gives a later bar away.
-    this.drawings.setCut(m ? m.cut : null);
+    // No drawing anchored at or after the cut gives a later bar away, until the chart is live again.
+    this.drawings.setCut(drawingCut(m));
     // Entering a replay on the last bar: leave room for the trade right of the cut. New bars keep it.
     if (entering && this.view.rightIndex >= this.series.count - 1) {
       this.view = { barWidth: this.view.barWidth, rightIndex: this.series.count - 1 + REPLAY_MARGIN_BARS };

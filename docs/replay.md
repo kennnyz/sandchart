@@ -74,7 +74,7 @@ Steps do not stop at the bars that were cached when the replay began: when the l
 - the point it reached is kept as the catch-up time and does not move again; trades and results count the bars up to it only;
 - a trade still open then is **not finished at real time**: it stays in the trades list with its R at that moment, and like an open trade it does not count in the results;
 - Play, Step, Jump to real time, Buy, Sell and Close trade are off ("Real time reached"); Select bar, Save, Open and X still work;
-- the chart shows live data again, for display only: new bars appear, but they move no trade;
+- the chart shows live data again, for display only: new bars appear, but they move no trade; drawings after the catch-up time show again, and so does the pair's quote in the watchlist;
 - **Save** writes the session up to the catch-up time, without live bars, so the file gives the same results anywhere. Opening it shows the same finished backtest.
 
 Changing the timeframe or the update interval keeps a caught-up replay finished. An opened file never loads newer bars: it ends at its last bar.

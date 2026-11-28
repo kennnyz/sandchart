@@ -190,6 +190,7 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
             close: replayView.close,
             cut: replayView.cut,
             label: t("replay.marker"),
+            caughtUp: replayView.caughtUp,
           } : null,
     );
   }, [chart, replayView, lang]);

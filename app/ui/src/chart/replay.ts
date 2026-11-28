@@ -17,6 +17,13 @@ export interface ReplayMarks {
   cut: number;
   /** The word at the cut ("Replay"). */
   label: string;
+  /** The replay caught up with real time: the chart shows live data again. */
+  caughtUp?: boolean;
+}
+
+/** Where drawings stop showing: the cut while a replay holds data back, none once it caught up (or without one). */
+export function drawingCut(m: ReplayMarks | null): number | null {
+  return m && !m.caughtUp ? m.cut : null;
 }
 
 export type Level = "stop" | "take";
