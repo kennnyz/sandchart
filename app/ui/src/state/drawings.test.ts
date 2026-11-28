@@ -116,12 +116,28 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 afterEach(() => vi.restoreAllMocks());
 
 describe("DrawingController", () => {
-  it("clears the chart, then shows the instrument's drawings; a late answer for another one is dropped", async () => {
+  it("clears the chart, then shows the instrument's drawings", async () => {
     const b = fakeBackend([]);
     const s = fakeSurface();
     const c = new DrawingController(b.backend, () => {});
     c.attach(s.surface);
     void c.open(BTC);
+    void c.open(ETH);
+    await flush();
+    // BTC was left before its request went out.
+    expect(b.calls).toEqual(["get ETHUSDT"]);
+    b.loads[0]!.resolve([drawing("e", 1, ETH)]);
+    await flush();
+    expect(s.sets).toEqual([[], [], [drawing("e", 1, ETH)]]);
+  });
+
+  it("drops a late answer for an instrument that was left", async () => {
+    const b = fakeBackend([]);
+    const s = fakeSurface();
+    const c = new DrawingController(b.backend, () => {});
+    c.attach(s.surface);
+    void c.open(BTC);
+    await flush();
     void c.open(ETH);
     await flush();
     expect(s.sets).toEqual([[], []]);
@@ -224,6 +240,48 @@ describe("DrawingController", () => {
     await flush();
     expect(c.error).toEqual({ kind: "load", message: "disk gone" });
     expect(s.sets.at(-1)).toEqual([]);
+  });
+
+  it("loads again when a change was made while the list was on its way", async () => {
+    const b = fakeBackend([]);
+    const s = fakeSurface();
+    const c = new DrawingController(b.backend, () => {});
+    c.attach(s.surface);
+    void c.open(BTC);
+    await flush();
+    // Drawn on the still empty chart while the list is asked for: its save waits.
+    s.commit({ before: null, after: drawing("x") });
+    b.loads[0]!.resolve([drawing("a")]);
+    await flush();
+    // The answer does not have "x" yet: it is dropped instead of wiping "x" and the undo history.
+    expect(s.sets).toEqual([[]]);
+    expect(b.calls).toEqual(["get BTCUSDT", `save x ${JSON.stringify(["body", "id", "instrument", "locked", "priceScale", "style", "z"])}`]);
+    b.pending[0]!.resolve();
+    await flush();
+    expect(b.calls.at(-1)).toBe("get BTCUSDT");
+    b.loads[1]!.resolve([drawing("a"), drawing("x")]);
+    await flush();
+    expect(s.sets).toEqual([[], [drawing("a"), drawing("x")]]);
+  });
+
+  it("gives up waiting for a quiet moment after a few tries and shows what is stored", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const b = fakeBackend([]);
+    const s = fakeSurface();
+    const c = new DrawingController(b.backend, () => {});
+    c.attach(s.surface);
+    void c.open(BTC);
+    for (let i = 0; i < 10; i++) {
+      await flush();
+      if (b.loads.length <= i) break;
+      s.commit({ before: null, after: drawing(`x${i}`) });
+      b.loads[i]!.resolve([drawing(`seen${i}`)]);
+      await flush();
+      b.pending[i]!.resolve();
+    }
+    await flush();
+    expect(b.loads.length).toBeLessThanOrEqual(4);
+    expect(s.sets.at(-1)).toEqual([drawing(`seen${b.loads.length - 1}`)]);
   });
 
   it("keeps the error of a failed store until a later one succeeds or another instrument opens", async () => {

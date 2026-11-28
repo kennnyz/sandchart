@@ -45,6 +45,8 @@ export interface MagnetPref {
 }
 
 const MAGNET_KEY = "sandchart.drawings.magnet";
+/** A load asks again at most this many times while changes keep coming in. */
+const LOAD_TRIES = 3;
 
 /** The magnet switch in localStorage; without storage it lasts for this session. */
 export const localMagnetPref: MagnetPref = {
@@ -105,6 +107,8 @@ export class DrawingController {
   private id: InstrumentId | null = null;
   /** Token of the latest load. */
   private token = 0;
+  /** Changes the chart reported, to tell whether one came while a list was loading. */
+  private commits = 0;
   /** The last load failed: the chart may not show what is stored. */
   private stale = false;
   /** Stores run one after another, and a load waits for them. */
@@ -248,10 +252,21 @@ export class DrawingController {
   private async load(id: InstrumentId, blank: boolean): Promise<void> {
     const token = ++this.token;
     if (blank) this.show([]);
-    await this.saving;
     let list: Drawing[];
     try {
-      list = await this.backend.getDrawings(id);
+      // A change made while the list is on its way is stored after it was read: the list
+      // would wipe it off the chart (and the undo history). Then load again after its store.
+      for (let tries = 1; ; tries++) {
+        await this.saving;
+        if (token !== this.token) return;
+        const commits = this.commits;
+        list = await this.backend.getDrawings(id);
+        if (token !== this.token || commits === this.commits) break;
+        if (tries === LOAD_TRIES) {
+          console.error(`the drawings kept changing during ${LOAD_TRIES} loads; showing the last one`);
+          break;
+        }
+      }
     } catch (e) {
       console.error("loading the drawings failed", e);
       if (token !== this.token) return;
@@ -330,6 +345,7 @@ export class DrawingController {
   }
 
   private store(c: DrawingChange): void {
+    this.commits++;
     this.trackPosition(c);
     const id = this.id;
     const run = c.after
