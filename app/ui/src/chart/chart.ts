@@ -1,6 +1,6 @@
 import type { CandleColumns, Candles, Drawing, Instrument, LiveCandle, PositionOutcome, TimeframeCode } from "../backend/types";
 import { chartDebug } from "./debug";
-import { Coords } from "./drawings/geometry";
+import { Coords, type Step } from "./drawings/geometry";
 import { DrawingLayer, type DrawingCommand, type StyleAction, type StyleEdit, type TextEdit, type TextResult } from "./drawings/layer";
 import type { ToolId } from "./drawings/registry";
 import type { DrawingChange } from "./drawings/state";
@@ -661,7 +661,8 @@ export class Chart {
       indicators: this.ind,
     };
     draw(f, this.buffers);
-    const step = STEP_MS.get(this.tf) ?? 60 * MINUTE;
+    // Months differ in length: 1M extrapolates by calendar months, not by 30 days.
+    const step: Step = this.tf === "1M" ? "month" : (STEP_MS.get(this.tf) ?? 60 * MINUTE);
     const coords = new Coords(s.time, s.count, this.view, scale, plotW, priceH, step, decimals, s);
     this.drawings.paintBase(this.ctx, coords, this.dpr, this.theme, (p, color) =>
       drawingTag(this.ctx, f, this.buffers, p, color),

@@ -3,6 +3,8 @@ import { PriceScale } from "../scale";
 import {
   Coords,
   MAX_TICKS,
+  addSteps,
+  stepsBetween,
   clipLine,
   distToLine,
   distToRect,
@@ -50,6 +52,44 @@ describe("timeToIndex / indexToTime", () => {
     expect(indexToTime(times, 1, H, -1)).toBe(-H);
     expect(timeToIndex(times, 0, H, 0)).toBeNaN();
     expect(indexToTime(times, 0, H, 0)).toBeNaN();
+  });
+});
+
+describe("calendar months (1M)", () => {
+  const utc = (y: number, m: number, d = 1, h = 0) => Date.UTC(y, m - 1, d, h);
+  // Monthly bars open on the 1st: November 2025 to February 2026.
+  const months = new Float64Array([utc(2025, 11), utc(2025, 12), utc(2026, 1), utc(2026, 2)]);
+
+  it("adds whole and partial months of the right length", () => {
+    expect(addSteps(utc(2026, 2), 1, "month")).toBe(utc(2026, 3));
+    expect(addSteps(utc(2026, 2), 20, "month")).toBe(utc(2027, 10));
+    expect(addSteps(utc(2026, 1), -2, "month")).toBe(utc(2025, 11));
+    // Half of February 2026 (28 days) is 14 days; half of March is 15.5 days.
+    expect(addSteps(utc(2026, 2), 0.5, "month")).toBe(utc(2026, 2, 15));
+    expect(addSteps(utc(2026, 2), 1.5, "month")).toBe(utc(2026, 3, 16, 12));
+    // The 31st into a 30-day month stays in that month.
+    expect(addSteps(utc(2026, 1, 31), 1, "month")).toBe(utc(2026, 2, 28));
+    expect(addSteps(utc(2026, 1, 31), 3, "month")).toBe(utc(2026, 4, 30));
+    // A fixed step stays fixed.
+    expect(addSteps(0, 2.5, 7 * 24 * H)).toBe(2.5 * 7 * 24 * H);
+  });
+
+  it("counts months between two times, the inverse of addSteps", () => {
+    expect(stepsBetween(utc(2026, 2), utc(2027, 10), "month")).toBe(20);
+    expect(stepsBetween(utc(2026, 2), utc(2026, 3, 16, 12), "month")).toBeCloseTo(1.5, 9);
+    expect(stepsBetween(utc(2026, 2), utc(2025, 12, 16, 12), "month")).toBeCloseTo(-1.5, 9);
+    for (const n of [-13.25, -1, 0, 0.3, 11.9, 40]) {
+      expect(stepsBetween(utc(2026, 2), addSteps(utc(2026, 2), n, "month"), "month")).toBeCloseTo(n, 6);
+    }
+  });
+
+  it("extrapolates by calendar months outside the loaded bars", () => {
+    expect(indexToTime(months, 4, "month", 4)).toBe(utc(2026, 3));
+    expect(indexToTime(months, 4, "month", 9)).toBe(utc(2026, 8));
+    expect(indexToTime(months, 4, "month", -1)).toBe(utc(2025, 10));
+    expect(timeToIndex(months, 4, "month", utc(2026, 8))).toBe(9);
+    expect(timeToIndex(months, 4, "month", utc(2025, 10))).toBe(-1);
+    expect(timeToIndex(months, 4, "month", utc(2026, 3, 16, 12))).toBeCloseTo(4.5, 9);
   });
 });
 

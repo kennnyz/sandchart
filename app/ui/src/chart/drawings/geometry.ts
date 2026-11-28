@@ -7,6 +7,38 @@ import { indexToX, xToIndex, type Viewport } from "../viewport";
 /** The largest tick value the engine accepts (2^53 - 1). */
 export const MAX_TICKS = Number.MAX_SAFE_INTEGER;
 
+/** A bar step: fixed ms, or a calendar month (1M bars open on the 1st of a month, UTC). */
+export type Step = number | "month";
+
+/** `t` moved by `n` whole months in UTC; a day past the end of the target month is clamped to it. */
+function addMonths(t: number, n: number): number {
+  const d = new Date(t);
+  const y = d.getUTCFullYear();
+  const m = d.getUTCMonth() + n;
+  const days = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+  return Date.UTC(y, m, Math.min(d.getUTCDate(), days), d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds(), d.getUTCMilliseconds());
+}
+
+/** `t` plus `n` (fractional) steps; a part of a month counts by that month's length. */
+export function addSteps(t: number, n: number, step: Step): number {
+  if (step !== "month") return t + n * step;
+  const whole = Math.floor(n);
+  const a = addMonths(t, whole);
+  return whole === n ? a : a + (n - whole) * (addMonths(t, whole + 1) - a);
+}
+
+/** How many (fractional) steps lead from `from` to `t`: the inverse of `addSteps`. */
+export function stepsBetween(from: number, t: number, step: Step): number {
+  if (step !== "month") return (t - from) / step;
+  const a = new Date(from);
+  const b = new Date(t);
+  let m = (b.getUTCFullYear() - a.getUTCFullYear()) * 12 + b.getUTCMonth() - a.getUTCMonth();
+  while (addMonths(from, m) > t) m--;
+  while (addMonths(from, m + 1) <= t) m++;
+  const lo = addMonths(from, m);
+  return m + (t - lo) / (addMonths(from, m + 1) - lo);
+}
+
 /** Largest i with `time[i] <= t`, or -1 when `t` is before the first bar. `count` > 0. */
 function barAtOrBefore(time: Float64Array, count: number, t: number): number {
   let lo = 0;
@@ -23,22 +55,22 @@ function barAtOrBefore(time: Float64Array, count: number, t: number): number {
 /**
  * Fractional bar index of time `t` over the first `count` bar open times: an integer on a
  * bar's open time, linear between two bars (a gap in the data counts as one bar), and
- * extrapolated by `step` ms before the first and after the last bar. NaN without bars.
+ * extrapolated by `step` before the first and after the last bar. NaN without bars.
  */
-export function timeToIndex(time: Float64Array, count: number, step: number, t: number): number {
+export function timeToIndex(time: Float64Array, count: number, step: Step, t: number): number {
   if (count <= 0) return NaN;
   const i = barAtOrBefore(time, count, t);
-  if (i < 0) return (t - time[0]!) / step;
-  if (i === count - 1) return i + (t - time[i]!) / step;
+  if (i < 0) return stepsBetween(time[0]!, t, step);
+  if (i === count - 1) return i + stepsBetween(time[i]!, t, step);
   return i + (t - time[i]!) / (time[i + 1]! - time[i]!);
 }
 
 /** The inverse of `timeToIndex`. */
-export function indexToTime(time: Float64Array, count: number, step: number, index: number): number {
+export function indexToTime(time: Float64Array, count: number, step: Step, index: number): number {
   if (count <= 0) return NaN;
-  if (index <= 0) return time[0]! + index * step;
+  if (index <= 0) return addSteps(time[0]!, index, step);
   const last = count - 1;
-  if (index >= last) return time[last]! + (index - last) * step;
+  if (index >= last) return addSteps(time[last]!, index - last, step);
   const i = Math.floor(index);
   return time[i]! + (index - i) * (time[i + 1]! - time[i]!);
 }
@@ -71,8 +103,8 @@ export class Coords {
     private readonly scale: PriceScale,
     readonly plotW: number,
     readonly priceH: number,
-    /** Bar duration of the timeframe in ms. */
-    readonly step: number,
+    /** Bar step of the timeframe: ms, or calendar months on 1M. */
+    readonly step: Step,
     /** Price decimals of the instrument, for labels. */
     readonly decimals = 0,
     private readonly ohlc: Ohlc | null = null,
@@ -109,6 +141,11 @@ export class Coords {
     const a = this.last;
     const b = o.last;
     return a === b || (a !== null && b !== null && a.every((v, k) => v === b[k]));
+  }
+
+  /** `t` plus `n` bar steps of the timeframe. */
+  addBars(t: number, n: number): number {
+    return addSteps(t, n, this.step);
   }
 
   /** Fractional bar index of time `t` (see `timeToIndex`). */

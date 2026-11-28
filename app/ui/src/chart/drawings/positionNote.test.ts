@@ -57,6 +57,9 @@ describe("position tools", () => {
     });
     // A tiny price still gets a risk of one tick.
     expect(defaultPosition("long", { t: 0, p: 10 }, H)).toMatchObject({ stop: 9, take: 13 });
+    // On 1M the end is 20 calendar months later, not 20 x 30 days.
+    const jan15 = Date.UTC(2026, 0, 15);
+    expect(defaultPosition("long", { t: jan15, p: 10_000 }, "month").endT).toBe(Date.UTC(2027, 8, 15));
   });
 
   it("works out the label numbers", () => {

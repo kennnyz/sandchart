@@ -292,7 +292,7 @@ export class DrawingLayer {
       // A marker or handle just outside the plot still shows, and a note sits at the open of
       // the bar that holds its time, up to one bar before it: cull with that much margin.
       const m = HANDLE_RADIUS + HIT_TOLERANCE;
-      this.span = [c.t(-m) - c.step, c.t(c.plotW + m) + c.step];
+      this.span = [c.addBars(c.t(-m), -1), c.addBars(c.t(c.plotW + m), 1)];
       if (this.cache.size > this.state.drawings.length + 32) this.pruneCache();
       const dragged = this.edit?.moved ? this.edit.id : null;
       begin(ctx, c, dpr);

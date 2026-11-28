@@ -3,7 +3,7 @@ import type { Anchor, DrawingBody, PositionOutcome, Side } from "../../../backen
 import { t } from "../../../i18n";
 import { formatChange } from "../../format";
 import { MONO_FAMILY, type ChartTheme } from "../../theme";
-import { MAX_TICKS } from "../geometry";
+import { addSteps, MAX_TICKS, type Step } from "../geometry";
 import { pill } from "../label";
 import type { ToolDef } from "../registry";
 
@@ -32,8 +32,8 @@ export function validPosition(b: Position): boolean {
   return ordered && b.endT > b.entry.t && [p, b.stop, b.take].every((v) => Math.abs(v) <= MAX_TICKS);
 }
 
-/** A new position at `entry`: the stop `DEFAULT_STOP` against it, the take at `DEFAULT_RR` R, `DEFAULT_BARS` bars of `step` ms long. */
-export function defaultPosition(side: Side, entry: Anchor, step: number): Position {
+/** A new position at `entry`: the stop `DEFAULT_STOP` against it, the take at `DEFAULT_RR` R, `DEFAULT_BARS` bars of `step` long. */
+export function defaultPosition(side: Side, entry: Anchor, step: Step): Position {
   const risk = Math.max(1, Math.round(Math.abs(entry.p) * DEFAULT_STOP));
   const dir = side === "long" ? 1 : -1;
   return {
@@ -42,7 +42,7 @@ export function defaultPosition(side: Side, entry: Anchor, step: number): Positi
     entry: { t: entry.t, p: entry.p },
     stop: clampTicks(entry.p - dir * risk),
     take: clampTicks(entry.p + dir * DEFAULT_RR * risk),
-    endT: entry.t + DEFAULT_BARS * step,
+    endT: Math.round(addSteps(entry.t, DEFAULT_BARS, step)),
   };
 }
 
