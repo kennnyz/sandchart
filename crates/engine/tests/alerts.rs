@@ -27,7 +27,7 @@ type Opened = Vec<(Timeframe, mpsc::UnboundedSender<LiveItem>)>;
 /// Every `live` call opens a new stream; the test sends into the ones still open.
 #[derive(Default)]
 struct FakeProvider {
-    instruments: Vec<Instrument>,
+    instruments: Mutex<Vec<Instrument>>,
     opened: Mutex<HashMap<String, Opened>>,
 }
 
@@ -38,7 +38,7 @@ impl Provider for FakeProvider {
     }
 
     async fn instruments(&self) -> Result<Vec<Instrument>, ProviderError> {
-        Ok(self.instruments.clone())
+        Ok(self.instruments.lock().unwrap().clone())
     }
 
     async fn history(
@@ -78,6 +78,11 @@ impl FakeProvider {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// How many streams of `symbol` were ever opened.
+    fn opened(&self, symbol: &str) -> usize {
+        self.opened.lock().unwrap().get(symbol).map_or(0, Vec::len)
     }
 
     /// Sends to every open stream of `symbol` at `tf`.
@@ -149,7 +154,7 @@ async fn fixture(symbols: &[&str]) -> Fixture {
 
 async fn fixture_in(dir: tempfile::TempDir, symbols: &[&str]) -> Fixture {
     let provider = Arc::new(FakeProvider {
-        instruments: symbols.iter().map(|s| inst(s)).collect(),
+        instruments: Mutex::new(symbols.iter().map(|s| inst(s)).collect()),
         ..FakeProvider::default()
     });
     let clock = Arc::new(AtomicI64::new(NOW));
@@ -897,4 +902,62 @@ async fn another_processs_writes_reload_the_alerts_only_when_they_concern_them()
             .unwrap(),
         AlertEvent::Changed
     );
+}
+
+#[tokio::test]
+async fn a_new_tick_size_restarts_the_stream_and_compares_at_the_new_scale() {
+    let mut f = fixture(&["BTCUSDT"]).await;
+    f.engine
+        .set_alert(price_alert("a1", "BTCUSDT", 10_000, Direction::Above))
+        .await
+        .unwrap();
+    until("the alert stream opens", || {
+        !f.provider.open("BTCUSDT").is_empty()
+    })
+    .await;
+    let p = &f.provider;
+    p.send("BTCUSDT", Timeframe::M1, bar(0, 9_980, 9_990, 9_990));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    // Another process stores a finer tick size: 100.00 is now 100000 ticks.
+    sql(
+        f._dir.path(),
+        "UPDATE instruments SET price_scale = 3 WHERE symbol = 'BTCUSDT'",
+    );
+    until("the stream is opened again at the new scale", || {
+        p.opened("BTCUSDT") == 2 && p.open("BTCUSDT").len() == 1
+    })
+    .await;
+    // At the old scale this would be far above the level; the last price before is gone.
+    p.send("BTCUSDT", Timeframe::M1, bar(0, 99_800, 99_900, 99_900));
+    none_fired(&mut f.events).await;
+    p.send("BTCUSDT", Timeframe::M1, bar(0, 99_800, 100_050, 100_050));
+    let fired = next_fired(&mut f.events).await;
+    assert_eq!(fired.price_scale, 3);
+    assert_eq!(fired.triggered_price, Some(100_050));
+}
+
+#[tokio::test]
+async fn a_new_tick_size_from_the_apps_own_sync_rearms_at_it() {
+    let mut f = fixture(&["BTCUSDT"]).await;
+    f.engine
+        .set_alert(price_alert("a1", "BTCUSDT", 10_000, Direction::Above))
+        .await
+        .unwrap();
+    until("the alert stream opens", || {
+        !f.provider.open("BTCUSDT").is_empty()
+    })
+    .await;
+    f.provider.instruments.lock().unwrap()[0].price_scale = 3;
+    f.engine.sync_instruments("fake").await.unwrap();
+    let p = &f.provider;
+    until("the stream is opened again at the new scale", || {
+        p.opened("BTCUSDT") == 2 && p.open("BTCUSDT").len() == 1
+    })
+    .await;
+    // And it stays: the levels are at the new scale too, so the stream is not replaced again.
+    tokio::time::sleep(Duration::from_millis(2_500)).await;
+    assert_eq!(p.opened("BTCUSDT"), 2);
+    p.send("BTCUSDT", Timeframe::M1, bar(0, 99_800, 99_900, 99_900));
+    p.send("BTCUSDT", Timeframe::M1, bar(0, 99_800, 100_050, 100_050));
+    assert_eq!(next_fired(&mut f.events).await.price_scale, 3);
 }

@@ -292,7 +292,9 @@ impl Engine {
         };
         self.shared.note_ok();
         let n = items.len();
-        blocking(&self.shared.store, move |s| s.upsert_instruments(&items)).await?;
+        // A new tick size changes the levels of armed alerts: they are armed again from it.
+        self.store_and_reload(move |s| s.upsert_instruments(&items))
+            .await?;
         Ok(n)
     }
 

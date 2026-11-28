@@ -51,11 +51,13 @@ struct Armed {
     armed_at: i64,
 }
 
-/// A live stream of a pair; `own` when the engine opened it for alerts.
+/// A live stream of a pair; `own` when the engine opened it for alerts. `scale` is the
+/// price scale its candles come in: the instrument's when it was opened.
 #[derive(Clone, Copy)]
 struct Stream {
     key: u64,
     own: bool,
+    scale: u8,
 }
 
 #[derive(Default)]
@@ -76,13 +78,27 @@ struct State {
 }
 
 impl State {
+    /// The price scale the armed alerts of `id` compare at: the instrument's current one.
+    fn scale(&self, id: &InstrumentId) -> Option<u8> {
+        Some(self.armed.get(id)?.first()?.alert.price_scale)
+    }
+
+    /// The streams of `id` whose candles come at the armed alerts' scale; one opened before
+    /// the tick size changed cannot feed them.
+    fn matching(&self, id: &InstrumentId) -> impl Iterator<Item = &Stream> {
+        let scale = self.scale(id);
+        self.streams
+            .get(id)
+            .into_iter()
+            .flatten()
+            .filter(move |s| Some(s.scale) == scale)
+    }
+
     /// The stream whose updates count for `id`: the chart's first, else the engine's own.
     fn feeder(&self, id: &InstrumentId) -> Option<u64> {
-        let streams = self.streams.get(id)?;
-        streams
-            .iter()
+        self.matching(id)
             .find(|s| !s.own)
-            .or_else(|| streams.first())
+            .or_else(|| self.matching(id).next())
             .map(|s| s.key)
     }
 }
@@ -141,6 +157,7 @@ impl Hub {
         self: &Arc<Self>,
         id: &InstrumentId,
         own: bool,
+        scale: u8,
     ) -> Result<StreamGuard, EngineError> {
         let mut st = self.state();
         if st.open >= MAX_LIVE_STREAMS {
@@ -153,7 +170,7 @@ impl Hub {
         st.streams
             .entry(id.clone())
             .or_default()
-            .push(Stream { key, own });
+            .push(Stream { key, own, scale });
         drop(st);
         if !own {
             self.wake.notify_one(); // the engine's own stream of this pair can go
@@ -280,7 +297,13 @@ impl Hub {
                     armed_at,
                 });
         }
-        st.last.retain(|id, _| armed.contains_key(id));
+        // A price from before a change of tick size is in other ticks than the new levels.
+        let scale = |a: &HashMap<InstrumentId, Vec<Armed>>, id: &InstrumentId| {
+            a.get(id)?.first().map(|a| a.alert.price_scale)
+        };
+        let old = std::mem::take(&mut st.armed);
+        st.last
+            .retain(|id, _| scale(&armed, id).is_some() && scale(&armed, id) == scale(&old, id));
         st.armed = armed;
         drop(st);
         self.wake.notify_one();
@@ -522,13 +545,12 @@ impl Engine {
         let (start, stop) = {
             let mut st = hub.state();
             st.own.retain(|_, task| !task.is_finished());
-            let chart = |st: &State, id: &InstrumentId| {
-                st.streams.get(id).is_some_and(|v| v.iter().any(|s| !s.own))
-            };
+            let chart = |st: &State, id: &InstrumentId| st.matching(id).any(|s| !s.own);
+            // An own stream opened before the tick size changed is opened again.
             let stop: Vec<InstrumentId> = st
                 .own
                 .keys()
-                .filter(|id| !st.armed.contains_key(*id) || chart(&st, id))
+                .filter(|id| chart(&st, id) || !st.matching(id).any(|s| s.own))
                 .cloned()
                 .collect();
             let stop: Vec<JoinHandle<()>> =
@@ -673,7 +695,7 @@ mod tests {
         s.upsert_alert(&alert).unwrap();
         let store = Mutex::new(s);
         let hub = Arc::new(Hub::default());
-        let stream = hub.open_stream(&id, true).unwrap();
+        let stream = hub.open_stream(&id, true, 2).unwrap();
         hub.reload(&store, 1).unwrap();
         assert!(hub.evaluate(&id, stream.key, &bar(90, 90), 2).is_empty());
         let fired = hub.evaluate(&id, stream.key, &bar(101, 101), 3);

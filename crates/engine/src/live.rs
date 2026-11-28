@@ -92,7 +92,10 @@ impl Engine {
         let instrument = crate::lock(&self.shared.store)
             .instrument(id)?
             .ok_or_else(|| EngineError::UnknownInstrument(id.clone()))?;
-        let guard = self.shared.alerts.open_stream(id, own)?;
+        let guard = self
+            .shared
+            .alerts
+            .open_stream(id, own, instrument.price_scale)?;
         let (tx, events) = mpsc::channel(EVENT_BUFFER);
         let task = runtime.spawn(run(
             self.shared.clone(),
