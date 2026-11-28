@@ -1,6 +1,7 @@
 //! The replay session: one at a time, over cached candles held in memory. Only bars up to
 //! the current one ever leave the engine (ADR 0005).
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, MutexGuard, PoisonError};
 
 use sandchart_core::replay::{
@@ -14,6 +15,8 @@ use crate::{Engine, EngineError, blocking, lock};
 pub const REPLAY_CONTEXT: usize = 500;
 
 pub(crate) struct Session {
+    /// Unique per session in this process, so indicator results of two sessions never mix.
+    id: u64,
     instrument: Instrument,
     tf: Timeframe,
     /// Context, then every bar from the start to the newest cached one. Shared, so readers
@@ -49,6 +52,9 @@ pub struct ReplayState {
 /// A snapshot of the open replay's bars, taken by [`crate::Shared::replay_bars`].
 pub(crate) struct ReplayBars {
     pub instrument: Instrument,
+    pub session: u64,
+    /// Index of the current bar: the snapshot's content is fixed by `(session, current)`.
+    pub current: u32,
     candles: Arc<[Candle]>,
     /// How many bars are revealed.
     len: usize,
@@ -58,6 +64,11 @@ impl ReplayBars {
     pub fn revealed(&self) -> &[Candle] {
         &self.candles[..self.len]
     }
+}
+
+fn next_session_id() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 fn no_session() -> EngineError {
@@ -115,6 +126,8 @@ impl crate::Shared {
             .filter(|s| s.instrument.id == *id && s.tf == tf)?;
         Some(ReplayBars {
             instrument: s.instrument.clone(),
+            session: s.id,
+            current: s.current,
             candles: Arc::clone(&s.candles),
             len: s.current as usize + 1,
         })
@@ -168,6 +181,7 @@ impl Engine {
         let mut candles = context;
         candles.extend(rest);
         let mut session = Session {
+            id: next_session_id(),
             instrument,
             tf,
             candles: candles.into(),
@@ -255,6 +269,7 @@ impl Engine {
             file.instrument = inst;
         }
         let mut session = Session {
+            id: next_session_id(),
             instrument: file.instrument,
             tf: file.timeframe,
             candles: file.candles.into(),

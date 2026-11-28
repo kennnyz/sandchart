@@ -774,3 +774,33 @@ async fn a_replay_computes_over_its_revealed_bars_only() {
         &values(result(&full, "sma"))
     ));
 }
+
+#[tokio::test]
+async fn a_replay_memoises_results_until_a_step_or_another_session() {
+    let f = fixture().await;
+    let candles: Vec<Candle> = (0..10).map(|i| candle(9 - i, 10_000 + 100 * i)).collect();
+    f.cache_candles("BTCUSDT", candles).await;
+    f.engine.set_chart_indicators(vec![sma(2)]).await.unwrap();
+    let start = NOW_OPEN - 5 * H;
+    f.engine
+        .replay_start(&id("BTCUSDT"), TF, start)
+        .await
+        .unwrap();
+    let calls = || f.engine.indicator_stats().module_calls;
+    f.compute(i64::MIN).await;
+    let first = calls();
+    f.compute(i64::MIN).await;
+    assert_eq!(calls(), first, "the same session and bar hit the memo");
+    f.engine.replay_step(1).unwrap();
+    f.compute(i64::MIN).await;
+    assert_eq!(calls(), first + 1, "a step reveals a bar: computed again");
+    f.compute(i64::MIN).await;
+    assert_eq!(calls(), first + 1);
+    // A new session at the same bar may hold other candles (an opened file).
+    f.engine
+        .replay_start(&id("BTCUSDT"), TF, start + H)
+        .await
+        .unwrap();
+    f.compute(i64::MIN).await;
+    assert_eq!(calls(), first + 2);
+}

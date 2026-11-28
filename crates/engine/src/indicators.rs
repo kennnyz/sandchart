@@ -161,9 +161,17 @@ impl BarState {
     }
 }
 
+/// What a result was computed over: the cached bars of one generation, or the revealed
+/// bars of a replay session up to its current bar (fixed while neither changes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Generation {
+    Cache(u64),
+    Replay { session: u64, current: u32 },
+}
+
 /// The last result of one instance and what it was computed from.
 struct Memo {
-    generation: u64,
+    generation: Generation,
     hash: [u8; 32],
     params: Vec<(String, ParamValue)>,
     from_time: i64,
@@ -760,18 +768,16 @@ impl Engine {
             Ok((s.indicator_instances()?, s.instrument(&key)?))
         })
         .await?;
-        let (bars, generation) = match self.shared.replay_bars(id, tf) {
-            // A replay computes over its revealed bars only, never the cache; a fresh
-            // generation keeps its results apart from the cache's in the memo. The bars
-            // are converted off the replay lock and off the async threads.
+        // A replay computes over its revealed bars only, never the cache; its generation
+        // (session, current bar) keeps its results apart from the cache's in the memo. Its
+        // bars are converted on the first memo miss, off the replay lock and the async threads.
+        let (mut bars, generation, mut replay) = match self.shared.replay_bars(id, tf) {
             Some(r) => {
-                let bars = spawn_blocking(move || {
-                    let candles = r.revealed();
-                    let newest = &candles[candles.len().saturating_sub(MAX_INDICATOR_BARS)..];
-                    Ok(Arc::new(to_bars(newest, &r.instrument)))
-                })
-                .await?;
-                (bars, self.shared.bar_state().next_generation())
+                let generation = Generation::Replay {
+                    session: r.session,
+                    current: r.current,
+                };
+                (None, generation, Some(r))
             }
             None => {
                 let inst = inst.ok_or_else(|| EngineError::UnknownInstrument(id.clone()))?;
@@ -781,7 +787,7 @@ impl Engine {
                 if read {
                     svc.store_reads.fetch_add(1, Ordering::Relaxed);
                 }
-                (bars, generation)
+                (Some(bars), Generation::Cache(generation), None)
             }
         };
 
@@ -801,12 +807,23 @@ impl Engine {
             let result = match hit {
                 Some(result) => result,
                 None => {
+                    let bars = match (&bars, replay.take()) {
+                        (Some(b), _) => Arc::clone(b),
+                        (None, Some(r)) => {
+                            let b = spawn_blocking(move || {
+                                let candles = r.revealed();
+                                let newest =
+                                    &candles[candles.len().saturating_sub(MAX_INDICATOR_BARS)..];
+                                Ok(Arc::new(to_bars(newest, &r.instrument)))
+                            })
+                            .await?;
+                            bars = Some(Arc::clone(&b));
+                            b
+                        }
+                        (None, None) => unreachable!("a replay without bars keeps its snapshot"),
+                    };
                     svc.module_calls.fetch_add(1, Ordering::Relaxed);
-                    let (module, params, bars) = (
-                        loaded.module.clone(),
-                        instance.params.clone(),
-                        Arc::clone(&bars),
-                    );
+                    let (module, params) = (loaded.module.clone(), instance.params.clone());
                     let result =
                         spawn_blocking(move || Ok(compute_one(&module, &params, &bars, from_time)))
                             .await?;
