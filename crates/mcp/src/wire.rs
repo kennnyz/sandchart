@@ -93,6 +93,8 @@ pub struct DrawingInput {
     pub style: Option<Style>,
     /// Locked against editing in the app; default false.
     pub locked: Option<bool>,
+    /// Hidden on the chart until the user shows it again; default false.
+    pub hidden: Option<bool>,
     /// Paint order, higher on top; default 0.
     pub z: Option<i64>,
 }
@@ -212,6 +214,7 @@ pub fn drawing(d: &Drawing) -> Value {
         "body": body(&d.body, d.price_scale),
         "style": d.style,
         "locked": d.locked,
+        "hidden": d.hidden,
         "z": d.z,
         "updatedAt": d.updated_at,
     })

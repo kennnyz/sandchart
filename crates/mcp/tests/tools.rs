@@ -502,6 +502,7 @@ async fn drawings_are_saved_listed_and_deleted_with_the_apps_rules() {
         json!({ "color": 0, "width": 1, "dash": false })
     );
     assert!(saved["updatedAt"].as_i64().unwrap() > 0);
+    assert_eq!(saved["hidden"], false);
     assert_eq!(
         saved["body"],
         json!({ "kind": "hline", "p": 12_345, "pDecimal": "123.45" })
@@ -509,7 +510,7 @@ async fn drawings_are_saved_listed_and_deleted_with_the_apps_rules() {
 
     // Ticks at another price scale are a mistake (10x or 100x off), not rescaled.
     let trend = json!({
-        "id": "t1", "symbol": "BTCUSDT", "priceScale": 3, "z": 2,
+        "id": "t1", "symbol": "BTCUSDT", "priceScale": 3, "z": 2, "hidden": true,
         "body": { "kind": "trend", "a": { "t": T0, "p": 10_000 }, "b": { "t": T0 + H, "p": 10_100 },
                   "extendLeft": false, "extendRight": true },
         "style": { "color": 3, "width": 2, "dash": true }
@@ -534,6 +535,7 @@ async fn drawings_are_saved_listed_and_deleted_with_the_apps_rules() {
         .map(|d| d["id"].as_str().unwrap())
         .collect();
     assert_eq!(ids, [id.as_str(), "t1"]);
+    assert_eq!(list["drawings"][1]["hidden"], true, "passed through");
 
     let e = h
         .fail(
@@ -832,6 +834,7 @@ async fn writes_wait_for_the_app_and_both_see_each_others_changes() {
             dash: false,
         },
         locked: false,
+        hidden: false,
         z: 0,
         updated_at: 0,
     })

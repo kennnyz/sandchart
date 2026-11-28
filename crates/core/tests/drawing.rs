@@ -12,6 +12,8 @@ struct Input {
     id: String,
     body: DrawingBody,
     style: Style,
+    #[serde(default)]
+    hidden: bool,
     z: i64,
 }
 
@@ -43,6 +45,7 @@ fn drawing(i: Input) -> Drawing {
         body: i.body,
         style: i.style,
         locked: false,
+        hidden: i.hidden,
         z: i.z,
         updated_at: 0,
     }

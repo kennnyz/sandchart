@@ -533,7 +533,7 @@ impl Store {
     /// stored and still counts toward the cap.
     pub fn drawings(&self, id: &InstrumentId) -> Result<Vec<Drawing>, StoreError> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT id, price_scale, body, style, locked, z, updated_at
+            "SELECT id, price_scale, body, style, locked, hidden, z, updated_at
              FROM drawings WHERE source = ?1 AND symbol = ?2 ORDER BY z, id",
         )?;
         let rows = stmt.query_map(params![id.source, id.symbol], |row| {
@@ -543,13 +543,14 @@ impl Store {
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
                 row.get::<_, bool>(4)?,
-                row.get::<_, i64>(5)?,
+                row.get::<_, bool>(5)?,
                 row.get::<_, i64>(6)?,
+                row.get::<_, i64>(7)?,
             ))
         })?;
         let mut out = Vec::new();
         for row in rows {
-            let (drawing_id, price_scale, body, style, locked, z, updated_at) = row?;
+            let (drawing_id, price_scale, body, style, locked, hidden, z, updated_at) = row?;
             // A row this version cannot read (a kind from a later one) is skipped, not fatal.
             let parsed = serde_json::from_str(&body)
                 .and_then(|body| serde_json::from_str(&style).map(|style| (body, style)));
@@ -567,6 +568,7 @@ impl Store {
                 body,
                 style,
                 locked,
+                hidden,
                 z,
                 updated_at,
             });
@@ -594,8 +596,8 @@ impl Store {
         }
         tx.execute(
             "INSERT OR REPLACE INTO drawings
-                (id, source, symbol, price_scale, body, style, locked, z, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                (id, source, symbol, price_scale, body, style, locked, hidden, z, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 d.id,
                 d.instrument.source,
@@ -604,6 +606,7 @@ impl Store {
                 body,
                 style,
                 d.locked,
+                d.hidden,
                 d.z,
                 d.updated_at
             ],
@@ -635,7 +638,7 @@ impl Store {
         let row = self
             .conn
             .query_row(
-                "SELECT source, symbol, price_scale, body, style, locked, z, updated_at
+                "SELECT source, symbol, price_scale, body, style, locked, hidden, z, updated_at
                  FROM drawings WHERE id = ?1",
                 [id],
                 |row| {
@@ -648,13 +651,15 @@ impl Store {
                         row.get::<_, String>(3)?,
                         row.get::<_, String>(4)?,
                         row.get::<_, bool>(5)?,
-                        row.get::<_, i64>(6)?,
+                        row.get::<_, bool>(6)?,
                         row.get::<_, i64>(7)?,
+                        row.get::<_, i64>(8)?,
                     ))
                 },
             )
             .optional()?;
-        let Some((instrument, price_scale, body, style, locked, z, updated_at)) = row else {
+        let Some((instrument, price_scale, body, style, locked, hidden, z, updated_at)) = row
+        else {
             return Ok(None);
         };
         let (Ok(body), Ok(style)) = (serde_json::from_str(&body), serde_json::from_str(&style))
@@ -668,6 +673,7 @@ impl Store {
             body,
             style,
             locked,
+            hidden,
             z,
             updated_at,
         }))

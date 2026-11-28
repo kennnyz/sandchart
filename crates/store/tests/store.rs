@@ -300,6 +300,7 @@ fn drawing(drawing_id: &str, symbol: &str, z: i64) -> Drawing {
             dash: true,
         },
         locked: true,
+        hidden: false,
         z,
         updated_at: 1_700_000_000_000,
     }
@@ -324,6 +325,39 @@ fn drawing_migration_goes_down_to_2_and_up_again() {
 }
 
 #[test]
+fn hidden_migration_goes_down_to_4_and_up_again_keeping_the_drawings() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sandchart.db");
+    let mut hidden = drawing("h", "BTCUSDT", 0);
+    hidden.hidden = true;
+    {
+        let mut store = Store::open(&path).unwrap();
+        store.upsert_drawing(&hidden).unwrap();
+        assert!(store.drawing("h").unwrap().unwrap().hidden);
+        store.migrate_down_to(4).unwrap();
+    }
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let columns: Vec<String> = conn
+        .prepare("SELECT name FROM pragma_table_info('drawings')")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(!columns.iter().any(|c| c == "hidden"), "{columns:?}");
+    let rows: i64 = conn
+        .query_row("SELECT COUNT(*) FROM drawings", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(rows, 1, "going down keeps the drawing");
+    drop(conn);
+    // Up again: the drawing is back, shown, as 0.5 left it.
+    let store = Store::open(&path).unwrap();
+    let got = store.drawing("h").unwrap().unwrap();
+    assert!(!got.hidden);
+    assert_eq!(got.id, "h");
+}
+
+#[test]
 fn drawings_round_trip_per_instrument_ordered_by_z_then_id() {
     let mut store = Store::open_in_memory().unwrap();
     let mut position = drawing("p", "BTCUSDT", 1);
@@ -335,6 +369,7 @@ fn drawings_round_trip_per_instrument_ordered_by_z_then_id() {
         end_t: 20,
     });
     position.locked = false;
+    position.hidden = true;
     let items = [
         drawing("b", "BTCUSDT", 0),
         position.clone(),
@@ -518,7 +553,12 @@ fn alert_migration_goes_down_to_3_and_up_again() {
             .unwrap();
         store.migrate_down_to(3).unwrap();
         assert_eq!(rusqlite_count(&path), 7);
-        assert_eq!(store.drawings(&id("BTCUSDT")).unwrap().len(), 1);
+        // The drawings table stays; this version's queries need the later `hidden` column.
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM drawings", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 1);
     }
     let store = Store::open(&path).unwrap();
     assert_eq!(rusqlite_count(&path), 8);
@@ -788,7 +828,7 @@ fn two_processes_opening_an_old_file_migrate_it_once() {
     let version: u32 = conn
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 4);
+    assert_eq!(version, 5);
 }
 
 #[test]
@@ -821,7 +861,7 @@ fn a_second_process_never_migrates_an_older_apps_database() {
             err,
             StoreError::SchemaTooOld {
                 found: 3,
-                supported: 4
+                supported: 5
             }
         ),
         "{err:?}"

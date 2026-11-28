@@ -516,6 +516,7 @@ impl Sandchart {
             body: p.body,
             style: p.style.unwrap_or(DEFAULT_STYLE),
             locked: p.locked.unwrap_or(false),
+            hidden: p.hidden.unwrap_or(false),
             z: p.z.unwrap_or(0),
             updated_at: 0,
         };
