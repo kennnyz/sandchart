@@ -597,8 +597,8 @@ export class DrawingLayer {
     const tool = toolFor(d.body.kind)!;
     // The grip moves the whole drawing, as its body does.
     const part: Part = hit.part === tool.grip ? "body" : hit.part;
-    const reshape = part !== "body" && s.isSelected(d.id);
-    if (cmd && !reshape) {
+    // ⌘ on a handle (of any drawing, hovered or selected) snaps it; on a body it picks.
+    if (cmd && part === "body") {
       s.toggle(d.id);
       this.host.invalidateOverlay();
       return true;

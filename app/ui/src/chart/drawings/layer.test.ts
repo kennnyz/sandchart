@@ -433,6 +433,22 @@ describe("⌘ snapping and handles", () => {
     expect(b).toEqual({ t: 49 * STEP, p: 6_000 });
   });
 
+  it("reshapes with ⌘ held from the press on a handle of a drawing that is not selected", () => {
+    const { l, c, paint } = recording();
+    const other = hl(c.p(800), "o");
+    const t = drawing({ kind: "trend", a: { t: c.t(100), p: 5_000 }, b: { t: c.t(300), p: 5_000 }, extendLeft: false, extendRight: false }, "t");
+    l.setDrawings([other, t]);
+    l.state.select("o");
+    paint();
+    // The handle of the hovered line: ⌘ snaps it, it does not add the line to the selection.
+    expect(l.pointerDown(300, 500, false, true)).toBe(true);
+    expect(l.state.selection).toEqual(["t"]);
+    l.pointerMove(503, 385, false, true);
+    l.pointerUp(503, 385, false, true);
+    const b = (l.state.byId("t")!.body as Extract<DrawingBody, { kind: "trend" }>).b;
+    expect(b).toEqual({ t: 49 * STEP, p: 6_000 });
+  });
+
   it("moves the whole trend line with its middle handle", () => {
     const { l, c, paint } = recording();
     const t = drawing({ kind: "trend", a: { t: c.t(100), p: c.p(600) }, b: { t: c.t(300), p: c.p(400) }, extendLeft: false, extendRight: false }, "t");

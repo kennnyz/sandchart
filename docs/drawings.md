@@ -88,7 +88,7 @@ Tab moves between the controls and stays inside the popover; Esc or a click outs
 
 **The magnet** (Alt+M, or the magnet button) snaps every placed or dragged point to the open, high, low or close of the nearest bar, within 8 px. The magnet setting is remembered between sessions.
 
-**⌘ (Ctrl)** held while you place a point or drag a handle snaps it to the bar under the pointer, magnet on or off: to the nearest of its open, high, low and close (a body end or a wick end), from anywhere between its high and low and up to 40 px above or below them. Keep ⌘ held while you drag and the point jumps from bar to bar. ⌘ on empty space starts a [selection box](#selecting-several) instead; ⌘ on a drawing's body adds it to the selection.
+**⌘ (Ctrl)** held while you place a point or drag a handle snaps it to the bar under the pointer, magnet on or off: to the nearest of its open, high, low and close (a body end or a wick end), from anywhere between its high and low and up to 40 px above or below them. Keep ⌘ held while you drag and the point jumps from bar to bar. ⌘ on a handle snaps it, also on a drawing that is not selected yet. ⌘ on empty space starts a [selection box](#selecting-several) instead; ⌘ on a drawing's body adds it to the selection.
 
 **The ruler** measures from where you press to where you release: the price change, the change in percent, the number of bars and the time. Start it with Shift+drag on empty space, or press Alt+R and then drag (with any tool picked). It is not saved; the next press or Esc puts it away.
 
