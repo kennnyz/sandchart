@@ -101,6 +101,10 @@ export const fibTool: ToolDef<Fib, FibGeom> = {
     return g.ys.some((ly) => Math.abs(y - ly) <= tol);
   },
 
+  touches(g, box) {
+    return g.left <= box.right && g.right >= box.left && g.ys.some((y) => y >= box.top && y <= box.bottom);
+  },
+
   handles(g) {
     return [
       { x: g.ax, y: g.ay },

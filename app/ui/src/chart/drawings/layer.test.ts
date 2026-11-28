@@ -4,7 +4,8 @@ import { PriceScale } from "../scale";
 import { dark } from "../theme";
 import type { Viewport } from "../viewport";
 import { Coords } from "./geometry";
-import { DrawingLayer, type LayerHost } from "./layer";
+import { DrawingLayer, type LayerHost, type MenuEdit, type StyleEdit } from "./layer";
+import type { DrawingChange } from "./state";
 import { toolFor } from "./registry";
 
 const H = 3_600_000;
@@ -46,6 +47,7 @@ function layer() {
     tool: () => {},
     text: () => {},
     style: () => {},
+    menu: () => {},
   };
   return new DrawingLayer(host);
 }
@@ -61,6 +63,7 @@ function drawing(body: DrawingBody, id = `d${n}`): Drawing {
     body,
     style: { color: 0, width: 1, dash: false },
     locked: false,
+    hidden: false,
     z: n,
     updatedAt: 0,
   };
@@ -247,5 +250,277 @@ describe("replay cutoff", () => {
     l.state.select("later");
     l.setCutoff(50 * STEP);
     expect(l.state.selected).toBeNull();
+  });
+});
+
+/** A layer whose host records what it was asked for. */
+function recording() {
+  const rec = { base: 0, overlay: 0, menus: [] as (MenuEdit | null)[], styles: [] as (StyleEdit | null)[], commits: [] as DrawingChange[] };
+  const host: LayerHost = {
+    invalidate: () => rec.base++,
+    invalidateOverlay: () => rec.overlay++,
+    commit: (step) => rec.commits.push(...step),
+    tool: () => {},
+    text: () => {},
+    style: (e) => rec.styles.push(e),
+    menu: (e) => rec.menus.push(e),
+  };
+  const l = new DrawingLayer(host);
+  const c = coords();
+  return { l, c, rec, paint: () => l.paintBase(ctx, c, 1, dark, () => {}) };
+}
+
+const hl = (p: number, id: string, extra: Partial<Drawing> = {}) => ({ ...drawing({ kind: "hline", p }, id), ...extra });
+
+describe("several selected", () => {
+  it("⌘-drag on empty space selects every drawing the box touches", () => {
+    const { l, c, rec, paint } = recording();
+    // Lines at y = 400, 500 and 700; a trend line from (300, 650) to (400, 600).
+    const trend = drawing({ kind: "trend", a: { t: c.t(300), p: c.p(650) }, b: { t: c.t(400), p: c.p(600) }, extendLeft: false, extendRight: false }, "t");
+    l.setDrawings([hl(c.p(400), "a"), hl(c.p(500), "b"), hl(c.p(700), "c"), trend]);
+    paint();
+    const base = rec.base;
+    expect(l.pointerDown(200, 380, false, true)).toBe(true);
+    l.pointerMove(350, 520, false, true);
+    // The box is drawn on the overlay only.
+    expect(rec.base).toBe(base);
+    l.pointerUp(350, 520, false, true);
+    expect(l.state.selection).toEqual(["a", "b"]);
+    // A second box with ⌘ adds to the selection; it touches the trend line only.
+    l.pointerDown(340, 600, false, true);
+    l.pointerUp(360, 640, false, true);
+    expect(l.state.selection).toEqual(["a", "b", "t"]);
+    // A ⌘-click on empty space without a drag keeps the selection.
+    l.pointerDown(900, 900, false, true);
+    l.pointerUp(900, 900, false, true);
+    expect(l.state.selection).toHaveLength(3);
+    // A plain click on empty space drops it.
+    expect(l.pointerDown(900, 900, false)).toBe(false);
+    expect(l.state.selection).toEqual([]);
+  });
+
+  it("⌘-click toggles a drawing in and out of the selection without moving it", () => {
+    const { l, c, rec, paint } = recording();
+    l.setDrawings([hl(c.p(400), "a"), hl(c.p(500), "b")]);
+    paint();
+    l.pointerDown(100, 400, false);
+    l.pointerUp(100, 400, false);
+    l.pointerDown(100, 500, false, true);
+    l.pointerMove(100, 560, false, true);
+    l.pointerUp(100, 560, false, true);
+    expect(l.state.selection).toEqual(["a", "b"]);
+    expect(rec.commits).toEqual([]);
+    l.pointerDown(100, 400, false, true);
+    l.pointerUp(100, 400, false, true);
+    expect(l.state.selection).toEqual(["b"]);
+  });
+
+  it("drags the selection together as one undo step; Delete removes all as one", () => {
+    const { l, c, rec, paint } = recording();
+    l.setDrawings([hl(c.p(400), "a"), hl(c.p(500), "b"), hl(c.p(700), "c")]);
+    paint();
+    l.state.setSelection(["a", "b"]);
+    l.pointerDown(100, 500, false);
+    l.pointerMove(100, 530, false);
+    l.pointerMove(100, 550, false);
+    l.pointerUp(100, 550, false);
+    expect(l.state.byId("a")!.body).toEqual({ kind: "hline", p: c.p(450) });
+    expect(l.state.byId("b")!.body).toEqual({ kind: "hline", p: c.p(550) });
+    expect(l.state.byId("c")!.body).toEqual({ kind: "hline", p: c.p(700) });
+    expect(rec.commits).toHaveLength(2);
+    expect(l.state.selection).toEqual(["a", "b"]);
+    expect(l.command("undo")).toBe(true);
+    expect(l.state.byId("a")!.body).toEqual({ kind: "hline", p: c.p(400) });
+    expect(l.state.byId("b")!.body).toEqual({ kind: "hline", p: c.p(500) });
+    expect(l.command("delete")).toBe(true);
+    expect(l.state.drawings.map((d) => d.id)).toEqual(["c"]);
+    expect(l.command("undo")).toBe(true);
+    expect(l.state.drawings).toHaveLength(3);
+  });
+
+  it("a click without a drag on one of several selects only it", () => {
+    const { l, c, paint } = recording();
+    l.setDrawings([hl(c.p(400), "a"), hl(c.p(500), "b")]);
+    paint();
+    l.state.setSelection(["a", "b"]);
+    l.pointerDown(100, 500, false);
+    l.pointerUp(100, 500, false);
+    expect(l.state.selection).toEqual(["b"]);
+  });
+
+  it("moves none of the selection when every one is locked", () => {
+    const { l, c, rec, paint } = recording();
+    l.setDrawings([hl(c.p(400), "a"), hl(c.p(500), "b")]);
+    paint();
+    l.state.setSelection(["a", "b"]);
+    l.state.updateMany(["a", "b"], { locked: true });
+    rec.commits.length = 0;
+    l.pointerDown(100, 500, false);
+    l.pointerMove(100, 600, false);
+    l.pointerUp(100, 600, false);
+    expect(rec.commits).toEqual([]);
+    expect(l.state.byId("b")!.body).toEqual({ kind: "hline", p: c.p(500) });
+  });
+});
+
+describe("context menu", () => {
+  it("opens on a drawing for the selection, and locks, hides and removes them all", () => {
+    const { l, c, rec, paint } = recording();
+    l.setDrawings([hl(c.p(400), "a"), hl(c.p(500), "b"), hl(c.p(700), "c")]);
+    paint();
+    expect(l.contextMenu(100, 900)).toBe(false);
+    l.state.setSelection(["a", "b"]);
+    expect(l.contextMenu(100, 500)).toBe(true);
+    expect(rec.menus.at(-1)).toEqual({ ids: ["a", "b"], locked: false, single: false, x: 100, y: 500 });
+    l.menuAction("lock");
+    expect(rec.menus.at(-1)).toBeNull();
+    expect(l.state.drawings.filter((d) => d.locked).map((d) => d.id)).toEqual(["a", "b"]);
+    l.contextMenu(100, 400);
+    expect(rec.menus.at(-1)).toMatchObject({ locked: true });
+    l.menuAction("unlock");
+    expect(l.state.drawings.some((d) => d.locked)).toBe(false);
+    l.contextMenu(100, 400);
+    l.menuAction("hide");
+    expect(l.state.drawings.filter((d) => d.hidden).length).toBe(2);
+    expect(l.state.selection).toEqual([]);
+    // A right click on a drawing outside the selection selects it alone.
+    l.contextMenu(100, 700);
+    expect(rec.menus.at(-1)).toMatchObject({ ids: ["c"], single: true });
+    l.menuAction("remove");
+    expect(l.state.drawings.map((d) => d.id)).toEqual(["a", "b"]);
+    l.showHidden();
+    expect(l.state.drawings.filter((d) => d.hidden).length).toBe(0);
+  });
+
+  it("opens the style popover from Settings, and Esc closes the menu", () => {
+    const { l, c, rec, paint } = recording();
+    l.setDrawings([hl(c.p(400), "a")]);
+    paint();
+    l.contextMenu(120, 400);
+    l.menuAction("settings");
+    expect(rec.styles.at(-1)).toMatchObject({ drawing: { id: "a" }, x: 120, y: 400 });
+    l.contextMenu(120, 400);
+    expect(l.command("cancel")).toBe(true);
+    expect(rec.menus.at(-1)).toBeNull();
+  });
+});
+
+describe("hidden drawings", () => {
+  it("are neither painted nor hit", () => {
+    const { l, c } = recording();
+    l.setDrawings([hl(c.p(400), "h", { hidden: true }), hl(c.p(500), "v")]);
+    const paint = vi.spyOn(toolFor("hline")!, "paint");
+    l.paintBase(ctx, c, 1, dark, () => {});
+    expect(paint).toHaveBeenCalledTimes(1);
+    expect(l.pointerDown(100, 400, false)).toBe(false);
+    expect(l.state.selection).toEqual([]);
+  });
+});
+
+describe("overlay frames", () => {
+  it("lists a selected brush stroke's end markers once per layout, not every frame", () => {
+    const { l, c, paint } = recording();
+    const stroke = drawing({ kind: "brush", points: [{ t: c.t(100), p: c.p(500) }, { t: c.t(300), p: c.p(400) }] }, "s");
+    l.setDrawings([stroke]);
+    l.state.select("s");
+    paint();
+    const markers = vi.spyOn(toolFor("brush")!, "markers");
+    for (let i = 0; i < 5; i++) l.paintOverlay(ctx, 1, dark, () => {});
+    expect(markers).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("⌘ snapping and handles", () => {
+  it("keeps snapping a dragged end bar to bar while ⌘ is held", () => {
+    const { l, c, paint } = recording();
+    // Bars span 4000..6000 ticks; their high is at y = 400.
+    const t = drawing({ kind: "trend", a: { t: c.t(100), p: 5_000 }, b: { t: c.t(300), p: 5_000 }, extendLeft: false, extendRight: false }, "t");
+    l.setDrawings([t]);
+    paint();
+    l.pointerDown(300, 500, false);
+    l.pointerMove(452, 430, false, true);
+    l.pointerMove(503, 385, false, true);
+    l.pointerUp(503, 385, false, true);
+    const b = (l.state.byId("t")!.body as Extract<DrawingBody, { kind: "trend" }>).b;
+    // On the high (6000), at the open time of the bar under x = 503 (bar 49, at x = 500).
+    expect(b).toEqual({ t: 49 * STEP, p: 6_000 });
+  });
+
+  it("reshapes with ⌘ held from the press on a handle of a drawing that is not selected", () => {
+    const { l, c, paint } = recording();
+    const other = hl(c.p(800), "o");
+    const t = drawing({ kind: "trend", a: { t: c.t(100), p: 5_000 }, b: { t: c.t(300), p: 5_000 }, extendLeft: false, extendRight: false }, "t");
+    l.setDrawings([other, t]);
+    l.state.select("o");
+    paint();
+    // The handle of the hovered line: ⌘ snaps it, it does not add the line to the selection.
+    expect(l.pointerDown(300, 500, false, true)).toBe(true);
+    expect(l.state.selection).toEqual(["t"]);
+    l.pointerMove(503, 385, false, true);
+    l.pointerUp(503, 385, false, true);
+    const b = (l.state.byId("t")!.body as Extract<DrawingBody, { kind: "trend" }>).b;
+    expect(b).toEqual({ t: 49 * STEP, p: 6_000 });
+  });
+
+  it("moves the whole trend line with its middle handle", () => {
+    const { l, c, paint } = recording();
+    const t = drawing({ kind: "trend", a: { t: c.t(100), p: c.p(600) }, b: { t: c.t(300), p: c.p(400) }, extendLeft: false, extendRight: false }, "t");
+    l.setDrawings([t]);
+    paint();
+    l.state.select("t");
+    expect(l.pointerDown(200, 500, false)).toBe(true);
+    expect(l.cursor()).toBe("move");
+    l.pointerMove(250, 450, false);
+    l.pointerUp(250, 450, false);
+    const body = l.state.byId("t")!.body as Extract<DrawingBody, { kind: "trend" }>;
+    expect(body.a).toEqual({ t: c.t(150), p: c.p(550) });
+    expect(body.b).toEqual({ t: c.t(350), p: c.p(350) });
+  });
+
+  it("resizes one side of a rect with an edge handle", () => {
+    const { l, c, paint } = recording();
+    const r = drawing({ kind: "rect", a: { t: c.t(100), p: c.p(600) }, b: { t: c.t(300), p: c.p(400) }, extendRight: false }, "r");
+    l.setDrawings([r]);
+    paint();
+    l.state.select("r");
+    // The middle of the edge at b's time (x = 300).
+    l.pointerDown(300, 500, false);
+    l.pointerMove(360, 520, false);
+    l.pointerUp(360, 520, false);
+    const body = l.state.byId("r")!.body as Extract<DrawingBody, { kind: "rect" }>;
+    expect(body.a).toEqual(r.body.kind === "rect" ? r.body.a : null);
+    expect(body.b).toEqual({ t: c.t(360), p: c.p(400) });
+  });
+
+  it("marks a selected brush stroke's ends, and a press there moves it", () => {
+    const { l, c, paint } = recording();
+    const br = drawing({ kind: "brush", points: [{ t: c.t(100), p: c.p(500) }, { t: c.t(200), p: c.p(500) }] }, "br");
+    l.setDrawings([br]);
+    paint();
+    l.state.select("br");
+    l.pointerDown(100, 500, false);
+    expect(l.cursor()).toBe("move");
+    l.pointerMove(100, 540, false);
+    l.pointerUp(100, 540, false);
+    const body = l.state.byId("br")!.body as Extract<DrawingBody, { kind: "brush" }>;
+    expect(body.points).toEqual([{ t: c.t(100), p: c.p(540) }, { t: c.t(200), p: c.p(540) }]);
+  });
+});
+
+describe("many selected drawings", () => {
+  it("hit-tests 2000 selected drawings in about linear time", () => {
+    const l = layer();
+    const list = Array.from({ length: 2000 }, (_, i) => drawing({ kind: "hline", p: 1_000 + i * 4 }));
+    l.setDrawings(list);
+    l.state.setSelection(list.map((d) => d.id));
+    const c = coords();
+    l.paintBase(ctx, c, 1, dark, () => {});
+    const t0 = performance.now();
+    // Pointer moves over the plot: each one checks every drawing's selection twice.
+    for (let i = 0; i < 200; i++) l.pointerMove(5 + (i % 100), 5, false);
+    const ms = performance.now() - t0;
+    expect(l.state.selection).toHaveLength(2000);
+    // A scan of the selection per drawing takes seconds here.
+    expect(ms).toBeLessThan(300);
   });
 });

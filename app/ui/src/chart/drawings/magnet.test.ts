@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { PriceScale } from "../scale";
 import { Coords } from "./geometry";
-import { MAGNET_RADIUS, snapToBar } from "./magnet";
+import { MAGNET_RADIUS, snapToBar, STRONG_RADIUS } from "./magnet";
 
 const H = 3_600_000;
 const times = new Float64Array([0, H, 2 * H]);
@@ -34,4 +34,25 @@ describe("snapToBar", () => {
     expect(snapToBar(log, 100, log.y(760) - 7)).toEqual({ t: 2 * H, p: 760 });
     expect(snapToBar(log, 100, log.y(760) - 30)).toBeNull();
   });
+
+  it("with ⌘ held snaps from anywhere on the bar's range, and from farther above and below it", () => {
+    expect(STRONG_RADIUS).toBe(40);
+    // Bar 1: low 580, open 600, close 640, high 650. Inside its range the nearest price wins.
+    expect(snapToBar(c, 90, y(615), true)).toEqual({ t: H, p: 600 });
+    expect(snapToBar(c, 90, y(625), true)).toEqual({ t: H, p: 640 });
+    // 30 px over the high: too far for the magnet, close enough with ⌘.
+    expect(snapToBar(c, 90, y(680))).toBeNull();
+    expect(snapToBar(c, 90, y(680), true)).toEqual({ t: H, p: 650 });
+    expect(snapToBar(c, 90, y(540), true)).toEqual({ t: H, p: 580 });
+    expect(snapToBar(c, 90, y(691), true)).toBeNull();
+  });
+
+  it("moves bar to bar with the pointer while ⌘ stays held", () => {
+    // The same height over three bars: each lands on that bar's open time and nearest price,
+    // the last is too far below its low (690) to snap.
+    const ys = [80, 90, 100].map((x) => snapToBar(c, x, y(560), true));
+    expect(ys).toEqual([{ t: 0, p: 550 }, { t: H, p: 580 }, null]);
+    expect(snapToBar(c, 100, y(660), true)).toEqual({ t: 2 * H, p: 690 });
+  });
 });
+

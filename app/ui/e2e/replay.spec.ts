@@ -222,6 +222,7 @@ test("replay_indicators_and_drawings_see_only_revealed_bars", async ({ page }) =
       body: position,
       style: { color: 0, width: 1, dash: false },
       locked: false,
+      hidden: false,
       z: 0,
       updatedAt: 1,
     };
@@ -281,6 +282,7 @@ test("replay_hides_drawings_anchored_after_the_revealed_bars", async ({ page }) 
       body: { kind: "note", t, text: "later" },
       style: { color: 0, width: 1, dash: false },
       locked: false,
+      hidden: false,
       z: 0,
       updatedAt: 1,
     };

@@ -91,8 +91,10 @@ pub struct DrawingInput {
     pub body: DrawingBody,
     /// Colour slot 0-7, width 1-4, dashed; default {"color":0,"width":1,"dash":false}.
     pub style: Option<Style>,
-    /// Locked against editing in the app; default false.
+    /// Locked against editing in the app; when left out, kept on an update, else false.
     pub locked: Option<bool>,
+    /// Hidden on the chart until the user shows it again; when left out, kept on an update, else false.
+    pub hidden: Option<bool>,
     /// Paint order, higher on top; default 0.
     pub z: Option<i64>,
 }
@@ -212,6 +214,7 @@ pub fn drawing(d: &Drawing) -> Value {
         "body": body(&d.body, d.price_scale),
         "style": d.style,
         "locked": d.locked,
+        "hidden": d.hidden,
         "z": d.z,
         "updatedAt": d.updated_at,
     })

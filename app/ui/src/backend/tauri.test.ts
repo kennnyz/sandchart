@@ -105,16 +105,21 @@ describe("tauri backend", () => {
       body: { kind: "hline" as const, p: 1 },
       style: { color: 0, width: 1, dash: false },
       locked: false,
+      hidden: false,
       z: 0,
     };
     await tauriBackend.getDrawings(id);
     await tauriBackend.saveDrawing(drawing);
     await tauriBackend.deleteDrawing("d");
+    await tauriBackend.saveDrawings([drawing]);
+    await tauriBackend.deleteDrawings(["d", "e"]);
     await tauriBackend.getPositionOutcomes(id, "1h", [{ id: "p", position }]);
     expect(seen).toEqual([
       ["get_drawings", { source: "binance", symbol: "BTCUSDT" }],
       ["save_drawing", { drawing }],
       ["delete_drawing", { id: "d" }],
+      ["save_drawings", { drawings: [drawing] }],
+      ["delete_drawings", { ids: ["d", "e"] }],
       ["get_position_outcomes", { source: "binance", symbol: "BTCUSDT", tf: "1h", positions: [{ id: "p", position }] }],
     ]);
   });

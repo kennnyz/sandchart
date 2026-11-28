@@ -1,7 +1,6 @@
 import type { ProblemCode } from "./backend/types";
+import { isMac } from "./chart/drawings/keys";
 import { t } from "./i18n";
-
-const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 
 /** "⌘K" on macOS, "Ctrl K" elsewhere. */
 export function shortcutLabel(key: string): string {
@@ -11,6 +10,16 @@ export function shortcutLabel(key: string): string {
 /** "⌥T" on macOS, "Alt T" elsewhere. */
 export function altShortcutLabel(key: string): string {
   return isMac ? `⌥${key}` : `Alt ${key}`;
+}
+
+/** The Delete key as printed on this platform's keyboard. */
+export function deleteKeyLabel(): string {
+  return isMac ? "⌫" : "Del";
+}
+
+/** The Enter key as printed on this platform's keyboard. */
+export function enterKeyLabel(): string {
+  return isMac ? "↵" : "Enter";
 }
 
 /** Display name of a data source id ("binance" -> "Binance"); unknown ids as they are. */

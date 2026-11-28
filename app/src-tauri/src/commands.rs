@@ -348,6 +348,23 @@ pub async fn delete_drawing(state: State<'_, AppState>, id: String) -> CmdResult
     Ok(state.engine.delete_drawing(&id).await?)
 }
 
+/// Saves several drawings in one write, all or none; returns them as stored, in order.
+#[tauri::command]
+pub async fn save_drawings(
+    state: State<'_, AppState>,
+    drawings: Vec<DrawingInputDto>,
+) -> CmdResult<Vec<DrawingDto>> {
+    let list = drawings.into_iter().map(Into::into).collect();
+    let saved = state.engine.save_drawings(list).await?;
+    Ok(saved.into_iter().map(Into::into).collect())
+}
+
+/// Deletes several drawings and their alerts in one write; unknown ids are not an error.
+#[tauri::command]
+pub async fn delete_drawings(state: State<'_, AppState>, ids: Vec<String>) -> CmdResult<()> {
+    Ok(state.engine.delete_drawings(ids).await?)
+}
+
 #[tauri::command]
 pub async fn get_position_outcomes(
     state: State<'_, AppState>,

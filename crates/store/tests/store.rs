@@ -300,6 +300,7 @@ fn drawing(drawing_id: &str, symbol: &str, z: i64) -> Drawing {
             dash: true,
         },
         locked: true,
+        hidden: false,
         z,
         updated_at: 1_700_000_000_000,
     }
@@ -324,6 +325,39 @@ fn drawing_migration_goes_down_to_2_and_up_again() {
 }
 
 #[test]
+fn hidden_migration_goes_down_to_4_and_up_again_keeping_the_drawings() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sandchart.db");
+    let mut hidden = drawing("h", "BTCUSDT", 0);
+    hidden.hidden = true;
+    {
+        let mut store = Store::open(&path).unwrap();
+        store.upsert_drawing(&hidden).unwrap();
+        assert!(store.drawing("h").unwrap().unwrap().hidden);
+        store.migrate_down_to(4).unwrap();
+    }
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let columns: Vec<String> = conn
+        .prepare("SELECT name FROM pragma_table_info('drawings')")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(!columns.iter().any(|c| c == "hidden"), "{columns:?}");
+    let rows: i64 = conn
+        .query_row("SELECT COUNT(*) FROM drawings", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(rows, 1, "going down keeps the drawing");
+    drop(conn);
+    // Up again: the drawing is back, shown, as 0.5 left it.
+    let store = Store::open(&path).unwrap();
+    let got = store.drawing("h").unwrap().unwrap();
+    assert!(!got.hidden);
+    assert_eq!(got.id, "h");
+}
+
+#[test]
 fn drawings_round_trip_per_instrument_ordered_by_z_then_id() {
     let mut store = Store::open_in_memory().unwrap();
     let mut position = drawing("p", "BTCUSDT", 1);
@@ -335,6 +369,7 @@ fn drawings_round_trip_per_instrument_ordered_by_z_then_id() {
         end_t: 20,
     });
     position.locked = false;
+    position.hidden = true;
     let items = [
         drawing("b", "BTCUSDT", 0),
         position.clone(),
@@ -518,7 +553,12 @@ fn alert_migration_goes_down_to_3_and_up_again() {
             .unwrap();
         store.migrate_down_to(3).unwrap();
         assert_eq!(rusqlite_count(&path), 7);
-        assert_eq!(store.drawings(&id("BTCUSDT")).unwrap().len(), 1);
+        // The drawings table stays; this version's queries need the later `hidden` column.
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM drawings", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 1);
     }
     let store = Store::open(&path).unwrap();
     assert_eq!(rusqlite_count(&path), 8);
@@ -788,7 +828,7 @@ fn two_processes_opening_an_old_file_migrate_it_once() {
     let version: u32 = conn
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 4);
+    assert_eq!(version, 5);
 }
 
 #[test]
@@ -821,7 +861,7 @@ fn a_second_process_never_migrates_an_older_apps_database() {
             err,
             StoreError::SchemaTooOld {
                 found: 3,
-                supported: 4
+                supported: 5
             }
         ),
         "{err:?}"
@@ -1009,4 +1049,71 @@ fn the_alerts_fingerprint_changes_only_with_what_alerts_depend_on() {
     assert!(changed(&store));
     store.delete_alert("p").unwrap();
     assert!(changed(&store));
+}
+
+#[test]
+fn save_drawings_stores_all_or_nothing_within_the_cap() {
+    let mut store = Store::open_in_memory().unwrap();
+    for i in 0..MAX_DRAWINGS_PER_INSTRUMENT - 1 {
+        store
+            .upsert_drawing(&drawing(&format!("d{i}"), "BTCUSDT", 0))
+            .unwrap();
+    }
+    // One more fits, two do not: neither is stored, and the edit in the same batch is undone.
+    let err = store
+        .save_drawings(&[
+            drawing("d0", "BTCUSDT", 9),
+            drawing("new1", "BTCUSDT", 0),
+            drawing("new2", "BTCUSDT", 0),
+        ])
+        .unwrap_err();
+    assert!(
+        matches!(err, StoreError::TooManyDrawings { max: 2000 }),
+        "{err:?}"
+    );
+    let list = store.drawings(&id("BTCUSDT")).unwrap();
+    assert_eq!(list.len(), MAX_DRAWINGS_PER_INSTRUMENT - 1);
+    assert_eq!(store.drawing("d0").unwrap().unwrap().z, 0);
+    assert_eq!(store.drawing("new1").unwrap(), None);
+
+    // Moving one away in the same batch makes room: the cap holds for the result.
+    store
+        .save_drawings(&[
+            drawing("new1", "BTCUSDT", 0),
+            drawing("new2", "BTCUSDT", 0),
+            drawing("d1", "ETHUSDT", 0),
+        ])
+        .unwrap();
+    assert_eq!(
+        store.drawings(&id("BTCUSDT")).unwrap().len(),
+        MAX_DRAWINGS_PER_INSTRUMENT
+    );
+    assert_eq!(store.save_drawings(&[]).unwrap(), 0);
+}
+
+#[test]
+fn delete_drawings_removes_them_and_their_alerts_together() {
+    let mut store = Store::open_in_memory().unwrap();
+    store
+        .save_drawings(&[
+            drawing("a", "BTCUSDT", 0),
+            drawing("b", "BTCUSDT", 1),
+            drawing("c", "BTCUSDT", 2),
+        ])
+        .unwrap();
+    store
+        .upsert_alert(&alert("x", "BTCUSDT", on_drawing("a")))
+        .unwrap();
+    let removed = store
+        .delete_drawings(&["a".into(), "b".into(), "unknown".into()])
+        .unwrap();
+    assert_eq!(removed, 1);
+    let left: Vec<String> = store
+        .drawings(&id("BTCUSDT"))
+        .unwrap()
+        .into_iter()
+        .map(|d| d.id)
+        .collect();
+    assert_eq!(left, vec!["c".to_owned()]);
+    assert!(store.alerts().unwrap().is_empty());
 }

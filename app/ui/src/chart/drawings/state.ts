@@ -8,8 +8,8 @@ export interface DrawingChange {
   after: Drawing | null;
 }
 
-/** What the style popover changes: the look, the lock, or the tool's options in the body. */
-export type DrawingPatch = Partial<Pick<Drawing, "style" | "locked" | "body">>;
+/** What the style popover or the context menu changes: the look, the lock, hiding, or the tool's options in the body. */
+export type DrawingPatch = Partial<Pick<Drawing, "style" | "locked" | "hidden" | "body">>;
 
 /** The part of a drawing under the pointer: its body or the handle with this index. */
 export type Part = "body" | number;
@@ -21,8 +21,11 @@ export interface Owner {
 }
 
 export interface StateListener {
-  /** A change to store; undo and redo come through here too. */
-  commit(change: DrawingChange): void;
+  /**
+   * The changes of one step to store, all or none (a group move or delete has several);
+   * undo and redo come through here too. A step only saves or only deletes.
+   */
+  commit(step: DrawingChange[]): void;
   /** The active tool changed (picked, placed, cancelled). */
   tool(id: ToolId | null): void;
 }
@@ -31,6 +34,9 @@ export interface StateListener {
 export const DEFAULT_STYLE: DrawingStyle = { color: 0, width: 2, dash: false };
 /** Undo steps kept for the session. */
 export const HISTORY_LIMIT = 200;
+
+/** One undo step: every change of one user action (a group move or delete has several). */
+type Step = DrawingChange[];
 
 const byZ = (a: Drawing, b: Drawing) => a.z - b.z || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 const sameBody = (a: DrawingBody, b: DrawingBody) => JSON.stringify(a) === JSON.stringify(b);
@@ -41,9 +47,14 @@ const sameBody = (a: DrawingBody, b: DrawingBody) => JSON.stringify(a) === JSON.
  * logic without the DOM; every stored change goes to `listener.commit`.
  */
 export class DrawingState {
-  /** Paint order: z ascending, then id; the last one is on top. */
+  /** Paint order: z ascending, then id; the last one is on top. Replaced, never changed in place. */
   drawings: Drawing[] = [];
-  selected: string | null = null;
+  /** `drawings` by id. */
+  private index = new Map<string, Drawing>();
+  /** Selected drawing ids, in the order they were picked; never a hidden one. */
+  private picked: readonly string[] = [];
+  /** `picked` as a set: hit tests ask on every pointer move. */
+  private pickedSet = new Set<string>();
   hover: { id: string; part: Part } | null = null;
   tool: ToolId | null = null;
   /** Points placed so far with the active tool. */
@@ -51,8 +62,8 @@ export class DrawingState {
   /** A new drawing of a text tool waiting for its text (see `ToolDef.text`); not stored yet. */
   draft: Drawing | null = null;
   private owner: Owner | null = null;
-  private undoStack: DrawingChange[] = [];
-  private redoStack: DrawingChange[] = [];
+  private undoStack: Step[] = [];
+  private redoStack: Step[] = [];
 
   constructor(
     private readonly listener: StateListener,
@@ -65,8 +76,8 @@ export class DrawingState {
 
   /** A new list (another instrument, or reloaded): selection, placement and history start over. */
   reset(list: Drawing[]): void {
-    this.drawings = [...list].sort(byZ);
-    this.selected = null;
+    this.setList([...list].sort(byZ));
+    this.pick([]);
     this.hover = null;
     this.points = [];
     this.draft = null;
@@ -75,19 +86,54 @@ export class DrawingState {
   }
 
   byId(id: string): Drawing | undefined {
-    return this.drawings.find((d) => d.id === id);
+    return this.index.get(id);
+  }
+
+  /** Selected drawing ids, in the order they were picked; never a hidden one. */
+  get selection(): readonly string[] {
+    return this.picked;
+  }
+
+  /** The one selected drawing; null when none or several are selected. */
+  get selected(): string | null {
+    return this.picked.length === 1 ? this.picked[0]! : null;
+  }
+
+  isSelected(id: string): boolean {
+    return this.pickedSet.has(id);
+  }
+
+  /** The selected drawings in paint order. */
+  selectedDrawings(): Drawing[] {
+    return this.drawings.filter((d) => this.pickedSet.has(d.id));
   }
 
   setTool(id: ToolId | null): void {
     this.points = [];
-    if (id !== null) this.selected = null;
+    if (id !== null) this.pick([]);
     if (id === this.tool) return;
     this.tool = id;
     this.listener.tool(id);
   }
 
+  /** Selects only `id`, or nothing (null). */
   select(id: string | null): void {
-    this.selected = id !== null && this.byId(id) ? id : null;
+    this.setSelection(id === null ? [] : [id]);
+  }
+
+  /** Selects exactly these drawings; unknown and hidden ones are left out. */
+  setSelection(ids: readonly string[]): void {
+    this.pick(
+      [...new Set(ids)].filter((id) => {
+        const d = this.byId(id);
+        return d !== undefined && !d.hidden;
+      }),
+    );
+  }
+
+  /** ⌘-click: adds `id` to the selection, or takes it out when it is in. */
+  toggle(id: string): void {
+    this.setSelection(this.isSelected(id) ? this.picked.filter((s) => s !== id) : [...this.picked, id]);
   }
 
   /** The placed points plus `mouse` as the next one, for the preview. */
@@ -138,21 +184,22 @@ export class DrawingState {
       body: tool.create(this.points, c),
       style: { ...DEFAULT_STYLE },
       locked: false,
+      hidden: false,
       z: this.drawings.reduce((z, o) => Math.max(z, o.z), 0) + 1,
       updatedAt: 0,
     };
     this.points = [];
     if (tool.text) {
       this.draft = d;
-      this.selected = null;
+      this.pick([]);
       this.setTool(null);
       return d;
     }
-    this.record({ before: null, after: d });
+    this.record([{ before: null, after: d }]);
     if (tool.sticky) {
-      this.selected = null;
+      this.pick([]);
     } else {
-      this.selected = d.id;
+      this.pick([d.id]);
       this.setTool(null);
     }
     return d;
@@ -164,57 +211,81 @@ export class DrawingState {
     if (!draft) return null;
     this.draft = null;
     const d = { ...draft, body };
-    this.record({ before: null, after: d });
+    this.record([{ before: null, after: d }]);
     return d;
   }
 
   /** Replaces the body of a drawing; false when it is unknown, locked or unchanged. */
   edit(id: string, body: DrawingBody): boolean {
-    const d = this.byId(id);
-    if (!d || d.locked || sameBody(d.body, body)) return false;
-    this.record({ before: d, after: { ...d, body } });
-    return true;
+    return this.editMany(new Map([[id, body]]));
   }
 
   /**
-   * Changes style, lock or body of a drawing as one undo step, locked or not (the lock
-   * only keeps it from being dragged); false when it is unknown or nothing changes.
+   * Replaces the bodies of several drawings (a group move) as one undo step; unknown,
+   * locked and unchanged ones are skipped. False when none changed.
    */
-  update(id: string, patch: DrawingPatch): boolean {
-    const d = this.byId(id);
-    if (!d) return false;
-    const next: Drawing = { ...d, ...patch };
-    const same =
-      next.locked === d.locked &&
-      next.style.color === d.style.color &&
-      next.style.width === d.style.width &&
-      next.style.dash === d.style.dash &&
-      sameBody(next.body, d.body);
-    if (same) return false;
-    this.record({ before: d, after: next });
-    return true;
+  editMany(bodies: ReadonlyMap<string, DrawingBody>): boolean {
+    const step: Step = [];
+    for (const [id, body] of bodies) {
+      const d = this.byId(id);
+      if (d && !d.locked && !sameBody(d.body, body)) step.push({ before: d, after: { ...d, body } });
+    }
+    return this.recordStep(step);
   }
 
+  /**
+   * Changes style, lock, hiding or body of a drawing as one undo step, locked or not (the
+   * lock only keeps it from being dragged); false when it is unknown or nothing changes.
+   */
+  update(id: string, patch: DrawingPatch): boolean {
+    return this.updateMany([id], patch);
+  }
+
+  /** `update` on several drawings as one undo step (the context menu on a selection). */
+  updateMany(ids: readonly string[], patch: DrawingPatch): boolean {
+    const step: Step = [];
+    for (const id of ids) {
+      const d = this.byId(id);
+      if (!d) continue;
+      const next: Drawing = { ...d, ...patch };
+      const same =
+        next.locked === d.locked &&
+        next.hidden === d.hidden &&
+        next.style.color === d.style.color &&
+        next.style.width === d.style.width &&
+        next.style.dash === d.style.dash &&
+        sameBody(next.body, d.body);
+      if (!same) step.push({ before: d, after: next });
+    }
+    return this.recordStep(step);
+  }
+
+  /** Shows every drawing hidden one by one again, as one undo step; false when none was. */
+  showHidden(): boolean {
+    return this.updateMany(
+      this.drawings.filter((d) => d.hidden).map((d) => d.id),
+      { hidden: false },
+    );
+  }
+
+  /** Deletes every selected drawing, locked or not, as one undo step. */
   deleteSelected(): boolean {
-    const d = this.selected ? this.byId(this.selected) : undefined;
-    if (!d) return false;
-    this.record({ before: d, after: null });
-    return true;
+    return this.recordStep(this.selectedDrawings().map((d) => ({ before: d, after: null })));
   }
 
   undo(): boolean {
-    const c = this.undoStack.pop();
-    if (!c) return false;
-    this.redoStack.push(c);
-    this.apply({ before: c.after, after: c.before });
+    const step = this.undoStack.pop();
+    if (!step) return false;
+    this.redoStack.push(step);
+    this.apply(step.map((c) => ({ before: c.after, after: c.before })).reverse());
     return true;
   }
 
   redo(): boolean {
-    const c = this.redoStack.pop();
-    if (!c) return false;
-    this.undoStack.push(c);
-    this.apply(c);
+    const step = this.redoStack.pop();
+    if (!step) return false;
+    this.undoStack.push(step);
+    this.apply(step);
     return true;
   }
 
@@ -226,24 +297,40 @@ export class DrawingState {
   stored(sent: Drawing, saved: Drawing): boolean {
     const swap = (d: Drawing | null) => (d === sent ? saved : d);
     for (const stack of [this.undoStack, this.redoStack]) {
-      for (let i = 0; i < stack.length; i++) {
-        const c = stack[i]!;
-        if (c.before === sent || c.after === sent) stack[i] = { before: swap(c.before), after: swap(c.after) };
+      for (const step of stack) {
+        for (let i = 0; i < step.length; i++) {
+          const c = step[i]!;
+          if (c.before === sent || c.after === sent) step[i] = { before: swap(c.before), after: swap(c.after) };
+        }
       }
     }
     const i = this.drawings.indexOf(sent);
     if (i < 0) return false;
-    this.drawings[i] = saved;
+    const list = [...this.drawings];
+    list[i] = saved;
+    this.setList(list);
     return true;
   }
 
   /** Esc: drops the placed points, the draft, the tool and the selection; false when there was none. */
   cancel(): boolean {
-    const any = this.points.length > 0 || this.tool !== null || this.selected !== null || this.draft !== null;
+    const any = this.points.length > 0 || this.tool !== null || this.picked.length > 0 || this.draft !== null;
     this.draft = null;
-    this.selected = null;
+    this.pick([]);
     this.setTool(null);
     return any;
+  }
+
+  /** The list in paint order, and its index by id. */
+  private setList(list: Drawing[]): void {
+    this.drawings = list;
+    this.index = new Map(list.map((d) => [d.id, d]));
+  }
+
+  /** Sets the selection to ids already checked (known, shown, no repeats). */
+  private pick(ids: readonly string[]): void {
+    this.picked = ids;
+    this.pickedSet = new Set(ids);
   }
 
   private nextPoint(a: Anchor, horizontal: boolean): Anchor {
@@ -251,24 +338,41 @@ export class DrawingState {
     return horizontal && last ? { t: a.t, p: last.p } : { t: a.t, p: a.p };
   }
 
-  /** A new change by the user: applied, stored, and the redo steps are dropped. */
-  private record(c: DrawingChange): void {
-    this.undoStack.push(c);
-    if (this.undoStack.length > HISTORY_LIMIT) this.undoStack.shift();
-    this.redoStack = [];
-    this.apply(c);
+  /** A step with changes is recorded; false for an empty one. */
+  private recordStep(step: Step): boolean {
+    if (step.length === 0) return false;
+    this.record(step);
+    return true;
   }
 
-  private apply(c: DrawingChange): void {
-    const id = (c.after ?? c.before)!.id;
-    const rest = this.drawings.filter((d) => d.id !== id);
-    if (c.after) {
-      rest.push(c.after);
-      rest.sort(byZ);
-    }
-    this.drawings = rest;
-    this.selected = c.after ? c.after.id : this.selected === id ? null : this.selected;
-    if (this.hover?.id === id && !c.after) this.hover = null;
-    this.listener.commit(c);
+  /** A new change by the user: applied, stored, and the redo steps are dropped. */
+  private record(step: Step): void {
+    this.undoStack.push(step);
+    if (this.undoStack.length > HISTORY_LIMIT) this.undoStack.shift();
+    this.redoStack = [];
+    this.apply(step);
+  }
+
+  /**
+   * Applies a step: the drawings it leaves become the selection unless they all were in it
+   * already; those it hides or deletes leave it. The step goes to the listener to be stored.
+   */
+  private apply(step: Step): void {
+    const ids = new Set(step.map((c) => (c.after ?? c.before)!.id));
+    const rest = this.drawings.filter((d) => !ids.has(d.id));
+    const after = new Set<Drawing>();
+    for (const c of step) if (c.after) after.add(c.after);
+    rest.push(...after);
+    rest.sort(byZ);
+    this.setList(rest);
+    const shown = rest.filter((d) => !d.hidden && after.has(d)).map((d) => d.id);
+    const shownSet = new Set(shown);
+    const kept = this.picked.filter((id) => !ids.has(id) || shownSet.has(id));
+    const keptSet = new Set(kept);
+    // A change inside the selection keeps it; any other selects what it changed.
+    this.pick(shown.every((id) => keptSet.has(id)) ? kept : shown);
+    const h = this.hover;
+    if (h && ids.has(h.id) && !shownSet.has(h.id)) this.hover = null;
+    this.listener.commit([...step]);
   }
 }

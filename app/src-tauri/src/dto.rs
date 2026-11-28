@@ -499,6 +499,7 @@ pub struct DrawingDto {
     pub body: DrawingBody,
     pub style: Style,
     pub locked: bool,
+    pub hidden: bool,
     pub z: i64,
     pub updated_at: i64,
 }
@@ -512,6 +513,7 @@ impl From<Drawing> for DrawingDto {
             body: d.body,
             style: d.style,
             locked: d.locked,
+            hidden: d.hidden,
             z: d.z,
             updated_at: d.updated_at,
         }
@@ -529,6 +531,7 @@ pub struct DrawingInputDto {
     pub body: DrawingBody,
     pub style: Style,
     pub locked: bool,
+    pub hidden: bool,
     pub z: i64,
 }
 
@@ -541,6 +544,7 @@ impl From<DrawingInputDto> for Drawing {
             body: d.body,
             style: d.style,
             locked: d.locked,
+            hidden: d.hidden,
             z: d.z,
             updated_at: 0,
         }
@@ -1005,7 +1009,7 @@ mod tests {
                 "stop": 90, "take": 120, "endT": 20
             },
             "style": { "color": 2, "width": 1, "dash": true },
-            "locked": false, "z": 3
+            "locked": false, "hidden": true, "z": 3
         });
         let dto: DrawingInputDto = serde_json::from_value(input.clone()).unwrap();
         let mut d = Drawing::from(dto);
@@ -1021,7 +1025,7 @@ mod tests {
         let bad = serde_json::json!({
             "id": "d1", "instrument": { "source": "b", "symbol": "s" }, "priceScale": 2,
             "body": { "kind": "spiral" }, "style": { "color": 0, "width": 1, "dash": false },
-            "locked": false, "z": 0
+            "locked": false, "hidden": false, "z": 0
         });
         assert!(serde_json::from_value::<DrawingInputDto>(bad).is_err());
     }

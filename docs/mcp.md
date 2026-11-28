@@ -177,7 +177,7 @@ The drawings of a pair in paint order. Input: `source`, `symbol`. Every price in
   "drawings": [
     { "id": "mcp-1a2b-...", "source": "binance", "symbol": "BTCUSDT", "priceScale": 2,
       "body": { "kind": "hline", "p": 6000000, "pDecimal": "60000.00" }, "style": { "color": 0, "width": 1, "dash": false },
-      "locked": false, "z": 0, "updatedAt": 1795766400123 }
+      "locked": false, "hidden": false, "z": 0, "updatedAt": 1795766400123 }
   ] }
 ```
 
@@ -192,7 +192,7 @@ Saves a drawing with the same rules as the app ([Drawing tools](drawings.md)): a
 | `priceScale` | The scale of the prices in `body`: the pair's. |
 | `body` | The shape, by `kind` (below). |
 | `style` | Optional `{ "color": 0-7, "width": 1-4, "dash": false }`, default slot 0, width 1, solid. |
-| `locked`, `z` | Optional, default `false` and `0`. |
+| `locked`, `hidden`, `z` | Optional, default `false`, `false` and `0`. On an update (an `id` that exists), a left-out `locked` or `hidden` keeps the stored value, so moving a drawing does not unlock or show it. A hidden drawing stays stored but is not shown on the chart until the user shows it again. |
 
 | `kind` | Fields |
 | --- | --- |
@@ -334,8 +334,8 @@ The server adds no host. It talks only to the market-data hosts in [Privacy and 
 
 ## Troubleshooting
 
-- **"database schema version 5 is newer than supported version 4"**: the app is newer than the server. Install the server of the same version.
-- **"database schema version 3 is older than this program's version 4; update the Sandchart app first"**: the server is newer than the app. Update the app and start it once; it upgrades its database, and the server then opens it.
+- **"database schema version 6 is newer than supported version 5"**: the app is newer than the server. Install the server of the same version.
+- **"database schema version 4 is older than this program's version 5; update the Sandchart app first"**: the server is newer than the app. Update the app and start it once; it upgrades its database, and the server then opens it.
 - **"database is locked"**: the other program held a write for more than 5 seconds. Try again.
 - **The first indicator call is slow**: the server compiles the built-in indicators once, unless the app has already done it on this machine.
 - The server writes its own messages to stderr; MCP clients usually show them in their log of the server.

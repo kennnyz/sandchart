@@ -69,6 +69,7 @@ describe("AlertController", () => {
       body: { kind: "hline", p: 10_000 },
       style: { color: 0, width: 1, dash: false },
       locked: false,
+      hidden: false,
       z: 0,
       updatedAt: 0,
     };

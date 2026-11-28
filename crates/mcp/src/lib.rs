@@ -509,13 +509,25 @@ impl Sandchart {
     async fn save_drawing(&self, Parameters(p): Parameters<DrawingInput>) -> ToolResult {
         let inst = self.instrument(&p.source, &p.symbol).await?;
         check_scale(&inst, p.price_scale)?;
+        // An update keeps the user's lock and hiding unless the call sets them.
+        let stored = match (&p.id, p.locked.is_none() || p.hidden.is_none()) {
+            (Some(id), true) => self.engine.drawing(id).await.map_err(err)?,
+            _ => None,
+        };
         let d = Drawing {
             id: p.id.unwrap_or_else(|| new_id("mcp")),
             instrument: inst.id,
             price_scale: p.price_scale,
             body: p.body,
             style: p.style.unwrap_or(DEFAULT_STYLE),
-            locked: p.locked.unwrap_or(false),
+            locked: p
+                .locked
+                .or(stored.as_ref().map(|d| d.locked))
+                .unwrap_or(false),
+            hidden: p
+                .hidden
+                .or(stored.as_ref().map(|d| d.hidden))
+                .unwrap_or(false),
             z: p.z.unwrap_or(0),
             updated_at: 0,
         };

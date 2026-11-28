@@ -1,10 +1,11 @@
 import { Eye, EyeOff, Magnet } from "lucide-react";
-import { useEffect, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { drawingKeyAction, MAGNET_CODE } from "../chart/drawings/keys";
 import { TOOLS } from "../chart/drawings/registry";
 import { t } from "../i18n";
 import { altShortcutLabel } from "../labels";
 import type { DrawingStore } from "../state/drawings";
+import { Menu } from "./Menu";
 
 /** "KeyT" -> "T". */
 const keyName = (code: string) => code.replace(/^Key/, "");
@@ -13,6 +14,14 @@ const keyName = (code: string) => code.replace(/^Key/, "");
 export function DrawingToolbar({ store }: { store: DrawingStore }) {
   useSyncExternalStore(store.subscribe, store.version);
   const s = store.state;
+  const eye = useRef<HTMLButtonElement>(null);
+  /** Where the visibility menu opens (window px), or null while it is closed. */
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const closeMenu = useCallback(() => setMenu(null), []);
+  const pick = (run: () => void) => () => {
+    setMenu(null);
+    run();
+  };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -58,15 +67,48 @@ export function DrawingToolbar({ store }: { store: DrawingStore }) {
         <Magnet size={18} strokeWidth={1.75} />
       </button>
       <button
+        ref={eye}
         className="tool-button tools-bottom"
         data-testid="tool-hide-all"
-        aria-label={t("tools.hideAll")}
+        aria-label={t("tools.visibility")}
         aria-pressed={s.hidden}
-        title={t(s.hidden ? "tools.showAll" : "tools.hideAll")}
-        onClick={() => s.toggleHidden()}
+        aria-haspopup="menu"
+        aria-expanded={menu !== null}
+        title={t("tools.visibility")}
+        onClick={() => {
+          const r = eye.current?.getBoundingClientRect();
+          setMenu(menu || !r ? null : { x: r.right, y: r.top });
+        }}
       >
         {s.hidden ? <EyeOff size={18} strokeWidth={1.75} /> : <Eye size={18} strokeWidth={1.75} />}
       </button>
+      {menu && (
+        <Menu
+          fixed
+          items={[
+            {
+              id: "toggle",
+              label: t(s.hidden ? "tools.showAll" : "tools.hideAll"),
+              icon: s.hidden ? Eye : EyeOff,
+              onSelect: pick(() => s.toggleHidden()),
+            },
+            {
+              id: "show-hidden",
+              label: t("tools.showHidden", { n: s.hiddenCount }),
+              icon: Eye,
+              disabled: s.hiddenCount === 0,
+              onSelect: pick(() => s.showHidden()),
+            },
+          ]}
+          label={t("tools.visibility")}
+          testId="visibility-menu"
+          x={menu.x}
+          y={menu.y}
+          width={window.innerWidth}
+          height={window.innerHeight}
+          onClose={closeMenu}
+        />
+      )}
     </nav>
   );
 }

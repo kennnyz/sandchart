@@ -128,6 +128,8 @@ fn main() {
             commands::get_drawings,
             commands::save_drawing,
             commands::delete_drawing,
+            commands::save_drawings,
+            commands::delete_drawings,
             commands::get_position_outcomes,
             commands::replay_start,
             commands::replay_step,

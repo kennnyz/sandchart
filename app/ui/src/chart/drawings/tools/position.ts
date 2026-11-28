@@ -3,7 +3,7 @@ import type { Anchor, DrawingBody, PositionOutcome, Side } from "../../../backen
 import { t } from "../../../i18n";
 import { formatChange } from "../../format";
 import { MONO_FAMILY, type ChartTheme } from "../../theme";
-import { addSteps, MAX_TICKS, type Step } from "../geometry";
+import { addSteps, boxesOverlap, MAX_TICKS, type Step } from "../geometry";
 import { pill } from "../label";
 import type { ToolDef } from "../registry";
 
@@ -214,6 +214,10 @@ function positionTool(side: Side): ToolDef<Position, PositionGeom> {
       const top = Math.min(g.yTake, g.yStop);
       const bottom = Math.max(g.yTake, g.yStop);
       return x >= g.left - tol && x <= g.right + tol && y >= top - tol && y <= bottom + tol;
+    },
+
+    touches(g, box) {
+      return boxesOverlap(g.left, Math.min(g.yTake, g.yStop), g.right, Math.max(g.yTake, g.yStop), box);
     },
 
     /** Stop edge, take edge (in the middle), entry (left) and end (right, on the entry line). */

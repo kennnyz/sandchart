@@ -16,9 +16,19 @@ function setup() {
   const commits: DrawingChange[] = [];
   const tools: (ToolId | null)[] = [];
   let n = 0;
-  const s = new DrawingState({ commit: (ch) => commits.push(ch), tool: (k) => tools.push(k) }, () => `d${++n}`);
+  const steps: DrawingChange[][] = [];
+  const s = new DrawingState(
+    {
+      commit: (step) => {
+        steps.push(step);
+        commits.push(...step);
+      },
+      tool: (k) => tools.push(k),
+    },
+    () => `d${++n}`,
+  );
   s.setOwner({ instrument: BTC, priceScale: 2 });
-  return { s, commits, tools };
+  return { s, commits, steps, tools };
 }
 
 function stored(id: string, z: number, p = 50, locked = false): Drawing {
@@ -29,6 +39,7 @@ function stored(id: string, z: number, p = 50, locked = false): Drawing {
     body: { kind: "hline", p },
     style: { color: 0, width: 2, dash: false },
     locked,
+    hidden: false,
     z,
     updatedAt: 1,
   };
@@ -234,6 +245,125 @@ describe("edits and history", () => {
   });
 });
 
+describe("several selected", () => {
+  it("toggles drawings in and out of the selection, never a hidden or unknown one", () => {
+    const { s } = setup();
+    s.reset([stored("a", 1), stored("b", 2), { ...stored("h", 3), hidden: true }]);
+    s.select("a");
+    s.toggle("b");
+    expect(s.selection).toEqual(["a", "b"]);
+    // With two, there is no single selected drawing (no handles, no style popover).
+    expect(s.selected).toBeNull();
+    expect(s.isSelected("b")).toBe(true);
+    s.toggle("a");
+    expect(s.selection).toEqual(["b"]);
+    expect(s.selected).toBe("b");
+    s.toggle("h");
+    s.toggle("nope");
+    expect(s.selection).toEqual(["b"]);
+    s.setSelection(["a", "h", "b", "a"]);
+    expect(s.selection).toEqual(["a", "b"]);
+    expect(s.selectedDrawings().map((d) => d.id)).toEqual(["a", "b"]);
+  });
+
+  it("moves the selection as one undo step, leaving a locked one where it is", () => {
+    const { s, commits } = setup();
+    const a = stored("a", 1, 10);
+    const b = stored("b", 2, 20);
+    const l = stored("l", 3, 30, true);
+    s.reset([a, b, l]);
+    s.setSelection(["a", "b", "l"]);
+    const moved = new Map([
+      ["a", { kind: "hline" as const, p: 15 }],
+      ["b", { kind: "hline" as const, p: 25 }],
+      ["l", { kind: "hline" as const, p: 35 }],
+    ]);
+    expect(s.editMany(moved)).toBe(true);
+    expect(commits).toHaveLength(2);
+    expect(s.drawings.map((d) => d.body)).toEqual([
+      { kind: "hline", p: 15 },
+      { kind: "hline", p: 25 },
+      { kind: "hline", p: 30 },
+    ]);
+    // The selection is kept, the locked one too.
+    expect(s.selection).toEqual(["a", "b", "l"]);
+    commits.length = 0;
+    expect(s.undo()).toBe(true);
+    expect(s.drawings).toEqual([a, b, l]);
+    expect(commits).toHaveLength(2);
+    expect(s.undo()).toBe(false);
+    expect(s.redo()).toBe(true);
+    expect(s.byId("b")!.body).toEqual({ kind: "hline", p: 25 });
+    // Only locked ones: nothing to record.
+    expect(s.editMany(new Map([["l", { kind: "hline", p: 99 }]]))).toBe(false);
+  });
+
+  it("deletes every selected drawing as one undo step and brings them all back", () => {
+    const { s, commits, steps } = setup();
+    const a = stored("a", 1, 10);
+    const l = stored("l", 2, 20, true);
+    const c3 = stored("c", 3, 30);
+    s.reset([a, l, c3]);
+    s.setSelection(["a", "l"]);
+    expect(s.deleteSelected()).toBe(true);
+    // One step reaches the listener whole, to be stored in one write.
+    expect(steps).toEqual([[{ before: a, after: null }, { before: l, after: null }]]);
+    expect(s.drawings).toEqual([c3]);
+    expect(s.selection).toEqual([]);
+    expect(commits).toEqual([
+      { before: a, after: null },
+      { before: l, after: null },
+    ]);
+    expect(s.undo()).toBe(true);
+    expect(s.drawings).toEqual([a, l, c3]);
+    expect(s.selection).toEqual(["a", "l"]);
+    expect(s.redo()).toBe(true);
+    expect(s.drawings).toEqual([c3]);
+    expect(s.undo()).toBe(true);
+    expect(s.undo()).toBe(false);
+  });
+
+  it("locks, unlocks and hides many as one undo step; a hidden one leaves the selection", () => {
+    const { s, commits } = setup();
+    const a = stored("a", 1, 10);
+    const b = stored("b", 2, 20, true);
+    s.reset([a, b]);
+    s.setSelection(["a", "b"]);
+    expect(s.updateMany(["a", "b"], { locked: true })).toBe(true);
+    expect(commits).toHaveLength(1);
+    expect(s.drawings.every((d) => d.locked)).toBe(true);
+    expect(s.updateMany(["a", "b"], { locked: false })).toBe(true);
+    expect(s.drawings.every((d) => !d.locked)).toBe(true);
+    s.hover = { id: "a", part: "body" };
+    expect(s.updateMany(["a", "b"], { hidden: true })).toBe(true);
+    expect(s.drawings.every((d) => d.hidden)).toBe(true);
+    expect(s.selection).toEqual([]);
+    expect(s.hover).toBeNull();
+    expect(s.drawings.filter((d) => d.hidden).length).toBe(2);
+    // Undo shows and selects them again.
+    expect(s.undo()).toBe(true);
+    expect(s.drawings.filter((d) => d.hidden).length).toBe(0);
+    expect(s.selection).toEqual(["a", "b"]);
+    expect(s.redo()).toBe(true);
+    expect(s.updateMany(["a"], { hidden: true })).toBe(false);
+  });
+
+  it("shows every hidden drawing again as one undo step", () => {
+    const { s, commits } = setup();
+    const h1 = { ...stored("h1", 1), hidden: true };
+    const h2 = { ...stored("h2", 2), hidden: true };
+    s.reset([h1, stored("v", 3), h2]);
+    expect(s.showHidden()).toBe(true);
+    expect(commits).toHaveLength(2);
+    expect(s.drawings.filter((d) => d.hidden).length).toBe(0);
+    expect(s.selection).toEqual(["h1", "h2"]);
+    expect(s.showHidden()).toBe(false);
+    expect(s.undo()).toBe(true);
+    expect(s.drawings.filter((d) => d.hidden).length).toBe(2);
+    expect(s.selection).toEqual([]);
+  });
+});
+
 describe("cancel", () => {
   it("drops the placed points, the tool and the selection, and says whether there was any", () => {
     const { s, tools } = setup();
@@ -326,5 +456,24 @@ describe("a drawing the engine stored differently", () => {
     expect(s.byId("a")).toBe(later);
     s.undo();
     expect(commits.at(-1)).toEqual({ before: later, after: saved });
+  });
+});
+
+describe("DrawingState with many drawings", () => {
+  it("keeps selection checks constant-time with 2000 selected", () => {
+    const { s } = setup();
+    const list = Array.from({ length: 2000 }, (_, i) => stored(`d${i}`, i, i));
+    s.reset(list);
+    const t0 = performance.now();
+    s.setSelection(list.map((d) => d.id));
+    // A hit test asks every drawing whether it is selected, on every pointer move.
+    let n = 0;
+    for (let move = 0; move < 50; move++) for (const d of list) if (s.isSelected(d.id)) n++;
+    expect(s.selectedDrawings()).toHaveLength(2000);
+    for (const d of list) s.byId(d.id);
+    const ms = performance.now() - t0;
+    expect(n).toBe(100_000);
+    // Linear scans take hundreds of ms here; a set and a map take a few.
+    expect(ms).toBeLessThan(40);
   });
 });

@@ -18,6 +18,7 @@ interface Stored {
   id: string;
   style: { color: number; width: number; dash: boolean };
   locked: boolean;
+  hidden: boolean;
   body: {
     kind: string;
     p?: number;
@@ -42,6 +43,8 @@ interface Debug {
   drawingsPainted: number;
   selectedDrawing: string | null;
   hoveredDrawing: string | null;
+  selectedDrawings: string[];
+  selectionBox: boolean;
   selectedHandles: { x: number; y: number }[];
   ruler: string | null;
   outcomes: Record<string, string>;
@@ -384,13 +387,16 @@ test("magnet_snaps_a_level_to_a_candle_high", async ({ page }) => {
   const snapped = (await storedCount(page, 3)).map((d) => d.body.p).filter((p) => p !== l1!.body.p && p !== l2!.body.p);
   expect(snapped).toEqual([high]);
 
-  // ⌘ (Ctrl) inverts the magnet for that click.
+  // 25 px above the high is too far for the magnet, but not with ⌘ (Ctrl) held.
+  await page.keyboard.press("Alt+KeyH");
+  await page.mouse.click(cx, yHigh - 25);
+  expect((await storedCount(page, 4)).filter((d) => d.body.p === high)).toHaveLength(1);
   await page.keyboard.press("Alt+KeyH");
   await page.keyboard.down("ControlOrMeta");
-  await page.mouse.click(cx, yHigh + 5);
+  await page.mouse.click(cx, yHigh - 25);
   await page.keyboard.up("ControlOrMeta");
-  const all = await storedCount(page, 4);
-  expect(all.filter((d) => d.body.p === high)).toHaveLength(1);
+  const all = await storedCount(page, 5);
+  expect(all.filter((d) => d.body.p === high)).toHaveLength(2);
 
   // The switch is kept across a reload.
   await page.reload();
@@ -725,7 +731,12 @@ test("hide_all_hides_drawings_from_painting_and_hit_testing", async ({ page }) =
   expect((await debug(page)).selectedDrawing).toBe(line!.id);
 
   const toggle = page.getByTestId("tool-hide-all");
-  await toggle.click();
+  const hideAll = async () => {
+    await toggle.click();
+    await page.getByTestId("visibility-menu-toggle").click();
+    await expect(page.getByTestId("visibility-menu")).toHaveCount(0);
+  };
+  await hideAll();
   await expect(toggle).toHaveAttribute("aria-pressed", "true");
   await expect.poll(async () => (await debug(page)).drawingsPainted).toBe(0);
   expect((await debug(page)).selectedDrawing).toBeNull();
@@ -738,13 +749,13 @@ test("hide_all_hides_drawings_from_painting_and_hit_testing", async ({ page }) =
   expect(await stored(page)).toEqual([line]);
 
   // Shown again, as stored: hiding changed nothing in storage.
-  await toggle.click();
+  await hideAll();
   await expect(toggle).toHaveAttribute("aria-pressed", "false");
   await expect.poll(async () => (await debug(page)).drawingsPainted).toBe(1);
   expect(isBlue(await basePixel(page, plot.left + 80, y))).toBe(true);
 
   // Picking a tool shows hidden drawings.
-  await toggle.click();
+  await hideAll();
   await page.keyboard.press("Alt+KeyT");
   await expect(toggle).toHaveAttribute("aria-pressed", "false");
 });
@@ -802,4 +813,285 @@ test("base_frame_with_500_drawings_under_budget @perf", async ({ page }) => {
   console.log(`base frame with ${painted} drawings painted: mean ${mean.toFixed(2)} ms over ${ms.length} frames`);
   expect(ms.length).toBeGreaterThan(10);
   expect(mean).toBeLessThan(4);
+});
+
+/** Places horizontal levels at these y and returns them as stored, top first. */
+async function levels(page: Page, x: number, ys: number[]): Promise<Stored[]> {
+  for (const y of ys) {
+    await page.keyboard.press("Alt+KeyH");
+    await page.mouse.click(x, y);
+  }
+  const list = await storedCount(page, ys.length);
+  return [...list].sort((a, b) => b.body.p! - a.body.p!);
+}
+
+/** ⌘-drag (Ctrl-drag) from one point to another. */
+async function cmdDrag(page: Page, from: [number, number], to: [number, number]): Promise<void> {
+  await page.keyboard.down("ControlOrMeta");
+  await drag(page, from, to);
+  await page.keyboard.up("ControlOrMeta");
+}
+
+test("right_click_shows_our_menu_and_never_the_native_one", async ({ page }) => {
+  const plot = await openChart(page);
+  const cx = Math.round(plot.left + plot.width / 2);
+  const y = Math.round(plot.top + plot.height * 0.4);
+  const [line] = await levels(page, cx, [y]);
+  // A listener added after the app's sees whether the app blocked the web view's menu.
+  await page.evaluate(() => {
+    const w = window as unknown as { __ctx: boolean[] };
+    w.__ctx = [];
+    window.addEventListener("contextmenu", (e) => w.__ctx.push(e.defaultPrevented));
+  });
+  const prevented = () => page.evaluate(() => (window as unknown as { __ctx: boolean[] }).__ctx);
+
+  // On empty chart space and on the rail: no menu of ours, and none of the web view's.
+  await page.mouse.click(cx, plot.top + plot.height * 0.8, { button: "right" });
+  await page.getByTestId("tool-trend").click({ button: "right" });
+  await expect(page.getByTestId("drawing-menu")).toHaveCount(0);
+  expect(await prevented()).toEqual([true, true]);
+
+  // On the line: our menu, keyboard first; Esc closes it and keeps the selection.
+  await page.mouse.click(cx - 100, y, { button: "right" });
+  const menu = page.getByTestId("drawing-menu");
+  await expect(menu).toBeVisible();
+  expect((await prevented()).at(-1)).toBe(true);
+  expect((await debug(page)).selectedDrawing).toBe(line!.id);
+  await expect(menu.getByRole("menuitem")).toHaveText([/Lock/, /Hide/, /Remove/, /Settings/]);
+  await expect(page.getByTestId("drawing-menu-lock")).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByTestId("drawing-menu-hide")).toBeFocused();
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+  expect((await debug(page)).selectedDrawing).toBe(line!.id);
+
+  // Esc gives focus back to where it was: here the eye button that opened the rail menu.
+  await page.getByTestId("tool-hide-all").focus();
+  await page.keyboard.press("Space");
+  await expect(page.getByTestId("visibility-menu")).toBeVisible();
+  await expect(page.getByTestId("visibility-menu-toggle")).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("visibility-menu")).toHaveCount(0);
+  await expect(page.getByTestId("tool-hide-all")).toBeFocused();
+
+  // Lock by keyboard; the menu then offers Unlock.
+  await page.mouse.click(cx - 100, y, { button: "right" });
+  await expect(page.getByTestId("drawing-menu-lock")).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect.poll(async () => (await stored(page))[0]!.locked).toBe(true);
+  await page.mouse.click(cx - 100, y, { button: "right" });
+  await expect(page.getByTestId("drawing-menu-unlock")).toBeVisible();
+  // Settings… opens the style popover of the line.
+  await page.getByTestId("drawing-menu-settings").click();
+  await expect(page.getByTestId("drawing-style")).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  // A text field keeps the web view's edit menu: an input and a textarea.
+  await page.keyboard.press("ControlOrMeta+k");
+  const input = page.getByRole("dialog").locator("input").first();
+  await input.click({ button: "right" });
+  expect((await prevented()).at(-1)).toBe(false);
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Alt+KeyN");
+  await page.mouse.click(cx + 150, plot.top + plot.height * 0.7);
+  const area = page.getByTestId("note-editor").getByRole("textbox");
+  await expect(area).toBeFocused();
+  await area.click({ button: "right" });
+  expect((await prevented()).at(-1)).toBe(false);
+});
+
+test("ctrl_click_on_macos_opens_the_menu_of_a_drawing", async ({ page }) => {
+  // The app reads the platform once at load: pretend to be a Mac on every runner.
+  await page.addInitScript(() => Object.defineProperty(Navigator.prototype, "platform", { get: () => "MacIntel" }));
+  const plot = await openChart(page);
+  const cx = Math.round(plot.left + plot.width / 2);
+  const ys = [0.3, 0.6].map((f) => Math.round(plot.top + plot.height * f));
+  const [top, bottom] = await levels(page, cx, ys);
+  await page.mouse.click(cx - 100, ys[0]!);
+  expect((await debug(page)).selectedDrawing).toBe(top!.id);
+
+  // macOS turns Ctrl+click into a right click: the press arrives with Ctrl and the main
+  // button, then `contextmenu` (sent here by hand, as a headless browser may not).
+  await page.keyboard.down("Control");
+  await page.mouse.move(cx - 100, ys[1]!);
+  await page.mouse.down();
+  await page.getByTestId("chart").evaluate((el, [x, y]) => {
+    const canvas = el.querySelectorAll("canvas")[0]!;
+    canvas.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: x, clientY: y, ctrlKey: true, button: 0 }));
+  }, [cx - 100, ys[1]!]);
+  await page.mouse.up();
+  await page.keyboard.up("Control");
+  await expect(page.getByTestId("drawing-menu")).toBeVisible();
+  // Not a ⌘-click: the line under the pointer is selected alone, not added.
+  expect((await debug(page)).selectedDrawings).toEqual([bottom!.id]);
+  expect((await debug(page)).selectionBox).toBe(false);
+});
+
+test("cmd_box_selects_several_drawings_and_delete_removes_them_in_one_step", async ({ page }) => {
+  const plot = await openChart(page);
+  const cx = Math.round(plot.left + plot.width / 2);
+  const ys = [0.3, 0.4, 0.7].map((f) => Math.round(plot.top + plot.height * f));
+  const all = await levels(page, cx, ys);
+  await page.mouse.click(cx, plot.top + plot.height * 0.9);
+  await page.mouse.move(cx - 200, ys[0]! - 20);
+  const before = await settled(page);
+
+  // ⌘-drag over the top two: a box on the overlay, the base stays as it is.
+  await page.keyboard.down("ControlOrMeta");
+  await page.mouse.down();
+  for (let i = 1; i <= 10; i++) {
+    await page.mouse.move(cx - 200 + i * 10, ys[0]! - 20 + i * ((ys[1]! + 20 - ys[0]! + 20) / 10));
+    await nextFrame(page);
+  }
+  expect((await debug(page)).selectionBox).toBe(true);
+  await page.mouse.up();
+  await page.keyboard.up("ControlOrMeta");
+  const d = await debug(page);
+  expect(d.baseDraws).toBe(before.baseDraws);
+  expect(d.selectionBox).toBe(false);
+  expect([...d.selectedDrawings].sort()).toEqual([all[0]!.id, all[1]!.id].sort());
+
+  // ⌘-click adds the third, ⌘-click again takes it out.
+  await page.keyboard.down("ControlOrMeta");
+  await page.mouse.click(cx + 100, ys[2]!);
+  expect((await debug(page)).selectedDrawings).toHaveLength(3);
+  await page.mouse.click(cx + 100, ys[2]!);
+  await page.keyboard.up("ControlOrMeta");
+  expect((await debug(page)).selectedDrawings).toHaveLength(2);
+
+  // Dragging one moves both, one undo step.
+  await drag(page, [cx + 50, ys[0]!], [cx + 50, ys[0]! + 30]);
+  await expect.poll(async () => (await stored(page)).find((s) => s.id === all[0]!.id)!.body.p).toBeLessThan(all[0]!.body.p!);
+  await expect.poll(async () => (await stored(page)).find((s) => s.id === all[1]!.id)!.body.p).toBeLessThan(all[1]!.body.p!);
+  const moved = await stored(page);
+  expect(moved.find((s) => s.id === all[2]!.id)!.body.p).toBe(all[2]!.body.p);
+  await page.keyboard.press("ControlOrMeta+z");
+  const prices = async () => (await stored(page)).map((s) => s.body.p).sort();
+  await expect.poll(prices).toEqual(all.map((s) => s.body.p).sort());
+
+  // Delete removes both; one undo brings both back.
+  await page.keyboard.press("Delete");
+  const [left] = await storedCount(page, 1);
+  expect(left!.id).toBe(all[2]!.id);
+  await page.keyboard.press("ControlOrMeta+z");
+  await storedCount(page, 3);
+});
+
+test("a_group_delete_of_many_drawings_is_one_write_and_one_undo", async ({ page }) => {
+  const plot = await openChart(page);
+  const cx = Math.round(plot.left + plot.width / 2);
+  const [hi, lo] = await levels(page, cx, [plot.top + plot.height * 0.2, plot.top + plot.height * 0.8].map(Math.round));
+  // 40 levels between the two placed ones.
+  await page.evaluate(
+    ([a, b]) => {
+      const all = JSON.parse(localStorage.getItem("sandchart.mock.drawings")!) as { id: string; z: number; body: { p: number } }[];
+      const seed = all[0]!;
+      const n = 40;
+      const list = Array.from({ length: n }, (_, i) => ({ ...seed, id: `many-${i}`, z: i, body: { kind: "hline", p: Math.round(b! + ((a! - b!) * i) / (n - 1)) } }));
+      localStorage.setItem("sandchart.mock.drawings", JSON.stringify(list));
+    },
+    [hi!.body.p!, lo!.body.p!],
+  );
+  await page.reload();
+  await expect(page.getByTestId("legend")).toHaveAttribute("data-time", /^\d+$/);
+  await expect.poll(async () => (await debug(page)).drawingsPainted).toBe(40);
+  const writes = () => page.evaluate(() => (window as unknown as { __sandchartMock: { drawingWrites: number } }).__sandchartMock.drawingWrites);
+
+  await cmdDrag(page, [cx - 300, plot.top + plot.height * 0.15], [cx - 260, plot.top + plot.height * 0.85]);
+  expect((await debug(page)).selectedDrawings).toHaveLength(40);
+  const before = await writes();
+  await page.keyboard.press("Delete");
+  await storedCount(page, 0);
+  expect(await writes()).toBe(before + 1);
+  await page.keyboard.press("ControlOrMeta+z");
+  await storedCount(page, 40);
+  expect(await writes()).toBe(before + 2);
+  await expect.poll(async () => (await debug(page)).drawingsPainted).toBe(40);
+});
+
+test("lock_from_the_menu_keeps_every_selected_drawing_in_place", async ({ page }) => {
+  const plot = await openChart(page);
+  const cx = Math.round(plot.left + plot.width / 2);
+  const ys = [0.3, 0.5].map((f) => Math.round(plot.top + plot.height * f));
+  const all = await levels(page, cx, ys);
+  await cmdDrag(page, [cx - 300, ys[0]! - 15], [cx - 250, ys[1]! + 15]);
+  expect((await debug(page)).selectedDrawings).toHaveLength(2);
+  await page.mouse.click(cx, ys[1]!, { button: "right" });
+  await expect(page.getByTestId("drawing-menu-settings")).toHaveCount(0);
+  await page.getByTestId("drawing-menu-lock").click();
+  await expect.poll(async () => (await stored(page)).every((s) => s.locked)).toBe(true);
+
+  await drag(page, [cx, ys[0]!], [cx + 40, ys[0]! + 90]);
+  await page.waitForTimeout(300);
+  const after = await stored(page);
+  for (const d of all) expect(after.find((s) => s.id === d.id)!.body.p).toBe(d.body.p);
+  expect((await debug(page)).selectedDrawings).toHaveLength(2);
+
+  // Unlock both again from the menu of the selection.
+  await page.mouse.click(cx, ys[0]!, { button: "right" });
+  await page.getByTestId("drawing-menu-unlock").click();
+  await expect.poll(async () => (await stored(page)).some((s) => s.locked)).toBe(false);
+});
+
+test("hide_from_the_menu_persists_across_a_reload_until_shown_from_the_rail", async ({ page }) => {
+  const plot = await openChart(page);
+  const cx = Math.round(plot.left + plot.width / 2);
+  const ys = [0.3, 0.6].map((f) => Math.round(plot.top + plot.height * f));
+  const [top] = await levels(page, cx, ys);
+  await page.mouse.click(cx, ys[0]!, { button: "right" });
+  await page.getByTestId("drawing-menu-hide").click();
+  await expect.poll(async () => (await stored(page)).find((s) => s.id === top!.id)!.hidden).toBe(true);
+  await expect.poll(async () => (await debug(page)).drawingsPainted).toBe(1);
+  expect(isBlue(await basePixel(page, plot.left + 80, ys[0]!))).toBe(false);
+  // Neither hit nor selected.
+  await page.mouse.click(cx - 100, ys[0]!);
+  expect((await debug(page)).selectedDrawing).toBeNull();
+
+  await page.reload();
+  await expect(page.getByTestId("legend")).toHaveAttribute("data-time", /^\d+$/);
+  await expect.poll(async () => (await debug(page)).drawingsPainted).toBe(1);
+
+  await page.getByTestId("tool-hide-all").click();
+  const show = page.getByTestId("visibility-menu-show-hidden");
+  await expect(show).toHaveText(/\(1\)/);
+  await show.click();
+  await expect.poll(async () => (await debug(page)).drawingsPainted).toBe(2);
+  await expect.poll(async () => (await stored(page)).some((s) => s.hidden)).toBe(false);
+  await page.getByTestId("tool-hide-all").click();
+  await expect(page.getByTestId("visibility-menu-show-hidden")).toBeDisabled();
+});
+
+test("rect_edge_handle_resizes_one_side_and_trend_middle_moves_the_line", async ({ page }) => {
+  const plot = await openChart(page);
+  const cx = Math.round(plot.left + plot.width / 2);
+  const cy = Math.round(plot.top + plot.height / 2);
+  await page.keyboard.press("Alt+KeyB");
+  await page.mouse.click(cx - 300, cy - 150);
+  await page.mouse.click(cx - 100, cy - 50);
+  const [rect] = await storedCount(page, 1);
+  // Eight handles: four corners, then the middles of a's price, b's time, b's price and a's time edges.
+  const h = await handles(page, plot);
+  expect(h).toHaveLength(8);
+  const right = h[5]!;
+  await drag(page, right, [right[0] + 60, right[1] + 40]);
+  await expect.poll(async () => (await stored(page))[0]!.body.b!.t).toBeGreaterThan(rect!.body.b!.t);
+  const r = (await stored(page))[0]!;
+  expect(r.body.a).toEqual(rect!.body.a);
+  expect(r.body.b!.p).toBe(rect!.body.b!.p);
+
+  await page.keyboard.press("Alt+KeyT");
+  await page.mouse.click(cx + 50, cy + 100);
+  await page.mouse.click(cx + 250, cy);
+  const trend = (await storedCount(page, 2)).find((d) => d.body.kind === "trend")!;
+  const th = await handles(page, plot);
+  expect(th).toHaveLength(3);
+  const mid = th[2]!;
+  await drag(page, mid, [mid[0] + 40, mid[1] + 60]);
+  await expect.poll(async () => (await stored(page)).find((d) => d.id === trend.id)!.body.a!.p).toBeLessThan(trend.body.a!.p);
+  const moved = (await stored(page)).find((d) => d.id === trend.id)!;
+  expect(moved.body.a!.t).toBeGreaterThan(trend.body.a!.t);
+  expect(moved.body.b!.t).toBeGreaterThan(trend.body.b!.t);
+  // Rigid: both ends moved by the same price.
+  expect(Math.abs(moved.body.b!.p - moved.body.a!.p - (trend.body.b!.p - trend.body.a!.p))).toBeLessThanOrEqual(1);
 });

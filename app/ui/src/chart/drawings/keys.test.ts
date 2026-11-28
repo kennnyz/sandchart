@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ALERT_CODE, alertKey, drawingKeyAction, MAGNET_CODE, RULER_CODE, type KeyLike } from "./keys";
+import { ALERT_CODE, alertKey, cmdHeld, drawingKeyAction, keepsNativeMenu, MAGNET_CODE, macContextClick, RULER_CODE, type KeyLike } from "./keys";
 import { TOOLS } from "./registry";
 
 const key = (code: string, mods: Partial<KeyLike> = {}): KeyLike => ({
@@ -79,5 +79,31 @@ describe("drawingKeyAction", () => {
     const box = { tagName: "INPUT", type: "checkbox" };
     expect(drawingKeyAction(key("KeyZ", { metaKey: true, target: box }), TOOLS)).toEqual({ command: "undo" });
     expect(drawingKeyAction(key("KeyZ", { metaKey: true, target: { tagName: "INPUT", type: "text" } }), TOOLS)).toBeNull();
+  });
+});
+
+describe("cmdHeld", () => {
+  it("is ⌘ on macOS and Ctrl elsewhere", () => {
+    // On macOS Ctrl+click is a right click, so Ctrl must not count as ⌘ there.
+    expect(cmdHeld({ metaKey: true, ctrlKey: false }, true)).toBe(true);
+    expect(cmdHeld({ metaKey: false, ctrlKey: true }, true)).toBe(false);
+    expect(cmdHeld({ metaKey: false, ctrlKey: true }, false)).toBe(true);
+    expect(cmdHeld({ metaKey: true, ctrlKey: false }, false)).toBe(false);
+  });
+
+  it("treats a macOS Ctrl+click with the main button as a right click", () => {
+    expect(macContextClick({ ctrlKey: true, button: 0 }, true)).toBe(true);
+    expect(macContextClick({ ctrlKey: false, button: 0 }, true)).toBe(false);
+    expect(macContextClick({ ctrlKey: true, button: 0 }, false)).toBe(false);
+  });
+});
+
+describe("keepsNativeMenu", () => {
+  it("keeps the web view's menu in text fields, and everywhere in a dev build", () => {
+    expect(keepsNativeMenu({ tagName: "TEXTAREA" }, false)).toBe(true);
+    expect(keepsNativeMenu({ tagName: "INPUT", type: "text" }, false)).toBe(true);
+    expect(keepsNativeMenu({ tagName: "CANVAS" }, false)).toBe(false);
+    expect(keepsNativeMenu({ tagName: "INPUT", type: "checkbox" }, false)).toBe(false);
+    expect(keepsNativeMenu({ tagName: "CANVAS" }, true)).toBe(true);
   });
 });

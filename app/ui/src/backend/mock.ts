@@ -593,6 +593,57 @@ export function createMockBackend(opts: MockOptions): MockBackend {
   }));
   const drawings = new Map<string, Drawing>((opts.drawingStore?.load() ?? []).map((d) => [d.id, d]));
   const keepDrawings = () => opts.drawingStore?.save([...drawings.values()]);
+  /** `save_drawings`: every one checked and rescaled first, then all stored or none, the cap held for the result. */
+  const storeDrawings = (list: DrawingInput[]): Drawing[] => {
+    if (list.length > MAX_DRAWINGS) throw problem(`at most ${MAX_DRAWINGS} drawings per request, not ${list.length}`);
+    const now = Date.now();
+    const out = list.map((d): Drawing => {
+      // The Tauri command's DTO has no default for these: it refuses a call without them.
+      for (const field of ["locked", "hidden"] as const) {
+        if (d[field] === undefined) throw problem(`missing field \`${field}\``);
+        if (typeof d[field] !== "boolean") throw problem(`invalid type for field \`${field}\`: expected a boolean`);
+      }
+      const instrument = SYMBOLS.find((i) => i.id.source === d.instrument.source && i.id.symbol === d.instrument.symbol);
+      if (!instrument) throw problem(`unknown instrument ${d.instrument.source}/${d.instrument.symbol}`);
+      if (opts.drawingSaveError) throw problem("mock: cannot save the drawing");
+      const scaled = mockAtScale(structuredClone(d), opts.priceScale ?? instrument.priceScale);
+      if (typeof scaled === "string") throw problem(scaled);
+      return { ...scaled, updatedAt: now };
+    });
+    const next = new Map(drawings);
+    for (const d of out) next.set(d.id, d);
+    for (const key of new Set(out.map((d) => pairKey(d.instrument)))) {
+      let n = 0;
+      for (const o of next.values()) if (pairKey(o.instrument) === key) n++;
+      if (n > MAX_DRAWINGS) throw problem(`an instrument can hold at most ${MAX_DRAWINGS} drawings; delete some first`);
+    }
+    for (const d of out) drawings.set(d.id, d);
+    keepDrawings();
+    // Alerts that can no longer follow their drawing go in the same step, as in `save_drawings`.
+    const byId = new Map(out.map((d) => [d.id, d]));
+    const gone = [...alerts.values()].filter((a) => {
+      const d = a.kind.kind === "drawing" ? byId.get(a.kind.drawingId) : undefined;
+      return d !== undefined && (!mockLevelOf(d.body) || pairKey(a.instrument) !== pairKey(d.instrument));
+    });
+    for (const a of gone) alerts.delete(a.id);
+    if (gone.length > 0) keepAlerts();
+    return out.map((d) => structuredClone(d));
+  };
+  /** `delete_drawings`: every id checked first; their alerts go in the same step. */
+  const removeDrawings = (ids: string[]): void => {
+    if (ids.length > MAX_DRAWINGS) throw problem(`at most ${MAX_DRAWINGS} drawings per request, not ${ids.length}`);
+    for (const id of ids) {
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw problem("a drawing id must be 1 to 64 characters from A-Z, a-z, 0-9, _ and -");
+    }
+    if (opts.drawingSaveError) throw problem("mock: cannot save the drawing");
+    const set = new Set(ids);
+    let changed = false;
+    for (const id of set) changed = drawings.delete(id) || changed;
+    if (changed) keepDrawings();
+    const gone = [...alerts.values()].filter((a) => a.kind.kind === "drawing" && set.has(a.kind.drawingId));
+    for (const a of gone) alerts.delete(a.id);
+    if (gone.length > 0) keepAlerts();
+  };
   const alerts = new Map<string, Alert>((opts.alertStore?.load() ?? []).map((a) => [a.id, a]));
   /** When each active alert was armed here: an update from before cannot fire it. */
   const armedAt = new Map<string, number>([...alerts.values()].filter((a) => a.active).map((a) => [a.id, Date.now()]));
@@ -1062,38 +1113,22 @@ export function createMockBackend(opts: MockOptions): MockBackend {
 
     async saveDrawing(d) {
       await delay();
-      const instrument = SYMBOLS.find((i) => i.id.source === d.instrument.source && i.id.symbol === d.instrument.symbol);
-      if (!instrument) throw problem(`unknown instrument ${d.instrument.source}/${d.instrument.symbol}`);
-      if (opts.drawingSaveError) throw problem("mock: cannot save the drawing");
-      const scaled = mockAtScale(structuredClone(d), opts.priceScale ?? instrument.priceScale);
-      if (typeof scaled === "string") throw problem(scaled);
-      const same = (o: Drawing) => o.instrument.source === d.instrument.source && o.instrument.symbol === d.instrument.symbol;
-      const others = [...drawings.values()].filter((o) => same(o) && o.id !== d.id).length;
-      if (others >= MAX_DRAWINGS) throw problem(`an instrument can hold at most ${MAX_DRAWINGS} drawings; delete some first`);
-      const saved: Drawing = { ...scaled, updatedAt: Date.now() };
-      drawings.set(d.id, saved);
-      keepDrawings();
-      // Alerts that can no longer follow it go in the same step, as in `upsert_drawing`.
-      const gone = [...alerts.values()].filter(
-        (a) =>
-          a.kind.kind === "drawing" &&
-          a.kind.drawingId === d.id &&
-          (!mockLevelOf(saved.body) || pairKey(a.instrument) !== pairKey(saved.instrument)),
-      );
-      for (const a of gone) alerts.delete(a.id);
-      if (gone.length > 0) keepAlerts();
-      return structuredClone(saved);
+      return storeDrawings([d])[0]!;
     },
 
     async deleteDrawing(id) {
       await delay();
-      if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw problem("a drawing id must be 1 to 64 characters from A-Z, a-z, 0-9, _ and -");
-      if (opts.drawingSaveError) throw problem("mock: cannot save the drawing");
-      if (drawings.delete(id)) keepDrawings();
-      // Its alerts go with it, in the same step.
-      const gone = [...alerts.values()].filter((a) => a.kind.kind === "drawing" && a.kind.drawingId === id);
-      for (const a of gone) alerts.delete(a.id);
-      if (gone.length > 0) keepAlerts();
+      removeDrawings([id]);
+    },
+
+    async saveDrawings(list) {
+      await delay();
+      return storeDrawings(list);
+    },
+
+    async deleteDrawings(ids) {
+      await delay();
+      removeDrawings(ids);
     },
 
     async getAlerts() {

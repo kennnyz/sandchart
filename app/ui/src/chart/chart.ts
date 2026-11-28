@@ -2,7 +2,17 @@ import type { Alert, CandleColumns, Candles, Drawing, Instrument, LiveCandle, Po
 import { AlertLevelLayer } from "./alerts";
 import { chartDebug } from "./debug";
 import { Coords, MAX_TICKS, type Step } from "./drawings/geometry";
-import { DrawingLayer, type DrawingCommand, type StyleAction, type StyleEdit, type TextEdit, type TextResult } from "./drawings/layer";
+import {
+  DrawingLayer,
+  type DrawingCommand,
+  type MenuAction,
+  type MenuEdit,
+  type StyleAction,
+  type StyleEdit,
+  type TextEdit,
+  type TextResult,
+} from "./drawings/layer";
+import { cmdHeld, macContextClick } from "./drawings/keys";
 import type { ToolId } from "./drawings/registry";
 import type { DrawingChange } from "./drawings/state";
 import { alignOffset, hasOwnPane, layoutPanes, overlayRange, paneRange, seriesValues, type IndicatorLayer } from "./indicators";
@@ -127,10 +137,11 @@ export class Chart {
   private readonly ind: IndicatorFrame = { layers: [], offsets: [], tickMul: 1, priceH: 0, panes: [] };
   /** Plot height `ind.priceH` and the pane rows were laid out for; -1 forces a new layout. */
   private layoutH = -1;
-  private drawingCommitCb: ((c: DrawingChange) => void) | null = null;
+  private drawingCommitCb: ((step: DrawingChange[]) => void) | null = null;
   private drawingToolCb: ((id: ToolId | null) => void) | null = null;
   private drawingTextCb: ((edit: TextEdit | null) => void) | null = null;
   private drawingStyleCb: ((edit: StyleEdit | null) => void) | null = null;
+  private drawingMenuCb: ((edit: MenuEdit | null) => void) | null = null;
   /** A replay's trades and cut; its stop and take handles come before drawings for input. */
   private readonly replay = new ReplayLayer();
   private replayOn = false;
@@ -144,10 +155,11 @@ export class Chart {
   private readonly drawings = new DrawingLayer({
     invalidate: () => this.invalidate(),
     invalidateOverlay: () => this.invalidateOverlay(),
-    commit: (c) => this.drawingCommitCb?.(c),
+    commit: (step) => this.drawingCommitCb?.(step),
     tool: (k) => this.drawingToolCb?.(k),
     text: (e) => this.drawingTextCb?.(e),
     style: (e) => this.drawingStyleCb?.(e),
+    menu: (e) => this.drawingMenuCb?.(e),
   });
 
   constructor(
@@ -175,6 +187,7 @@ export class Chart {
     this.canvas.addEventListener("pointerleave", this.onPointerLeave);
     this.canvas.addEventListener("wheel", this.onWheel, { passive: false });
     this.canvas.addEventListener("dblclick", this.onDoubleClick);
+    this.canvas.addEventListener("contextmenu", this.onContextMenu);
     if (this.hasGestures) {
       this.canvas.addEventListener("gesturestart", this.onGestureStart);
       this.canvas.addEventListener("gesturechange", this.onGestureChange);
@@ -417,6 +430,21 @@ export class Chart {
     this.drawings.styleAction(action);
   }
 
+  /** The context menu of the selected drawings opens (where, in CSS px of the chart) or closes (null). */
+  onDrawingMenu(cb: ((edit: MenuEdit | null) => void) | null): void {
+    this.drawingMenuCb = cb;
+  }
+
+  /** Runs a context menu item on the drawings it opened for, or closes it (null). */
+  drawingMenu(action: MenuAction): void {
+    this.drawings.menuAction(action);
+  }
+
+  /** Shows every drawing hidden one by one again, as one undo step. */
+  showHiddenDrawings(): void {
+    this.drawings.showHidden();
+  }
+
   /** Hide all drawings for this session (painting and hit-testing), or show them again. */
   setDrawingsHidden(on: boolean): void {
     this.drawings.setHiddenAll(on);
@@ -428,7 +456,7 @@ export class Chart {
   }
 
   /** Every change of a drawing by the user, undo and redo included, to be stored. */
-  onDrawingCommit(cb: ((c: DrawingChange) => void) | null): void {
+  onDrawingCommit(cb: ((step: DrawingChange[]) => void) | null): void {
     this.drawingCommitCb = cb;
   }
 
@@ -519,6 +547,7 @@ export class Chart {
     this.canvas.removeEventListener("pointerleave", this.onPointerLeave);
     this.canvas.removeEventListener("wheel", this.onWheel);
     this.canvas.removeEventListener("dblclick", this.onDoubleClick);
+    this.canvas.removeEventListener("contextmenu", this.onContextMenu);
     if (this.hasGestures) {
       this.canvas.removeEventListener("gesturestart", this.onGestureStart);
       this.canvas.removeEventListener("gesturechange", this.onGestureChange);
@@ -533,6 +562,7 @@ export class Chart {
     this.drawingToolCb = null;
     this.drawingTextCb = null;
     this.drawingStyleCb = null;
+    this.drawingMenuCb = null;
     this.replayEditCb = null;
     this.pickCb = null;
   }
@@ -807,7 +837,8 @@ export class Chart {
   }
 
   private readonly onPointerDown = (e: PointerEvent): void => {
-    if (e.button !== 0) return;
+    // On macOS Ctrl+click is a right click: `contextmenu` opens our menu instead.
+    if (e.button !== 0 || macContextClick(e)) return;
     const p = this.local(e);
     const { plotW } = this.plot();
     const priceH = this.priceH();
@@ -824,7 +855,7 @@ export class Chart {
     const level: Level | null = this.inPricePlot(p) ? this.replay.handleAt(p.x, p.y) : null;
     if (level) this.replay.startDrag(level);
     const onDrawing =
-      !level && this.inPricePlot(p) && this.drawings.pointerDown(p.x, p.y, e.shiftKey, e.metaKey || e.ctrlKey);
+      !level && this.inPricePlot(p) && this.drawings.pointerDown(p.x, p.y, e.shiftKey, cmdHeld(e));
     // An alert level selects its alert; the press still pans, as on an empty plot.
     const alert = !level && !onDrawing ? this.alertLevels.hit(p.x, p.y) : null;
     if (alert) this.alertClickCb?.(alert);
@@ -863,7 +894,7 @@ export class Chart {
       return;
     }
     if (d?.kind === "drawing" && d.pointerId === e.pointerId) {
-      this.drawings.pointerMove(p.x, p.y, e.shiftKey, e.metaKey || e.ctrlKey);
+      this.drawings.pointerMove(p.x, p.y, e.shiftKey, cmdHeld(e));
       this.updateCrosshair();
       this.invalidateOverlay();
       return;
@@ -882,7 +913,7 @@ export class Chart {
       this.afterViewChange();
       return;
     }
-    if (this.inPricePlot(p)) this.drawings.pointerMove(p.x, p.y, e.shiftKey, e.metaKey || e.ctrlKey);
+    if (this.inPricePlot(p)) this.drawings.pointerMove(p.x, p.y, e.shiftKey, cmdHeld(e));
     else this.drawings.leave();
     this.updateCursor(p);
     // Only the mouse moved: the base layer stays as it is.
@@ -905,7 +936,7 @@ export class Chart {
     if (kind === "drawing") {
       // A cancelled pointer (a system gesture) stores nothing.
       if (e.type === "pointercancel") this.drawings.abort();
-      else this.drawings.pointerUp(p.x, p.y, e.shiftKey, e.metaKey || e.ctrlKey);
+      else this.drawings.pointerUp(p.x, p.y, e.shiftKey, cmdHeld(e));
       this.invalidateOverlay();
     }
     this.updateCursor(p);
@@ -964,6 +995,14 @@ export class Chart {
     e.preventDefault();
     this.gestureActive = false;
     this.gestureScale = 1;
+  };
+
+  /** Our own menu on a drawing; never the web view's over it (the window blocks it elsewhere, except in dev). */
+  private readonly onContextMenu = (e: MouseEvent): void => {
+    if (!import.meta.env.DEV) e.preventDefault();
+    if (this.drag || this.pickCb) return;
+    const p = this.local(e);
+    if (this.inPricePlot(p) && this.drawings.contextMenu(p.x, p.y)) e.preventDefault();
   };
 
   private readonly onDoubleClick = (e: MouseEvent): void => {

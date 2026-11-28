@@ -46,6 +46,14 @@ export interface Point {
   y: number;
 }
 
+/** A box in CSS px of the price plot: `left <= right`, `top <= bottom`. */
+export interface Box {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
 /**
  * One drawing tool. The chart core knows tools only through this contract: a new tool is
  * one module listed in `TOOLS` (plus its `DrawingBody` variant and validation in Rust).
@@ -73,8 +81,14 @@ export interface ToolDef<B extends DrawingBody = DrawingBody, G = unknown> {
   paint(ctx: CanvasRenderingContext2D, g: G, look: Look): void;
   /** Whether (x, y) is on the body, within `tol` px. Handles are tested by the core. */
   hitTest(g: G, x: number, y: number, tol: number): boolean;
+  /** Whether any painted part lies in `box` (the ⌘-drag selection box). */
+  touches(g: G, box: Box): boolean;
   /** Points the user can drag, in the index order `moveHandle` takes. */
   handles(g: G): Point[];
+  /** Index of a handle that moves the whole drawing, as a drag of its body does. */
+  grip?: number;
+  /** Points marked while it is selected that are not handles: a press there moves the drawing. */
+  markers?(g: G): Point[];
   moveBy(body: B, m: Mover): B;
   /**
    * Handle `index` dragged to `a`; `horizontal` (Shift) puts it at the price of the other

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Drawing, DrawingBody, DrawingInput, InstrumentId, PositionBody, PositionOutcome, TimeframeCode } from "../backend/types";
-import type { DrawingCommand, StyleAction, StyleEdit, TextEdit, TextResult } from "../chart/drawings/layer";
+import type { DrawingCommand, MenuAction, MenuEdit, StyleAction, StyleEdit, TextEdit, TextResult } from "../chart/drawings/layer";
 import type { ToolId } from "../chart/drawings/registry";
 import type { DrawingChange } from "../chart/drawings/state";
 import { DrawingController, type DrawingSurface, type MagnetPref } from "./drawings";
@@ -16,6 +16,7 @@ function drawing(id: string, p = 100, instrument: InstrumentId = BTC, body?: Dra
     body: body ?? { kind: "hline", p },
     style: { color: 0, width: 2, dash: false },
     locked: false,
+    hidden: false,
     z: 1,
     updatedAt: 5,
   };
@@ -32,8 +33,11 @@ function fakeSurface() {
   const styles: StyleAction[] = [];
   const hidden: boolean[] = [];
   const storedCopies: [Drawing, Drawing][] = [];
+  const menus: MenuAction[] = [];
+  let showHidden = 0;
+  let menu: ((e: MenuEdit | null) => void) | null = null;
   let style: ((e: StyleEdit | null) => void) | null = null;
-  let commit: ((c: DrawingChange) => void) | null = null;
+  let commit: ((step: DrawingChange[]) => void) | null = null;
   let tool: ((k: ToolId | null) => void) | null = null;
   let text: ((e: TextEdit | null) => void) | null = null;
   const surface: DrawingSurface = {
@@ -59,6 +63,11 @@ function fakeSurface() {
     setDrawingsHidden: (on) => hidden.push(on),
     drawingStored: (sent, saved) => storedCopies.push([sent, saved]),
     onDrawingStyle: (cb) => (style = cb),
+    drawingMenu: (a) => menus.push(a),
+    showHiddenDrawings: () => {
+      showHidden++;
+    },
+    onDrawingMenu: (cb) => (menu = cb),
   };
   return {
     surface,
@@ -71,8 +80,12 @@ function fakeSurface() {
     styles,
     hidden,
     storedCopies,
+    menus,
+    showHiddenCalls: () => showHidden,
+    openMenu: (e: MenuEdit | null) => menu!(e),
     openStyle: (e: StyleEdit | null) => style!(e),
-    commit: (c: DrawingChange) => commit!(c),
+    /** One undo step: a single change or all of a group's. */
+    commit: (c: DrawingChange | DrawingChange[]) => commit!(Array.isArray(c) ? c : [c]),
     openText: (e: TextEdit | null) => text!(e),
     hasListeners: () => commit !== null || text !== null,
   };
@@ -99,15 +112,17 @@ function fakeBackend(stored: Drawing[], scale = 2) {
       calls.push(`get ${id.symbol}`);
       return new Promise<Drawing[]>((resolve, reject) => loads.push({ id, resolve, reject }));
     },
-    saveDrawing: async (d: DrawingInput) => {
-      calls.push(`save ${d.id} ${JSON.stringify(Object.keys(d).sort())}`);
+    saveDrawings: async (list: DrawingInput[]) => {
+      calls.push(`save ${list.map((d) => d.id).join(",")} ${JSON.stringify(Object.keys(list[0]!).sort())}`);
       await wait();
       // At another scale the engine rescales (here: one decimal more, ×10).
-      const body = d.priceScale === scale || d.body.kind !== "hline" ? d.body : { ...d.body, p: d.body.p * 10 };
-      return { ...d, priceScale: scale, body, updatedAt: 9 };
+      return list.map((d) => {
+        const body = d.priceScale === scale || d.body.kind !== "hline" ? d.body : { ...d.body, p: d.body.p * 10 };
+        return { ...d, priceScale: scale, body, updatedAt: 9 };
+      });
     },
-    deleteDrawing: async (id: string) => {
-      calls.push(`delete ${id}`);
+    deleteDrawings: async (ids: string[]) => {
+      calls.push(`delete ${ids.join(",")}`);
       await wait();
     },
     getPositionOutcomes: (_id: InstrumentId, tf: TimeframeCode, positions: { id: string; position: PositionBody }[]) =>
@@ -161,7 +176,7 @@ describe("DrawingController", () => {
     s.commit({ before: null, after: d });
     s.commit({ before: d, after: null });
     await flush();
-    expect(b.calls).toEqual([`save x ${JSON.stringify(["body", "id", "instrument", "locked", "priceScale", "style", "z"])}`]);
+    expect(b.calls).toEqual([`save x ${JSON.stringify(["body", "hidden", "id", "instrument", "locked", "priceScale", "style", "z"])}`]);
     b.pending[0]!.resolve();
     await flush();
     expect(b.calls.at(-1)).toBe("delete x");
@@ -282,7 +297,7 @@ describe("DrawingController", () => {
     await flush();
     // The answer does not have "x" yet: it is dropped instead of wiping "x" and the undo history.
     expect(s.sets).toEqual([[]]);
-    expect(b.calls).toEqual(["get BTCUSDT", `save x ${JSON.stringify(["body", "id", "instrument", "locked", "priceScale", "style", "z"])}`]);
+    expect(b.calls).toEqual(["get BTCUSDT", `save x ${JSON.stringify(["body", "hidden", "id", "instrument", "locked", "priceScale", "style", "z"])}`]);
     b.pending[0]!.resolve();
     await flush();
     expect(b.calls.at(-1)).toBe("get BTCUSDT");
@@ -341,6 +356,43 @@ describe("DrawingController", () => {
     expect(c.error).toBeNull();
   });
 
+  it("stores a group step in one call, and a failed one reloads what is stored and shows why", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const b = fakeBackend([]);
+    const s = fakeSurface();
+    const c = new DrawingController(b.backend, () => {});
+    c.attach(s.surface);
+    void c.open(BTC);
+    await flush();
+    const [x, y] = [drawing("x", 1), drawing("y", 2)];
+    b.loads[0]!.resolve([x, y]);
+    await flush();
+    s.commit([
+      { before: x, after: { ...x, body: { kind: "hline", p: 11 } } },
+      { before: y, after: { ...y, body: { kind: "hline", p: 12 } } },
+    ]);
+    await flush();
+    expect(b.calls.at(-1)).toMatch(/^save x,y /);
+    b.pending[0]!.resolve();
+    await flush();
+
+    s.commit([
+      { before: x, after: null },
+      { before: y, after: null },
+    ]);
+    await flush();
+    expect(b.calls.at(-1)).toBe("delete x,y");
+    expect(b.calls.filter((l) => l.startsWith("delete"))).toHaveLength(1);
+    b.pending[1]!.reject({ code: "other", message: "disk full" });
+    await flush();
+    expect(c.error).toEqual({ kind: "save", message: "disk full" });
+    expect(b.calls.at(-1)).toBe("get BTCUSDT");
+    // Nothing of the step was stored: the chart gets both back.
+    b.loads[1]!.resolve([x, y]);
+    await flush();
+    expect(s.sets.at(-1)).toEqual([x, y]);
+  });
+
   it("mirrors the style popover and passes its actions to the chart", () => {
     const s = fakeSurface();
     let changes = 0;
@@ -356,6 +408,41 @@ describe("DrawingController", () => {
     expect(s.styles).toEqual([{ patch: { locked: true } }, { delete: true }, null]);
     s.openStyle(null);
     expect(c.styleEdit).toBeNull();
+  });
+
+  it("mirrors the context menu and passes its items to the chart", () => {
+    const s = fakeSurface();
+    const c = new DrawingController(fakeBackend([]).backend, () => {});
+    c.attach(s.surface);
+    const edit = { ids: ["a", "b"], locked: false, single: false, x: 5, y: 6 };
+    s.openMenu(edit);
+    expect(c.menu).toEqual(edit);
+    c.menuAction("lock");
+    c.menuAction(null);
+    expect(s.menus).toEqual(["lock", null]);
+    s.openMenu(null);
+    expect(c.menu).toBeNull();
+  });
+
+  it("counts the drawings hidden one by one, and shows them with hide all turned off", async () => {
+    const b = fakeBackend([]);
+    const s = fakeSurface();
+    const c = new DrawingController(b.backend, () => {});
+    c.attach(s.surface);
+    void c.open(BTC);
+    await flush();
+    b.loads[0]!.resolve([{ ...drawing("h"), hidden: true }, drawing("v")]);
+    await flush();
+    expect(c.hiddenCount).toBe(1);
+    const v = drawing("v");
+    s.commit({ before: v, after: { ...v, hidden: true } });
+    expect(c.hiddenCount).toBe(2);
+    s.commit({ before: { ...v, hidden: true }, after: null });
+    expect(c.hiddenCount).toBe(1);
+    c.toggleHidden();
+    c.showHidden();
+    expect(c.hidden).toBe(false);
+    expect(s.showHiddenCalls()).toBe(1);
   });
 
   it("hides all for the session, and picking a tool shows them again", () => {
@@ -502,6 +589,15 @@ describe("position outcomes", () => {
     expect(s.outcomes.at(-1)).toEqual(new Map());
     expect(b.resolves.at(-1)!.tf).toBe("4h");
     expect(b.resolves.at(-1)!.positions.map((p) => p.id)).toEqual(["p1", "p2"]);
+  });
+
+  it("does not ask for hidden positions until they are shown again", async () => {
+    const hiddenPos = { ...drawing("hp", 0, BTC, pos()), hidden: true };
+    const { b, s, c } = await loaded([hiddenPos, drawing("p", 0, BTC, pos(80))]);
+    c.candles(BTC, "1h", 0, 100 * H);
+    expect(b.resolves.map((r) => r.positions.map((p) => p.id))).toEqual([["p"]]);
+    s.commit({ before: hiddenPos, after: { ...hiddenPos, hidden: false } });
+    expect(b.resolves.at(-1)!.positions.map((p) => p.id)).toContain("hp");
   });
 
   it("asks a closed position again when older bars before its entry came in", async () => {

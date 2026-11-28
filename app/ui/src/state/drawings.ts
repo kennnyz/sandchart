@@ -1,7 +1,6 @@
 import type {
   Backend,
   Drawing,
-  DrawingBody,
   DrawingInput,
   InstrumentId,
   PositionBody,
@@ -9,7 +8,7 @@ import type {
   TimeframeCode,
 } from "../backend/types";
 import { toProblem } from "../backend/types";
-import type { DrawingCommand, StyleAction, StyleEdit, TextEdit, TextResult } from "../chart/drawings/layer";
+import type { DrawingCommand, MenuAction, MenuEdit, StyleAction, StyleEdit, TextEdit, TextResult } from "../chart/drawings/layer";
 import type { ToolId } from "../chart/drawings/registry";
 import type { DrawingChange, DrawingPatch } from "../chart/drawings/state";
 
@@ -25,10 +24,13 @@ export interface DrawingSurface {
   finishDrawingText(result: TextResult): void;
   drawingStyle(action: StyleAction): void;
   setDrawingsHidden(on: boolean): void;
-  onDrawingCommit(cb: ((c: DrawingChange) => void) | null): void;
+  drawingMenu(action: MenuAction): void;
+  showHiddenDrawings(): void;
+  onDrawingCommit(cb: ((step: DrawingChange[]) => void) | null): void;
   onDrawingTool(cb: ((id: ToolId | null) => void) | null): void;
   onDrawingText(cb: ((edit: TextEdit | null) => void) | null): void;
   onDrawingStyle(cb: ((edit: StyleEdit | null) => void) | null): void;
+  onDrawingMenu(cb: ((edit: MenuEdit | null) => void) | null): void;
 }
 
 /** A failed store, or a failed load (the chart then shows no drawings). */
@@ -37,7 +39,7 @@ export interface DrawingError {
   message: string;
 }
 
-type DrawingBackend = Pick<Backend, "getDrawings" | "saveDrawing" | "deleteDrawing" | "getPositionOutcomes">;
+type DrawingBackend = Pick<Backend, "getDrawings" | "saveDrawings" | "deleteDrawings" | "getPositionOutcomes">;
 
 /** Where the magnet switch is kept between sessions. */
 export interface MagnetPref {
@@ -71,11 +73,13 @@ export const localMagnetPref: MagnetPref = {
 
 /** The fields the UI sends; the engine sets `updatedAt` and rescales from `priceScale` if it changed. */
 function toInput(d: Drawing): DrawingInput {
-  return { id: d.id, instrument: d.instrument, priceScale: d.priceScale, body: d.body, style: d.style, locked: d.locked, z: d.z };
+  return { id: d.id, instrument: d.instrument, priceScale: d.priceScale, body: d.body, style: d.style, locked: d.locked, hidden: d.hidden, z: d.z };
 }
 
-function positionOf(body: DrawingBody | undefined): PositionBody | null {
-  if (body?.kind !== "position") return null;
+/** The position of a shown position drawing; null for any other, and for a hidden one (not painted, so not asked). */
+function positionOf(d: Drawing | null | undefined): PositionBody | null {
+  const body = d?.body;
+  if (body?.kind !== "position" || d!.hidden) return null;
   const { side, entry, stop, take, endT } = body;
   return { side, entry, stop, take, endT };
 }
@@ -84,7 +88,8 @@ const sameId = (a: InstrumentId, b: InstrumentId) => a.source === b.source && a.
 
 /**
  * Keeps the chart's drawings and the backend in step: loads the instrument's drawings,
- * stores every change the chart reports (undo and redo included) one after another, and
+ * stores every step the chart reports (undo and redo included) one after another, each in
+ * one call, and
  * mirrors the chart's active tool and the magnet switch for the toolbar. A change that cannot be stored makes
  * it reload the list, so the chart never shows what the backend does not have, and keeps
  * the error to show until a later change is stored or another instrument opens.
@@ -100,12 +105,16 @@ export class DrawingController {
   textEdit: TextEdit | null = null;
   /** The style popover the chart has open; null when closed. */
   styleEdit: StyleEdit | null = null;
+  /** The context menu the chart has open; null when closed. */
+  menu: MenuEdit | null = null;
   /** Points snap to bar prices; kept across sessions. */
   magnet: boolean;
   /** Hide all: for this session only, the drawings are not changed. */
   hidden = false;
   /** Why the last store or load failed; null once a store succeeds or another instrument opens. */
   error: DrawingError | null = null;
+  /** Ids of the shown pair's drawings hidden one by one (stored `hidden`). */
+  private hiddenIds = new Set<string>();
   private surface: DrawingSurface | null = null;
   private id: InstrumentId | null = null;
   /** Token of the latest load. */
@@ -116,7 +125,7 @@ export class DrawingController {
   private stale = false;
   /** Stores run one after another, and a load waits for them. */
   private saving: Promise<void> = Promise.resolve();
-  /** The positions of the shown drawings, by id; a body is replaced, never changed in place. */
+  /** The positions of the shown drawings (not hidden one by one), by id; a body is replaced, never changed in place. */
   private positions = new Map<string, PositionBody>();
   private outcomes = new Map<string, PositionOutcome>();
   /** Timeframe of the outcomes, and of the candles last shown with their first and last bar time. */
@@ -151,17 +160,23 @@ export class DrawingController {
       this.styleEdit = edit;
       this.onChange();
     });
+    surface.onDrawingMenu((edit) => {
+      this.menu = edit;
+      this.onChange();
+    });
     surface.setDrawingsHidden(this.hidden);
     return () => {
       surface.onDrawingCommit(null);
       surface.onDrawingTool(null);
       surface.onDrawingText(null);
       surface.onDrawingStyle(null);
+      surface.onDrawingMenu(null);
       if (this.surface !== surface) return;
       this.surface = null;
       this.tool = null;
       this.textEdit = null;
       this.styleEdit = null;
+      this.menu = null;
       this.onChange();
     };
   }
@@ -224,6 +239,22 @@ export class DrawingController {
     this.hidden = on;
     this.surface?.setDrawingsHidden(on);
     this.onChange();
+  }
+
+  /** How many drawings of the shown pair are hidden one by one. */
+  get hiddenCount(): number {
+    return this.hiddenIds.size;
+  }
+
+  /** Shows them all again (one undo step); hide all is turned off too. */
+  showHidden(): void {
+    this.setHidden(false);
+    this.surface?.showHiddenDrawings();
+  }
+
+  /** Runs an item of the open context menu, or closes it (null). */
+  menuAction(action: MenuAction): void {
+    this.surface?.drawingMenu(action);
   }
 
   /** Changes style, lock or options of the drawing in the style popover: one stored change. */
@@ -309,10 +340,12 @@ export class DrawingController {
   /** Puts `list` on the chart and tracks its positions; their outcomes start unknown. */
   private show(list: Drawing[]): void {
     this.surface?.setDrawings(list);
+    this.hiddenIds = new Set(list.filter((d) => d.hidden).map((d) => d.id));
+    this.onChange();
     this.positions = new Map();
     this.asked.clear();
     for (const d of list) {
-      const p = positionOf(d.body);
+      const p = positionOf(d);
       if (p) this.positions.set(d.id, p);
     }
     this.setOutcomes(new Map());
@@ -362,19 +395,24 @@ export class DrawingController {
     if (next) this.setOutcomes(next);
   }
 
-  /** Keeps the positions in step with a change; a changed one loses its outcome and all are asked for again. */
-  private trackPosition(c: DrawingChange): void {
-    const id = (c.after ?? c.before)!.id;
-    const after = positionOf(c.after?.body);
-    if (!after && !this.positions.has(id)) return;
-    if (after) this.positions.set(id, after);
-    else this.positions.delete(id);
-    if (this.outcomes.has(id)) {
-      const next = new Map(this.outcomes);
-      next.delete(id);
-      this.setOutcomes(next);
+  /** Keeps the positions in step with changes; a changed one loses its outcome and all are asked for again, once. */
+  private trackPositions(step: readonly DrawingChange[]): void {
+    let next: Map<string, PositionOutcome> | null = null;
+    let ask = false;
+    for (const c of step) {
+      const id = (c.after ?? c.before)!.id;
+      const after = positionOf(c.after);
+      if (!after && !this.positions.has(id)) continue;
+      if (after) this.positions.set(id, after);
+      else this.positions.delete(id);
+      if (this.outcomes.has(id)) {
+        next ??= new Map(this.outcomes);
+        next.delete(id);
+      }
+      ask ||= after !== null;
     }
-    if (after) void this.refreshOutcomes();
+    if (next) this.setOutcomes(next);
+    if (ask) void this.refreshOutcomes();
   }
 
   private setError(error: DrawingError | null): void {
@@ -383,20 +421,46 @@ export class DrawingController {
     this.onChange();
   }
 
-  private store(c: DrawingChange): void {
+  /** Keeps the count of hidden drawings in step with a change. */
+  private trackHidden(c: DrawingChange): void {
+    const id = (c.after ?? c.before)!.id;
+    const was = this.hiddenIds.has(id);
+    const now = c.after?.hidden === true;
+    if (was === now) return;
+    if (now) this.hiddenIds.add(id);
+    else this.hiddenIds.delete(id);
+    this.onChange();
+  }
+
+  /** Stores one step in one call: all of it or none (a step only saves or only deletes). */
+  private store(step: DrawingChange[]): void {
+    if (step.length === 0) return;
     this.commits++;
-    this.trackPosition(c);
+    this.trackPositions(step);
+    for (const c of step) this.trackHidden(c);
     const id = this.id;
-    const sent = c.after;
-    const run = sent
-      ? () =>
-          this.backend.saveDrawing(toInput(sent)).then((saved) => {
-            // Rescaled: the chart must not keep showing (and later send) the old-scale copy.
-            if (this.id !== id || saved.priceScale === sent.priceScale) return;
-            this.surface?.drawingStored(sent, saved);
-            this.trackPosition({ before: sent, after: saved });
-          })
-      : () => this.backend.deleteDrawing(c.before!.id);
+    const saves: Drawing[] = [];
+    const deletes: string[] = [];
+    for (const c of step) {
+      if (c.after) saves.push(c.after);
+      else deletes.push(c.before!.id);
+    }
+    const run = async () => {
+      if (saves.length > 0) {
+        const stored = await this.backend.saveDrawings(saves.map(toInput));
+        if (this.id !== id) return;
+        // Rescaled: the chart must not keep showing (and later send) the old-scale copy.
+        const rescaled: DrawingChange[] = [];
+        stored.forEach((saved, i) => {
+          const sent = saves[i]!;
+          if (saved.priceScale === sent.priceScale) return;
+          this.surface?.drawingStored(sent, saved);
+          rescaled.push({ before: sent, after: saved });
+        });
+        this.trackPositions(rescaled);
+      }
+      if (deletes.length > 0) await this.backend.deleteDrawings(deletes);
+    };
     this.saving = this.saving.then(run).then(
       () => {
         if (this.id !== id) return;
@@ -404,7 +468,7 @@ export class DrawingController {
         if (this.stale && id) void this.load(id, false);
       },
       (e: unknown) => {
-        console.error("storing a drawing failed", e);
+        console.error("storing drawings failed", e);
         if (this.id === id) this.setError({ kind: "save", message: toProblem(e).message });
         if (this.id) void this.load(this.id, false);
       },

@@ -1,6 +1,6 @@
 import { Brush } from "lucide-react";
 import type { DrawingBody } from "../../../backend/types";
-import { distToSegment, simplifyToLimit } from "../geometry";
+import { boxesOverlap, distToSegment, lineTouchesBox, simplifyToLimit } from "../geometry";
 import type { ToolDef } from "../registry";
 
 type BrushBody = Extract<DrawingBody, { kind: "brush" }>;
@@ -94,8 +94,26 @@ export const brushTool: ToolDef<BrushBody, BrushGeom> = {
     return false;
   },
 
+  touches(g, box) {
+    if (!boxesOverlap(g.left, g.top, g.right, g.bottom, box)) return false;
+    for (let i = 1; i < g.xs.length; i++) {
+      if (lineTouchesBox(g.xs[i - 1]!, g.ys[i - 1]!, g.xs[i]!, g.ys[i]!, false, false, box)) return true;
+    }
+    return false;
+  },
+
+  /** No reshaping: a stroke only moves. */
   handles() {
     return [];
+  },
+
+  /** Its two ends. */
+  markers(g) {
+    const n = g.xs.length - 1;
+    return [
+      { x: g.xs[0]!, y: g.ys[0]! },
+      { x: g.xs[n]!, y: g.ys[n]! },
+    ];
   },
 
   moveBy(body, m) {

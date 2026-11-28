@@ -533,7 +533,7 @@ impl Store {
     /// stored and still counts toward the cap.
     pub fn drawings(&self, id: &InstrumentId) -> Result<Vec<Drawing>, StoreError> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT id, price_scale, body, style, locked, z, updated_at
+            "SELECT id, price_scale, body, style, locked, hidden, z, updated_at
              FROM drawings WHERE source = ?1 AND symbol = ?2 ORDER BY z, id",
         )?;
         let rows = stmt.query_map(params![id.source, id.symbol], |row| {
@@ -543,13 +543,14 @@ impl Store {
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
                 row.get::<_, bool>(4)?,
-                row.get::<_, i64>(5)?,
+                row.get::<_, bool>(5)?,
                 row.get::<_, i64>(6)?,
+                row.get::<_, i64>(7)?,
             ))
         })?;
         let mut out = Vec::new();
         for row in rows {
-            let (drawing_id, price_scale, body, style, locked, z, updated_at) = row?;
+            let (drawing_id, price_scale, body, style, locked, hidden, z, updated_at) = row?;
             // A row this version cannot read (a kind from a later one) is skipped, not fatal.
             let parsed = serde_json::from_str(&body)
                 .and_then(|body| serde_json::from_str(&style).map(|style| (body, style)));
@@ -567,6 +568,7 @@ impl Store {
                 body,
                 style,
                 locked,
+                hidden,
                 z,
                 updated_at,
             });
@@ -574,48 +576,71 @@ impl Store {
         Ok(out)
     }
 
-    /// Inserts or replaces a drawing by id. Fails when its instrument already holds
-    /// [`MAX_DRAWINGS_PER_INSTRUMENT`] other drawings. In the same transaction it deletes
-    /// the alerts that can no longer follow it (it is no longer an `hline` or `trend`, or
-    /// it moved to another pair); returns how many.
+    /// Inserts or replaces a drawing by id; see [`Store::save_drawings`].
     pub fn upsert_drawing(&mut self, d: &Drawing) -> Result<usize, StoreError> {
-        let body = serde_json::to_string(&d.body)?;
-        let style = serde_json::to_string(&d.style)?;
-        let tx = write(&mut self.conn)?;
-        let others: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM drawings WHERE source = ?1 AND symbol = ?2 AND id != ?3",
-            params![d.instrument.source, d.instrument.symbol, d.id],
-            |row| row.get(0),
-        )?;
-        if others >= limit_to_i64(MAX_DRAWINGS_PER_INSTRUMENT)? {
-            return Err(StoreError::TooManyDrawings {
-                max: MAX_DRAWINGS_PER_INSTRUMENT,
-            });
+        self.save_drawings(std::slice::from_ref(d))
+    }
+
+    /// Inserts or replaces drawings by id in one transaction: all of them or none. Fails
+    /// when an instrument would then hold more than [`MAX_DRAWINGS_PER_INSTRUMENT`]. In the
+    /// same transaction it deletes the alerts that can no longer follow their drawing (it is
+    /// no longer an `hline` or `trend`, or it moved to another pair); returns how many.
+    pub fn save_drawings(&mut self, list: &[Drawing]) -> Result<usize, StoreError> {
+        if list.is_empty() {
+            return Ok(0);
         }
-        tx.execute(
-            "INSERT OR REPLACE INTO drawings
-                (id, source, symbol, price_scale, body, style, locked, z, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                d.id,
-                d.instrument.source,
-                d.instrument.symbol,
-                d.price_scale,
-                body,
-                style,
-                d.locked,
-                d.z,
-                d.updated_at
-            ],
-        )?;
-        let removed = if is_line(&d.body) {
-            tx.execute(
+        let tx = write(&mut self.conn)?;
+        let mut removed = 0;
+        {
+            let mut insert = tx.prepare_cached(
+                "INSERT OR REPLACE INTO drawings
+                    (id, source, symbol, price_scale, body, style, locked, hidden, z, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            )?;
+            let mut off_pair = tx.prepare_cached(
                 "DELETE FROM alerts WHERE drawing_id = ?1 AND (source != ?2 OR symbol != ?3)",
-                params![d.id, d.instrument.source, d.instrument.symbol],
-            )?
-        } else {
-            tx.execute("DELETE FROM alerts WHERE drawing_id = ?1", [&d.id])?
-        };
+            )?;
+            let mut all = tx.prepare_cached("DELETE FROM alerts WHERE drawing_id = ?1")?;
+            for d in list {
+                insert.execute(params![
+                    d.id,
+                    d.instrument.source,
+                    d.instrument.symbol,
+                    d.price_scale,
+                    serde_json::to_string(&d.body)?,
+                    serde_json::to_string(&d.style)?,
+                    d.locked,
+                    d.hidden,
+                    d.z,
+                    d.updated_at
+                ])?;
+                removed += if is_line(&d.body) {
+                    off_pair.execute(params![d.id, d.instrument.source, d.instrument.symbol])?
+                } else {
+                    all.execute([&d.id])?
+                };
+            }
+            // The cap holds for the result: a batch may move one away and add another.
+            let mut count = tx.prepare_cached(
+                "SELECT COUNT(*) FROM drawings WHERE source = ?1 AND symbol = ?2",
+            )?;
+            let limit = limit_to_i64(MAX_DRAWINGS_PER_INSTRUMENT)?;
+            let mut seen = std::collections::HashSet::new();
+            for d in list {
+                if !seen.insert(&d.instrument) {
+                    continue;
+                }
+                let n: i64 = count
+                    .query_row(params![d.instrument.source, d.instrument.symbol], |row| {
+                        row.get(0)
+                    })?;
+                if n > limit {
+                    return Err(StoreError::TooManyDrawings {
+                        max: MAX_DRAWINGS_PER_INSTRUMENT,
+                    });
+                }
+            }
+        }
         tx.commit()?;
         Ok(removed)
     }
@@ -623,9 +648,22 @@ impl Store {
     /// Removes a drawing and its alerts, atomically; an unknown id is not an error.
     /// Returns how many alerts went with it.
     pub fn delete_drawing(&mut self, id: &str) -> Result<usize, StoreError> {
+        self.delete_drawings(&[id.to_owned()])
+    }
+
+    /// Removes drawings and their alerts in one transaction; unknown ids are not an error.
+    /// Returns how many alerts went with them.
+    pub fn delete_drawings(&mut self, ids: &[String]) -> Result<usize, StoreError> {
         let tx = write(&mut self.conn)?;
-        let alerts = tx.execute("DELETE FROM alerts WHERE drawing_id = ?1", [id])?;
-        tx.execute("DELETE FROM drawings WHERE id = ?1", [id])?;
+        let mut alerts = 0;
+        {
+            let mut del_alerts = tx.prepare_cached("DELETE FROM alerts WHERE drawing_id = ?1")?;
+            let mut del = tx.prepare_cached("DELETE FROM drawings WHERE id = ?1")?;
+            for id in ids {
+                alerts += del_alerts.execute([id])?;
+                del.execute([id])?;
+            }
+        }
         tx.commit()?;
         Ok(alerts)
     }
@@ -635,7 +673,7 @@ impl Store {
         let row = self
             .conn
             .query_row(
-                "SELECT source, symbol, price_scale, body, style, locked, z, updated_at
+                "SELECT source, symbol, price_scale, body, style, locked, hidden, z, updated_at
                  FROM drawings WHERE id = ?1",
                 [id],
                 |row| {
@@ -648,13 +686,15 @@ impl Store {
                         row.get::<_, String>(3)?,
                         row.get::<_, String>(4)?,
                         row.get::<_, bool>(5)?,
-                        row.get::<_, i64>(6)?,
+                        row.get::<_, bool>(6)?,
                         row.get::<_, i64>(7)?,
+                        row.get::<_, i64>(8)?,
                     ))
                 },
             )
             .optional()?;
-        let Some((instrument, price_scale, body, style, locked, z, updated_at)) = row else {
+        let Some((instrument, price_scale, body, style, locked, hidden, z, updated_at)) = row
+        else {
             return Ok(None);
         };
         let (Ok(body), Ok(style)) = (serde_json::from_str(&body), serde_json::from_str(&style))
@@ -668,6 +708,7 @@ impl Store {
             body,
             style,
             locked,
+            hidden,
             z,
             updated_at,
         }))
