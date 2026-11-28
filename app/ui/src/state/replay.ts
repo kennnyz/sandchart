@@ -127,6 +127,10 @@ export class ReplayController {
   private feed: ReplayFeed | null = null;
   private switchTo: ((id: InstrumentId, tf: TimeframeCode) => void) | null = null;
   private queue: Promise<void> = Promise.resolve();
+  /** Bumped by cancelling a pick and by exit: a start in flight from before is stale. */
+  private generation = 0;
+  /** A start is in flight; another click starts nothing more. */
+  private starting = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
@@ -161,17 +165,39 @@ export class ReplayController {
   }
 
   cancelPick(): void {
-    if (this.phase === "picking") this.set({ phase: "off" });
+    if (this.phase !== "picking") return;
+    this.generation++;
+    this.set({ phase: "off" });
   }
 
-  /** Starts at the bar of `(id, tf)` opening at `time` (a bar's own open time). */
+  /**
+   * Starts at the bar of `(id, tf)` opening at `time` (a bar's own open time). A start that was
+   * cancelled (or overtaken by exit) while in flight ends the engine's replay again and shows nothing.
+   */
   start(id: InstrumentId, tf: TimeframeCode, time: number): Promise<void> {
-    if (this.phase !== "picking") return Promise.resolve();
+    if (this.phase !== "picking" || this.starting) return Promise.resolve();
+    this.starting = true;
+    const generation = this.generation;
+    const stale = () => generation !== this.generation || this.phase !== "picking";
     return this.run(async () => {
-      const st = await this.backend.replayStart(id, tf, time);
-      this.cursor = 0;
-      this.phase = "on";
-      this.show(st);
+      try {
+        let st: ReplayState;
+        try {
+          st = await this.backend.replayStart(id, tf, time);
+        } catch (e) {
+          if (stale()) return;
+          throw e;
+        }
+        if (stale()) {
+          await this.backend.replayExit();
+          return;
+        }
+        this.cursor = 0;
+        this.phase = "on";
+        this.show(st);
+      } finally {
+        this.starting = false;
+      }
     }, () => this.set({ phase: "off" }));
   }
 
@@ -281,6 +307,7 @@ export class ReplayController {
    */
   exit(reload = true): Promise<void> {
     this.pause();
+    this.generation++;
     if (this.phase === "picking") {
       this.set({ phase: "off" });
       return Promise.resolve();

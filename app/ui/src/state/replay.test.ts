@@ -78,6 +78,67 @@ describe("replay controller", () => {
     expect(c.error).toBe(`no cached 1h bar opens at ${page.time.at(-1)! + 1}`);
   });
 
+  /** `replayStart` held until `release()`: the call is in flight meanwhile. */
+  function holdStart(backend: Awaited<ReturnType<typeof setup>>["backend"]) {
+    const real = backend.replayStart.bind(backend);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const start = vi.spyOn(backend, "replayStart").mockImplementation(async (...args) => {
+      await gate;
+      return real(...args);
+    });
+    const exit = vi.spyOn(backend, "replayExit");
+    return { start, exit, release: () => release() };
+  }
+
+  it("a start cancelled while in flight ends the engine's replay and stays off", async () => {
+    const { c, backend, page, feed } = await setup();
+    const held = holdStart(backend);
+    c.pick();
+    const started = c.start(id, "1h", page.time.at(-50)!);
+    c.cancelPick();
+    held.release();
+    await started;
+    expect(c.phase).toBe("off");
+    expect(c.view).toBeNull();
+    expect(c.error).toBeNull();
+    expect(feed.shows).toBe(0);
+    expect(held.exit).toHaveBeenCalledTimes(1);
+    await expect(backend.replayState(0, 0)).rejects.toMatchObject({ message: "no replay is open" });
+  });
+
+  it("a start overtaken by another chart (exit while picking) stays off", async () => {
+    const { c, backend, page, feed } = await setup();
+    const held = holdStart(backend);
+    c.pick();
+    const started = c.start(id, "1h", page.time.at(-50)!);
+    await c.exit(false);
+    held.release();
+    await started;
+    expect(c.phase).toBe("off");
+    expect(feed.shows).toBe(0);
+    await expect(backend.replayState(0, 0)).rejects.toMatchObject({ message: "no replay is open" });
+    // Picking again later works.
+    held.start.mockRestore();
+    c.pick();
+    await c.start(id, "1h", page.time.at(-50)!);
+    expect(c.phase).toBe("on");
+  });
+
+  it("a second click while a start is in flight starts nothing more", async () => {
+    const { c, backend, page, feed } = await setup();
+    const held = holdStart(backend);
+    c.pick();
+    const first = c.start(id, "1h", page.time.at(-50)!);
+    const second = c.start(id, "1h", page.time.at(-40)!);
+    held.release();
+    await Promise.all([first, second]);
+    expect(held.start).toHaveBeenCalledTimes(1);
+    expect(c.phase).toBe("on");
+    expect(c.view!.time).toBe(page.time.at(-50));
+    expect(feed.shows).toBe(1);
+  });
+
   it("steps one bar at a time and appends only the new bars", async () => {
     const { c, shown, page, feed } = await started();
     await c.step();
