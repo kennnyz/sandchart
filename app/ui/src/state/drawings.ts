@@ -29,6 +29,12 @@ export interface DrawingSurface {
   onDrawingStyle(cb: ((edit: StyleEdit | null) => void) | null): void;
 }
 
+/** A failed store, or a failed load (the chart then shows no drawings). */
+export interface DrawingError {
+  kind: "save" | "load";
+  message: string;
+}
+
 type DrawingBackend = Pick<Backend, "getDrawings" | "saveDrawing" | "deleteDrawing" | "getPositionOutcomes">;
 
 /** Where the magnet switch is kept between sessions. */
@@ -93,12 +99,14 @@ export class DrawingController {
   magnet: boolean;
   /** Hide all: for this session only, the drawings are not changed. */
   hidden = false;
-  /** Why the last store failed; null once a store succeeds or another instrument opens. */
-  error: string | null = null;
+  /** Why the last store or load failed; null once a store succeeds or another instrument opens. */
+  error: DrawingError | null = null;
   private surface: DrawingSurface | null = null;
   private id: InstrumentId | null = null;
   /** Token of the latest load. */
   private token = 0;
+  /** The last load failed: the chart may not show what is stored. */
+  private stale = false;
   /** Stores run one after another, and a load waits for them. */
   private saving: Promise<void> = Promise.resolve();
   /** The positions of the shown drawings, by id; a body is replaced, never changed in place. */
@@ -239,20 +247,29 @@ export class DrawingController {
 
   private async load(id: InstrumentId, blank: boolean): Promise<void> {
     const token = ++this.token;
-    if (blank) {
-      this.surface?.setDrawings([]);
-      this.positions = new Map();
-      this.setOutcomes(new Map());
-    }
+    if (blank) this.show([]);
     await this.saving;
     let list: Drawing[];
     try {
       list = await this.backend.getDrawings(id);
     } catch (e) {
       console.error("loading the drawings failed", e);
+      if (token !== this.token) return;
+      // Whatever the chart shows may not be stored: show nothing and say why. The next
+      // stored change loads the list again.
+      this.stale = true;
+      this.show([]);
+      this.setError({ kind: "load", message: toProblem(e).message });
       return;
     }
     if (token !== this.token) return;
+    this.stale = false;
+    this.show(list);
+    void this.refreshOutcomes();
+  }
+
+  /** Puts `list` on the chart and tracks its positions; their outcomes start unknown. */
+  private show(list: Drawing[]): void {
     this.surface?.setDrawings(list);
     this.positions = new Map();
     for (const d of list) {
@@ -260,7 +277,6 @@ export class DrawingController {
       if (p) this.positions.set(d.id, p);
     }
     this.setOutcomes(new Map());
-    void this.refreshOutcomes();
   }
 
   private setOutcomes(outcomes: Map<string, PositionOutcome>): void {
@@ -307,8 +323,8 @@ export class DrawingController {
     if (after) void this.refreshOutcomes();
   }
 
-  private setError(error: string | null): void {
-    if (error === this.error) return;
+  private setError(error: DrawingError | null): void {
+    if (error?.kind === this.error?.kind && error?.message === this.error?.message) return;
     this.error = error;
     this.onChange();
   }
@@ -321,11 +337,13 @@ export class DrawingController {
       : () => this.backend.deleteDrawing(c.before!.id);
     this.saving = this.saving.then(run).then(
       () => {
-        if (this.id === id) this.setError(null);
+        if (this.id !== id) return;
+        this.setError(null);
+        if (this.stale && id) void this.load(id, false);
       },
       (e: unknown) => {
         console.error("storing a drawing failed", e);
-        if (this.id === id) this.setError(toProblem(e).message);
+        if (this.id === id) this.setError({ kind: "save", message: toProblem(e).message });
         if (this.id) void this.load(this.id, false);
       },
     );

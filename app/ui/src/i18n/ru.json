@@ -138,5 +138,6 @@
   "drawingStyle.levels": "Уровни",
   "drawingStyle.lock": "Закреплён",
   "drawingStyle.delete": "Удалить",
+  "drawings.loadError": "Не удалось загрузить рисунки, поэтому они не показаны.",
   "drawings.saveError": "Не удалось сохранить рисунок. На графике то, что сохранено."
 }

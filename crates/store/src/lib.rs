@@ -418,7 +418,9 @@ impl Store {
         Ok(())
     }
 
-    /// The drawings of one instrument in paint order: by `z`, then by id.
+    /// The drawings of one instrument in paint order: by `z`, then by id. A row whose body or
+    /// style cannot be read (a kind from a later version) is left out and logged; it stays
+    /// stored and still counts toward the cap.
     pub fn drawings(&self, id: &InstrumentId) -> Result<Vec<Drawing>, StoreError> {
         let mut stmt = self.conn.prepare_cached(
             "SELECT id, price_scale, body, style, locked, z, updated_at
@@ -438,12 +440,22 @@ impl Store {
         let mut out = Vec::new();
         for row in rows {
             let (drawing_id, price_scale, body, style, locked, z, updated_at) = row?;
+            // A row this version cannot read (a kind from a later one) is skipped, not fatal.
+            let parsed = serde_json::from_str(&body)
+                .and_then(|body| serde_json::from_str(&style).map(|style| (body, style)));
+            let (body, style) = match parsed {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("drawing {drawing_id} cannot be read: {e}");
+                    continue;
+                }
+            };
             out.push(Drawing {
                 id: drawing_id,
                 instrument: id.clone(),
                 price_scale,
-                body: serde_json::from_str(&body)?,
-                style: serde_json::from_str(&style)?,
+                body,
+                style,
                 locked,
                 z,
                 updated_at,

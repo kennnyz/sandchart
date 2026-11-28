@@ -138,5 +138,6 @@
   "drawingStyle.levels": "Levels",
   "drawingStyle.lock": "Locked",
   "drawingStyle.delete": "Delete",
+  "drawings.loadError": "The drawings could not be loaded, so none are shown.",
   "drawings.saveError": "A drawing could not be saved. The chart shows what is stored."
 }

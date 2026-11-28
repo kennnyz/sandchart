@@ -355,6 +355,34 @@ fn drawings_round_trip_per_instrument_ordered_by_z_then_id() {
 }
 
 #[test]
+fn an_unreadable_drawing_row_is_left_out_of_the_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sandchart.db");
+    let mut store = Store::open(&path).unwrap();
+    store.upsert_drawing(&drawing("a", "BTCUSDT", 0)).unwrap();
+    store.upsert_drawing(&drawing("c", "BTCUSDT", 2)).unwrap();
+    // A later version wrote a kind this one does not know, and a style it cannot read.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute(
+        "INSERT INTO drawings (id, source, symbol, price_scale, body, style, locked, z, updated_at)
+         VALUES ('b', 'binance', 'BTCUSDT', 2, '{\"kind\":\"spiral\"}',
+                 '{\"color\":0,\"width\":1,\"dash\":false}', 0, 1, 0),
+                ('d', 'binance', 'BTCUSDT', 2, '{\"kind\":\"hline\",\"p\":1}', 'nope', 0, 3, 0)",
+        [],
+    )
+    .unwrap();
+    let got = store.drawings(&id("BTCUSDT")).unwrap();
+    let ids: Vec<&str> = got.iter().map(|d| d.id.as_str()).collect();
+    assert_eq!(ids, ["a", "c"]);
+    // It stays stored and counts toward the cap.
+    store.delete_drawing("a").unwrap();
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM drawings", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 3);
+}
+
+#[test]
 fn upsert_replaces_a_drawing_and_delete_removes_it() {
     let mut store = Store::open_in_memory().unwrap();
     store.upsert_drawing(&drawing("a", "BTCUSDT", 0)).unwrap();

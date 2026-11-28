@@ -202,10 +202,10 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
       {drawingError !== null && (
         <Banner
           testId="drawing-error"
-          text={t("drawings.saveError")}
+          text={t(drawingError.kind === "load" ? "drawings.loadError" : "drawings.saveError")}
           retryAt={null}
           retryLabel={() => ""}
-          detail={drawingError}
+          detail={drawingError.message}
         />
       )}
       <div

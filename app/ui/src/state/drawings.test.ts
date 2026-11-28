@@ -84,7 +84,7 @@ interface Pending {
 function fakeBackend(stored: Drawing[]) {
   const calls: string[] = [];
   const pending: Pending[] = [];
-  const loads: { id: InstrumentId; resolve: (l: Drawing[]) => void }[] = [];
+  const loads: { id: InstrumentId; resolve: (l: Drawing[]) => void; reject: (e: unknown) => void }[] = [];
   const resolves: {
     tf: TimeframeCode;
     positions: { id: string; position: PositionBody }[];
@@ -94,7 +94,7 @@ function fakeBackend(stored: Drawing[]) {
   const backend = {
     getDrawings: (id: InstrumentId) => {
       calls.push(`get ${id.symbol}`);
-      return new Promise<Drawing[]>((resolve) => loads.push({ id, resolve }));
+      return new Promise<Drawing[]>((resolve, reject) => loads.push({ id, resolve, reject }));
     },
     saveDrawing: async (d: DrawingInput) => {
       calls.push(`save ${d.id} ${JSON.stringify(Object.keys(d).sort())}`);
@@ -182,6 +182,50 @@ describe("DrawingController", () => {
     expect(console.error).toHaveBeenCalled();
   });
 
+  it("shows the error when the drawings cannot be loaded, and loads again once a change is stored", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const b = fakeBackend([]);
+    const s = fakeSurface();
+    const c = new DrawingController(b.backend, () => {});
+    c.attach(s.surface);
+    void c.open(BTC);
+    await flush();
+    b.loads[0]!.reject({ code: "other", message: "database is locked" });
+    await flush();
+    expect(c.error).toEqual({ kind: "load", message: "database is locked" });
+    expect(s.sets.at(-1)).toEqual([]);
+    // The chart is not what is stored: the next stored change brings the full list back.
+    s.commit({ before: null, after: drawing("x") });
+    await flush();
+    b.pending[0]!.resolve();
+    await flush();
+    expect(c.error).toBeNull();
+    expect(b.calls.at(-1)).toBe("get BTCUSDT");
+    b.loads[1]!.resolve([drawing("a"), drawing("x")]);
+    await flush();
+    expect(s.sets.at(-1)).toEqual([drawing("a"), drawing("x")]);
+  });
+
+  it("never keeps an unsaved drawing on the chart when the reload after a failed save fails too", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const b = fakeBackend([]);
+    const s = fakeSurface();
+    const c = new DrawingController(b.backend, () => {});
+    c.attach(s.surface);
+    void c.open(BTC);
+    await flush();
+    b.loads[0]!.resolve([drawing("a")]);
+    await flush();
+    s.commit({ before: null, after: drawing("x") });
+    await flush();
+    b.pending[0]!.reject({ code: "other", message: "disk full" });
+    await flush();
+    b.loads[1]!.reject({ code: "other", message: "disk gone" });
+    await flush();
+    expect(c.error).toEqual({ kind: "load", message: "disk gone" });
+    expect(s.sets.at(-1)).toEqual([]);
+  });
+
   it("keeps the error of a failed store until a later one succeeds or another instrument opens", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const b = fakeBackend([]);
@@ -195,7 +239,7 @@ describe("DrawingController", () => {
     await flush();
     b.pending[0]!.reject({ code: "other", message: "disk full" });
     await flush();
-    expect(c.error).toBe("disk full");
+    expect(c.error).toEqual({ kind: "save", message: "disk full" });
     b.loads[1]!.resolve([]);
     s.commit({ before: null, after: drawing("y") });
     await flush();
@@ -207,7 +251,7 @@ describe("DrawingController", () => {
     await flush();
     b.pending[2]!.reject(new Error("locked"));
     await flush();
-    expect(c.error).toBe("locked");
+    expect(c.error).toEqual({ kind: "save", message: "locked" });
     void c.open(ETH);
     expect(c.error).toBeNull();
   });
