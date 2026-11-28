@@ -334,8 +334,8 @@ The server adds no host. It talks only to the market-data hosts in [Privacy and 
 
 ## Troubleshooting
 
-- **"database schema version 5 is newer than supported version 4"**: the app is newer than the server. Install the server of the same version.
-- **"database schema version 3 is older than this program's version 4; update the Sandchart app first"**: the server is newer than the app. Update the app and start it once; it upgrades its database, and the server then opens it.
+- **"database schema version 6 is newer than supported version 5"**: the app is newer than the server. Install the server of the same version.
+- **"database schema version 3 is older than this program's version 5; update the Sandchart app first"**: the server is newer than the app. Update the app and start it once; it upgrades its database, and the server then opens it.
 - **"database is locked"**: the other program held a write for more than 5 seconds. Try again.
 - **The first indicator call is slow**: the server compiles the built-in indicators once, unless the app has already done it on this machine.
 - The server writes its own messages to stderr; MCP clients usually show them in their log of the server.
