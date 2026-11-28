@@ -186,7 +186,6 @@ describe("mock backend", () => {
       body,
       style: { color: 2, width: 1, dash: false },
       locked: false,
-      hidden: false,
       z,
     });
     const long = (over: Partial<PositionBody> = {}): DrawingBody => ({

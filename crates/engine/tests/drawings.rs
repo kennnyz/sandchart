@@ -41,7 +41,6 @@ fn drawing(drawing_id: &str, body: DrawingBody) -> Drawing {
             dash: false,
         },
         locked: false,
-        hidden: false,
         z: 0,
         updated_at: 0,
     }

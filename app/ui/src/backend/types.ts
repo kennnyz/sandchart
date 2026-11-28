@@ -211,7 +211,6 @@ export interface DrawingInput {
   body: DrawingBody;
   style: DrawingStyle;
   locked: boolean;
-  hidden: boolean;
   /** Paint order, lowest first. */
   z: number;
 }

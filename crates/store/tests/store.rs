@@ -298,7 +298,6 @@ fn drawing(drawing_id: &str, symbol: &str, z: i64) -> Drawing {
             dash: true,
         },
         locked: true,
-        hidden: false,
         z,
         updated_at: 1_700_000_000_000,
     }
@@ -333,7 +332,7 @@ fn drawings_round_trip_per_instrument_ordered_by_z_then_id() {
         take: 85,
         end_t: 20,
     });
-    position.hidden = true;
+    position.locked = false;
     let items = [
         drawing("b", "BTCUSDT", 0),
         position.clone(),

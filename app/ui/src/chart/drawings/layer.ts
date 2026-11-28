@@ -601,7 +601,7 @@ export class DrawingLayer {
 
   /** The tool of a drawing that is shown and inside the visible times. */
   private visibleTool(d: Drawing): ToolDef | undefined {
-    if (d.hidden || this.hiddenAll) return undefined;
+    if (this.hiddenAll) return undefined;
     const tool = toolFor(d.body.kind);
     if (!tool) return undefined;
     const [lo, hi] = tool.timeSpan(d.body);

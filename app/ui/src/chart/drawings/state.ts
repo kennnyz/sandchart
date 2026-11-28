@@ -138,7 +138,6 @@ export class DrawingState {
       body: tool.create(this.points, c),
       style: { ...DEFAULT_STYLE },
       locked: false,
-      hidden: false,
       z: this.drawings.reduce((z, o) => Math.max(z, o.z), 0) + 1,
       updatedAt: 0,
     };

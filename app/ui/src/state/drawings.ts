@@ -61,7 +61,7 @@ export const localMagnetPref: MagnetPref = {
 
 /** The fields the UI sends; the engine sets `priceScale` and `updatedAt`. */
 function toInput(d: Drawing): DrawingInput {
-  return { id: d.id, instrument: d.instrument, body: d.body, style: d.style, locked: d.locked, hidden: d.hidden, z: d.z };
+  return { id: d.id, instrument: d.instrument, body: d.body, style: d.style, locked: d.locked, z: d.z };
 }
 
 function positionOf(body: DrawingBody | undefined): PositionBody | null {

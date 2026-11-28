@@ -16,7 +16,6 @@ function drawing(id: string, p = 100, instrument: InstrumentId = BTC, body?: Dra
     body: body ?? { kind: "hline", p },
     style: { color: 0, width: 2, dash: false },
     locked: false,
-    hidden: false,
     z: 1,
     updatedAt: 5,
   };
@@ -141,7 +140,7 @@ describe("DrawingController", () => {
     s.commit({ before: null, after: d });
     s.commit({ before: d, after: null });
     await flush();
-    expect(b.calls).toEqual([`save x ${JSON.stringify(["body", "hidden", "id", "instrument", "locked", "style", "z"])}`]);
+    expect(b.calls).toEqual([`save x ${JSON.stringify(["body", "id", "instrument", "locked", "style", "z"])}`]);
     b.pending[0]!.resolve();
     await flush();
     expect(b.calls.at(-1)).toBe("delete x");

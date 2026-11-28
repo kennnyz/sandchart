@@ -85,7 +85,6 @@ pub struct Drawing {
     pub body: DrawingBody,
     pub style: Style,
     pub locked: bool,
-    pub hidden: bool,
     /// Paint order, lowest first.
     pub z: i64,
     /// Ms since the Unix epoch, set by the engine on save.
@@ -282,7 +281,6 @@ mod tests {
                 dash: false,
             },
             locked: false,
-            hidden: false,
             z: 0,
             updated_at: 0,
         }

@@ -104,7 +104,6 @@ describe("tauri backend", () => {
       body: { kind: "hline" as const, p: 1 },
       style: { color: 0, width: 1, dash: false },
       locked: false,
-      hidden: false,
       z: 0,
     };
     await tauriBackend.getDrawings(id);

@@ -6,7 +6,6 @@ CREATE TABLE drawings (
     body        TEXT    NOT NULL,
     style       TEXT    NOT NULL,
     locked      INTEGER NOT NULL,
-    hidden      INTEGER NOT NULL,
     z           INTEGER NOT NULL,
     updated_at  INTEGER NOT NULL
 );

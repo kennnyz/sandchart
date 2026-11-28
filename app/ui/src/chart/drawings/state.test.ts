@@ -29,7 +29,6 @@ function stored(id: string, z: number, p = 50, locked = false): Drawing {
     body: { kind: "hline", p },
     style: { color: 0, width: 2, dash: false },
     locked,
-    hidden: false,
     z,
     updatedAt: 1,
   };
