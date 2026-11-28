@@ -31,6 +31,8 @@ export interface MenuProps {
   width: number;
   height: number;
   fixed?: boolean;
+  /** As wide as its items need, for short ones ("1x", "10x"). */
+  compact?: boolean;
   onClose(): void;
 }
 
@@ -43,7 +45,7 @@ const MARGIN = 8;
  * Tab and a press outside close it. Focus moves to the first item when it opens and back
  * to where it was when it closes.
  */
-export function Menu({ items, label, testId, x, y, width, height, fixed, onClose }: MenuProps) {
+export function Menu({ items, label, testId, x, y, width, height, fixed, compact, onClose }: MenuProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [at, setAt] = useState({ left: x + GAP, top: y + GAP });
 
@@ -107,7 +109,7 @@ export function Menu({ items, label, testId, x, y, width, height, fixed, onClose
   return (
     <div
       ref={ref}
-      className="ctx-menu"
+      className={compact ? "ctx-menu compact" : "ctx-menu"}
       role="menu"
       aria-label={label}
       data-testid={testId}

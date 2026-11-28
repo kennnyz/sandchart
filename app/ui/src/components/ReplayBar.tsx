@@ -499,6 +499,7 @@ export function ReplayBar({ replay: r, range, onDate }: ReplayBarProps) {
           // Only the room above the button: the menu always opens upwards, over the chart.
           height={menu.y}
           fixed
+          compact={menu.id === "speed"}
           onClose={closeMenu}
         />
       )}

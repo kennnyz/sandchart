@@ -1675,6 +1675,9 @@ button:disabled {
   border-radius: 8px;
   box-shadow: var(--shadow);
 }
+.ctx-menu.compact {
+  min-width: 0;
+}
 .ctx-menu-item {
   height: 28px;
   padding: 0 8px;

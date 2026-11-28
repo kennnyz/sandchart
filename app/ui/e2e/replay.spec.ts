@@ -101,6 +101,8 @@ test("replay_start_step_play_trade_save_open_exit", async ({ page }) => {
 
   // Play at 10 bars a second, pause with Space.
   await page.getByTestId("replay-speed").click();
+  // Only as wide as "10x" needs.
+  expect((await page.getByTestId("replay-speed-menu").boundingBox())!.width).toBeLessThan(100);
   await page.getByTestId("replay-speed-menu-10").click();
   await expect(page.getByTestId("replay-speed")).toHaveText("10x");
   await page.keyboard.press("Space");
