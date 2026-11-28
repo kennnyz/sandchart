@@ -13,7 +13,7 @@ The constraints: no exchange keys and no accounts, so there is nothing to steal;
 1. **Shell: Tauri 2 with a web UI.** The Rust core runs in the same process; the UI is TypeScript and React in the system WebView.
 2. **Renderer: our own, on Canvas 2D, with no charting library.** Drawings and replay need direct control of the coordinate system. WebGL can come later for very large data sets.
 3. **Indicators: WebAssembly modules run by wasmtime, planned for 0.2.** A module gets candles up to the cursor and returns lines, histograms and signals. It has no file, network or clock access, and has limits on memory, fuel and time. The built-in indicators use the same interface.
-4. **Timeframes in 0.1: native, per timeframe.** Each timeframe is fetched from Binance and cached separately. Building higher timeframes from 1-minute candles (aggregation in the core) arrives in 0.4 together with replay, where it is required.
+4. **Timeframes in 0.1: native, per timeframe.** Each timeframe is fetched from Binance and cached separately. Building higher timeframes from 1-minute candles (aggregation in the core) was planned for 0.4 with replay, but replay steps the chart's own timeframe and does not need it, so it is deferred (see ADR 0005).
 5. **Releases: unsigned for now.** 0.1 ships `.dmg`, `.msi`, `.AppImage` and `.deb` built in GitHub Actions, with `SHA256SUMS` and build provenance attestations. Signing and notarization come with 1.0.
 
 ## Alternatives considered
@@ -30,5 +30,5 @@ The constraints: no exchange keys and no accounts, so there is nothing to steal;
 - Two languages (Rust and TypeScript) and three different WebViews (WebKit, WebView2, WebKitGTK) must be tested; CI builds and tests on all three systems.
 - We own the whole chart: axes, scaling, panning, crosshair, panes. It costs time and gives us full freedom.
 - Indicators wait for 0.2 and the WASM host. Until then the chart shows candles and volume only.
-- Switching timeframes is fast and cheap in 0.1, but the cache holds each timeframe separately, and candles of different timeframes may differ slightly until aggregation lands in 0.4.
+- Switching timeframes is fast and cheap in 0.1, but the cache holds each timeframe separately, and candles of different timeframes may differ slightly until aggregation lands (deferred, see ADR 0005).
 - Users see OS warnings on first launch until releases are signed; the README explains how to open the app and how to verify downloads.
