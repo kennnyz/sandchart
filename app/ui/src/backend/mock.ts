@@ -26,11 +26,28 @@ import {
   type UpdateInfo,
 } from "./types";
 import { type MockUpdate, mockFires, mockLevelOf, mockValidateAlert } from "./mockAlerts";
-import { MOCK_MAX_REPLAY_CANDLES, type MockCandle, mockCloseTime, mockReadReplay, mockRevealed, mockSimulate, mockWriteReplay } from "./mockReplay";
+import {
+  MOCK_MAX_REPLAY_CANDLES,
+  type MockCandle,
+  mockAggregate,
+  mockBucketStart,
+  mockBuildsFrom,
+  mockCloseTime,
+  mockHigher,
+  mockReadReplay,
+  mockRevealed,
+  mockSimulate,
+  mockSplit,
+  mockViewError,
+  mockWriteReplay,
+} from "./mockReplay";
 
 const PAGE = 1000;
 /** Bars of context before a replay's start, as `REPLAY_CONTEXT` in the engine. */
 const REPLAY_CONTEXT = 500;
+/** Most candles of context a re-base to a lower timeframe keeps, as `REBASE_CONTEXT` in the engine. */
+const REBASE_CONTEXT = 5_000;
+const DAY_MS = 86_400_000;
 const MINUTE = 60_000;
 const STEP_MS: Record<TimeframeCode, number> = {
   "1m": MINUTE,
@@ -540,20 +557,25 @@ export interface MockBackend extends Backend {
   replayFile(): string | null;
 }
 
-/** A replay session over the mock's candles (made as they are revealed) or a file's. Its base
- * timeframe is the chart's, as in the engine for now (ADR 0008). */
+/** A replay session over base candles: the mock's (made as they are revealed) or a file's (ADR 0008). */
 interface MockSession {
   instrument: Instrument;
-  tf: TimeframeCode;
-  /** Bars made so far, at least up to `current`. */
+  /** The step resolution, the timeframe of `candles`. */
+  base: TimeframeCode;
+  /** Base candles made so far, at least up to `current`. */
   candles: MockCandle[];
-  /** How many bars the session has in all. */
+  /** How many base candles the session has in all. */
   total: number;
-  /** Makes bar `k`; null for a file, whose bars are all in `candles`. */
+  /** Makes candle `k`; null when they are all in `candles` (a file, a re-base). */
   make: ((k: number) => MockCandle) | null;
+  /** The cut when the replay began. */
   start: number;
+  /** Index of the last revealed base candle. */
   current: number;
   commands: ReplayCommand[];
+  /** Started from the mock's candles: at the newest one it has caught up and follows live candles. */
+  live: boolean;
+  caughtUp: boolean;
 }
 
 export function createMockBackend(opts: MockOptions): MockBackend {
@@ -783,12 +805,15 @@ export function createMockBackend(opts: MockOptions): MockBackend {
     };
   }
 
-  /** The open replay's revealed bars when it replays `(id, tf)`, as `replay_bars` in the engine. */
+  /** The open replay's revealed bars of `tf` while it holds `id` back, as `replay_bars` in the engine. */
   function replayBars(id: InstrumentId, tf: TimeframeCode): { scale: number; candles: MockCandle[] } | null {
     const s = session;
-    if (!s || s.tf !== tf || s.instrument.id.source !== id.source || s.instrument.id.symbol !== id.symbol) return null;
+    if (!s || s.caughtUp || s.instrument.id.source !== id.source || s.instrument.id.symbol !== id.symbol) return null;
+    const bad = mockViewError(s.base, tf);
+    if (bad) throw problem(bad);
     reveal(s);
-    return { scale: s.instrument.priceScale, candles: s.candles.slice(0, s.current + 1) };
+    const shown = s.candles.slice(0, s.current + 1);
+    return { scale: s.instrument.priceScale, candles: tf === s.base ? shown : mockAggregate(shown, s.base, tf) };
   }
 
   function openSession(): MockSession {
@@ -796,32 +821,45 @@ export function createMockBackend(opts: MockOptions): MockBackend {
     return session;
   }
 
-  /** Makes the bars up to the current one. */
-  function reveal(s: MockSession) {
-    while (s.make && s.candles.length <= s.current) s.candles.push(s.make(s.candles.length));
+  /** Makes the candles up to the current one (`all`: every one). */
+  function reveal(s: MockSession, all = false): MockCandle[] {
+    const n = all ? s.total : s.current + 1;
+    while (s.make && s.candles.length < n) s.candles.push(s.make(s.candles.length));
+    return s.candles;
   }
 
-  /** The close time of bar `i`: the cut once it is revealed. */
-  function cutAt(s: MockSession, i: number): number {
-    return mockCloseTime(s.tf, s.candles[i]!.time);
+  /** The cut: the close time of the last revealed base candle. */
+  function cutOf(s: MockSession): number {
+    reveal(s);
+    return mockCloseTime(s.base, s.candles[s.current]!.time);
   }
+
+  const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+  const caughtUp = (what: string) => problem(`the replay has caught up with the live data and follows it now: it takes no ${what}`);
 
   function simulateOrThrow(s: MockSession, commands: ReplayCommand[]) {
-    reveal(s);
     try {
-      return mockSimulate(s.tf, s.candles, cutAt(s, s.start), cutAt(s, s.current), commands);
+      return mockSimulate(s.base, reveal(s), s.start, cutOf(s), commands);
     } catch (e) {
-      throw problem(e instanceof Error ? e.message : String(e));
+      throw problem(message(e));
     }
   }
 
-  function replayStateOf(s: MockSession, cursor: number, tradesFrom: number): ReplayState {
+  function replayStateOf(s: MockSession, tf: TimeframeCode, cursor: number, tradesFrom: number): ReplayState {
+    const bad = mockViewError(s.base, tf);
+    if (bad) throw problem(bad);
     const { trades, stats } = simulateOrThrow(s, s.commands);
     const closed = trades.length - (trades.at(-1)?.reason === "open" ? 1 : 0);
-    const tf = Math.min(tradesFrom, closed);
-    const from = Math.min(cursor, s.current + 1);
+    const tfrom = Math.min(tradesFrom, closed);
+    const cut = cutOf(s);
+    const shown = s.candles.slice(0, s.current + 1);
+    const all = tf === s.base ? shown : mockAggregate(shown, s.base, tf);
+    const first = s.candles.find((c) => mockCloseTime(s.base, c.time) === s.start)!.time;
+    const key = tf === s.base ? first : mockBucketStart(tf, first);
+    const last = all.at(-1);
+    const from = Math.min(cursor, all.length);
     const bars = column();
-    for (const c of s.candles.slice(from, s.current + 1)) {
+    for (const c of all.slice(from)) {
       bars.time.push(c.time);
       bars.open.push(c.open);
       bars.high.push(c.high);
@@ -831,17 +869,76 @@ export function createMockBackend(opts: MockOptions): MockBackend {
     }
     return {
       instrument: { ...s.instrument },
-      tf: s.tf,
-      start: s.start,
-      current: s.current,
-      cut: cutAt(s, s.current),
+      base: s.base,
+      tf,
+      start: Math.max(0, all.filter((b) => b.time <= key).length - 1),
+      current: Math.max(0, all.length - 1),
+      cut,
+      // A started session that reached its newest candle has caught up.
       atEnd: s.current + 1 >= s.total,
+      caughtUp: s.caughtUp,
+      partial: tf !== s.base && last !== undefined && mockCloseTime(tf, last.time) > cut,
       from,
       bars,
-      tradesFrom: tf,
-      trades: trades.slice(tf),
+      tradesFrom: tfrom,
+      trades: trades.slice(tfrom),
       stats,
     };
+  }
+
+  /** A closed live candle of the caught-up replay's pair joins it, as the engine's follow stream does. */
+  function follow(e: LiveEvent) {
+    const s = session;
+    if (!s?.caughtUp || e.kind !== "candle" || !e.closed) return;
+    const c = { time: e.time, open: e.open, high: e.high, low: e.low, close: e.close, volume: e.volume };
+    const last = reveal(s, true).at(-1)!;
+    if (c.time === last.time) s.candles[s.candles.length - 1] = c;
+    else if (c.time > last.time && s.total < MOCK_MAX_REPLAY_CANDLES) {
+      s.candles.push(c);
+      s.total++;
+    }
+    s.current = s.total - 1;
+  }
+
+  /** `replay_set_base` from the engine; the lower candles are the current ones split (`mockSplit`). */
+  function rebase(s: MockSession, base: TimeframeCode) {
+    const old = s.base;
+    const src = reveal(s, true);
+    const cut = cutOf(s);
+    let candles: MockCandle[];
+    if (mockBuildsFrom(old, base)) {
+      const len = mockCloseTime(base, 0);
+      const end = mockCloseTime(old, src.at(-1)!.time);
+      const first = s.start - len;
+      const need = Math.floor((end - first) / len);
+      if (need > MOCK_MAX_REPLAY_CANDLES) {
+        const most = Math.floor((MOCK_MAX_REPLAY_CANDLES * len) / DAY_MS);
+        const span = Math.ceil((end - first) / DAY_MS);
+        throw problem(
+          `a replay holds at most ${MOCK_MAX_REPLAY_CANDLES} candles: at ${base} that is ${most} days from its start to ${s.live ? "now" : "its last candle"}, and this one spans ${span} days; replay at a higher step or start later`,
+        );
+      }
+      const context = Math.min(Math.max(0, Math.floor((first - src[0]!.time) / len)), REBASE_CONTEXT, MOCK_MAX_REPLAY_CANDLES - need);
+      const from = first - context * len;
+      candles = src.flatMap((c) => mockSplit(c, old, base)).filter((c) => c.time >= from && mockCloseTime(base, c.time) <= end);
+    } else if (mockBuildsFrom(base, old)) {
+      const at = mockBucketStart(base, cut);
+      if (at !== cut) throw problem(`the replay is at ${cut}, inside a ${base} candle; step to ${mockCloseTime(base, at)} first, where it closes`);
+      candles = mockHigher(src, old, base);
+    } else {
+      throw problem(`a replay of ${old} candles cannot step ${base} candles: their boundaries do not line up`);
+    }
+    const closes = candles.map((c) => mockCloseTime(base, c.time));
+    const start = closes.find((t) => t >= s.start) ?? s.start;
+    const shown = closes.filter((t) => t <= cut).length;
+    const newCut = shown > 0 ? closes[shown - 1]! : cut;
+    try {
+      mockSimulate(base, candles, start, newCut, s.commands);
+    } catch (e) {
+      throw problem(`the replay cannot step ${base} candles: ${message(e)}`);
+    }
+    Object.assign(s, { base, candles, total: candles.length, make: null, start, current: shown - 1 });
+    s.caughtUp = s.live && s.current + 1 >= s.total;
   }
 
   function computeInstance(inst: IndicatorInstance, bars: MockBars, fromTime: number): IndicatorResult {
@@ -913,8 +1010,11 @@ export function createMockBackend(opts: MockOptions): MockBackend {
 
     emitLive(e) {
       const evaluated = new Set<string>();
+      const replayed = session?.instrument.id;
+      if (replayed && [...live.values()].some((sub) => sub.source === replayed.source && sub.symbol === replayed.symbol)) follow(e);
       for (const [cb, sub] of [...live]) {
-        const paused = session?.instrument.id.source === sub.source && session.instrument.id.symbol === sub.symbol;
+        // Held back while replayed, until the replay has caught up.
+        const paused = !session?.caughtUp && session?.instrument.id.source === sub.source && session.instrument.id.symbol === sub.symbol;
         if (paused) continue;
         if (e.kind === "candle" && !evaluated.has(pairKey(sub))) {
           evaluated.add(pairKey(sub));
@@ -926,61 +1026,74 @@ export function createMockBackend(opts: MockOptions): MockBackend {
 
     replayFile: () => savedReplay,
 
-    async replayStart(id, tf, startTime) {
+    async replayStart(id, base, startTime) {
       await delayFor(id.symbol);
       const instrument = SYMBOLS.find((i) => i.id.source === id.source && i.id.symbol === id.symbol);
       if (!instrument) throw problem(`unknown instrument ${id.source}/${id.symbol}`);
-      const { step, timeOf, first } = timeline(tf);
+      const { step, timeOf, first } = timeline(base);
       const i = (startTime - timeOf(0)) / step;
-      if (!Number.isInteger(i) || i < first || i >= opts.candles) throw problem(`no cached ${tf} bar opens at ${startTime}`);
+      if (!Number.isInteger(i) || i < first || i >= opts.candles) throw problem(`no cached ${base} bar opens at ${startTime}`);
       const ctx = Math.max(first, i - REPLAY_CONTEXT);
       const make = (k: number) => candleAt(ctx + k, timeOf(ctx + k));
-      session = {
+      const s: MockSession = {
         instrument: { ...instrument, priceScale: opts.priceScale ?? instrument.priceScale },
-        tf,
+        base,
         candles: [],
         total: Math.min(opts.candles - ctx, MOCK_MAX_REPLAY_CANDLES),
         make,
-        start: i - ctx,
+        start: mockCloseTime(base, startTime),
         current: i - ctx,
         commands: [],
+        live: true,
+        caughtUp: false,
       };
-      return replayStateOf(session, 0, 0);
+      s.caughtUp = s.current + 1 >= s.total;
+      session = s;
+      return replayStateOf(s, base, 0, 0);
     },
 
     async replayStep(n) {
       await delay();
       const s = openSession();
+      if (s.caughtUp) throw caughtUp("steps");
       s.current = Math.min(s.current + n, s.total - 1);
-      return s.current;
+      s.caughtUp = s.live && s.current + 1 >= s.total;
+      return cutOf(s);
+    },
+
+    async replaySetBase(base) {
+      await delay();
+      const s = openSession();
+      if (base !== s.base) rebase(s, base);
+      return replayStateOf(s, base, 0, 0);
     },
 
     async replayCommand(command) {
       await delay();
       const s = openSession();
+      if (s.caughtUp) throw caughtUp("commands");
       const next = [...s.commands, structuredClone(command)];
       simulateOrThrow(s, next);
       s.commands = next;
     },
 
-    async replayState(cursor, tradesFrom) {
+    async replayState(tf, cursor, tradesFrom) {
       await delay();
-      return replayStateOf(openSession(), cursor, tradesFrom);
+      return replayStateOf(openSession(), tf, cursor, tradesFrom);
     },
 
     async replaySave() {
       await delay();
       const s = openSession();
-      reveal(s);
       savedReplay = await mockWriteReplay({
         instrument: s.instrument,
-        base: s.tf,
-        candles: s.candles.slice(0, s.current + 1),
-        start: cutAt(s, s.start),
-        cut: cutAt(s, s.current),
+        base: s.base,
+        candles: reveal(s).slice(0, s.current + 1),
+        start: s.start,
+        cut: cutOf(s),
         commands: s.commands,
       });
-      return `${s.instrument.id.symbol}-${s.tf}.replay`;
+      return `${s.instrument.id.symbol}-${s.base}.replay`;
     },
 
     async replayOpen(bytes) {
@@ -991,19 +1104,21 @@ export function createMockBackend(opts: MockOptions): MockBackend {
       } catch (e) {
         throw problem(e instanceof Error ? e.message : String(e));
       }
-      // The file simulated, so both cuts are close times of its candles.
-      const index = (cut: number) => mockRevealed(f.base, f.candles, cut).length - 1;
-      session = {
+      // The file simulated, so its cut is the close time of one of its candles.
+      const s: MockSession = {
         instrument: f.instrument,
-        tf: f.base,
+        base: f.base,
         candles: f.candles,
         total: f.candles.length,
         make: null,
-        start: index(f.start),
-        current: index(f.cut),
+        start: f.start,
+        current: mockRevealed(f.base, f.candles, f.cut).length - 1,
         commands: f.commands,
+        live: false,
+        caughtUp: false,
       };
-      return replayStateOf(session, 0, 0);
+      session = s;
+      return replayStateOf(s, f.base, 0, 0);
     },
 
     async replayExit() {
@@ -1223,9 +1338,10 @@ export function createMockBackend(opts: MockOptions): MockBackend {
 
     async computeIndicators(id, tf, fromTime) {
       await delayFor(id.symbol);
+      // As in the engine, a chart the replay cannot show is refused before anything else.
+      const replayed = replayBars(id, tf);
       const visible = chartIndicators.filter((i) => !i.hidden);
       if (visible.length === 0) return [];
-      const replayed = replayBars(id, tf);
       const bars = replayed ? toPriceBars(replayed.candles.slice(-BAR_CAP), replayed.scale) : priceBars(id.symbol, tf);
       return visible.map((i) => computeInstance(i, bars, fromTime));
     },

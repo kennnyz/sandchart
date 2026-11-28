@@ -93,6 +93,44 @@ export function mockAggregate(candles: MockCandle[], base: TimeframeCode, tf: Ti
   return out;
 }
 
+/** `check_view` from the engine: why a replay stepping `base` cannot show `tf`, or null. */
+export function mockViewError(base: TimeframeCode, tf: TimeframeCode): string | null {
+  if (mockBuildsFrom(tf, base)) return null;
+  if (mockBuildsFrom(base, tf)) return `the replay steps ${base} candles, so ${tf} candles cannot be built from them; re-base it to ${tf} first`;
+  return `${tf} candles cannot be built from ${base} candles`;
+}
+
+/**
+ * The mock's stand-in for the lower candles the engine loads on a re-base: `c` split into its
+ * `lower` candles, which aggregate back to exactly `c` (the high in the first, the low in the second,
+ * the close in the last). `lower` builds `base` and is shorter; neither is 1M.
+ */
+export function mockSplit(c: MockCandle, base: TimeframeCode, lower: TimeframeCode): MockCandle[] {
+  const step = FIXED_MS[lower]!;
+  const n = Math.round((mockCloseTime(base, c.time) - c.time) / step);
+  if (n <= 1) return [{ ...c }];
+  const share = Math.floor(c.volume / n);
+  return Array.from({ length: n }, (_, k) => ({
+    time: c.time + k * step,
+    open: k === 0 ? c.open : c.close,
+    high: k === 0 ? c.high : c.close,
+    low: k === 0 ? Math.min(c.open, c.close) : k === 1 ? c.low : c.close,
+    close: c.close,
+    volume: k === n - 1 ? c.volume - share * (n - 1) : share,
+  }));
+}
+
+/** `higher_candles` from the engine: `tf` candles built from `candles`, without a bucket they cover only in part at either end. */
+export function mockHigher(candles: MockCandle[], base: TimeframeCode, tf: TimeframeCode): MockCandle[] {
+  const out = mockAggregate(candles, base, tf);
+  const first = candles[0];
+  const last = candles.at(-1);
+  if (first && out[0] && first.time > out[0].time) out.shift();
+  const end = out.at(-1);
+  if (last && end && mockCloseTime(tf, end.time) > mockCloseTime(base, last.time)) out.pop();
+  return out;
+}
+
 /** `revealed` from Rust: the base candles that close at or before `cut`. */
 export function mockRevealed(base: TimeframeCode, candles: MockCandle[], cut: number): MockCandle[] {
   const n = candles.findIndex((c) => mockCloseTime(base, c.time) > cut);

@@ -460,7 +460,7 @@ describe("ChartSession in a replay", () => {
     const v = last().version;
 
     await mock.replayStep(2);
-    session.appendReplay((await mock.replayState(501, 0)).bars);
+    session.appendReplay((await mock.replayState("1h", 501, 0)).bars);
     expect(chart.count).toBe(503);
     expect(last().version).toBe(v + 1);
 
@@ -473,7 +473,7 @@ describe("ChartSession in a replay", () => {
     expect(chart.count).toBe(1000);
     expect(listeners).toHaveLength(2);
     expect(listeners[1]!.stopped).toBe(false);
-    session.appendReplay((await mock.replayState(0, 0)).bars);
+    session.appendReplay((await mock.replayState("1h", 0, 0)).bars);
     expect(chart.count).toBe(1000);
     session.close();
   });

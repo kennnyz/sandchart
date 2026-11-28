@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import fixture from "../../../../crates/core/tests/fixtures/replay.json";
 import { createMockBackend } from "./mock";
-import { type MockCandle, mockAggregate, mockBucketStart, mockCandleHash, mockReadReplay, mockRevealed, mockSimulate } from "./mockReplay";
-import type { LiveEvent, ReplayCommand, ReplayStats, ReplayTrade, TimeframeCode } from "./types";
+import { type MockCandle, mockAggregate, mockBucketStart, mockCandleHash, mockReadReplay, mockRevealed, mockSimulate, mockSplit } from "./mockReplay";
+import type { CandleColumns, LiveEvent, ReplayCommand, ReplayStats, ReplayTrade, TimeframeCode } from "./types";
 
 const id = { source: "mock", symbol: "BTCUSDT" };
 const H = 3_600_000;
@@ -105,13 +105,18 @@ describe("mock replay session", () => {
     expect(st.bars.time).toHaveLength(501);
     expect(st.bars.time.at(-1)).toBe(startTime);
     expect(st.atEnd).toBe(false);
-    expect(await b.replayStep(2)).toBe(502);
-    const next = await b.replayState(501, 0);
+    // A step returns the cut.
+    expect(await b.replayStep(2)).toBe(st.cut + 2 * H);
+    const next = await b.replayState("1h", 501, 0);
     expect(next.from).toBe(501);
     expect(next.bars.time).toEqual(page.time.slice(-99, -97));
-    expect((await b.replayState(10_000, 0)).bars.time).toEqual([]);
-    expect(await b.replayStep(1_000)).toBe(599);
-    expect((await b.replayState(0, 0)).atEnd).toBe(true);
+    expect((await b.replayState("1h", 10_000, 0)).bars.time).toEqual([]);
+    expect(await b.replayStep(1_000)).toBe(page.time.at(-1)! + H);
+    // At the newest candle it has caught up: no more steps or commands.
+    expect(await b.replayState("1h", 0, 0)).toMatchObject({ atEnd: true, caughtUp: true, current: 599 });
+    await expect(b.replayStep(1)).rejects.toMatchObject({
+      message: "the replay has caught up with the live data and follows it now: it takes no steps",
+    });
     await expect(b.replayStart(id, "1h", startTime + 1)).rejects.toMatchObject({
       message: `no cached 1h bar opens at ${startTime + 1}`,
     });
@@ -129,7 +134,7 @@ describe("mock replay session", () => {
     await expect(b.replayCommand(open)).rejects.toMatchObject({ message: "command 2: a trade is already open" });
     await b.replayStep(1);
     await b.replayCommand({ kind: "close", time: st.cut + H });
-    const s = await b.replayState(0, 0);
+    const s = await b.replayState("1h", 0, 0);
     expect(s.trades[0]).toMatchObject({ reason: "manual", entryPrice: close, entryTime: startTime, exitTime: startTime + H });
     expect(s.stats.count).toBe(1);
   });
@@ -143,13 +148,13 @@ describe("mock replay session", () => {
     await b.replayStep(1);
     await b.replayCommand({ kind: "close", time: st.cut + H });
     await b.replayCommand(open(st.cut + H));
-    const all = await b.replayState(0, 0);
+    const all = await b.replayState("1h", 0, 0);
     expect([all.tradesFrom, all.trades.length]).toEqual([0, 2]);
     expect(all).not.toHaveProperty("commands");
-    const later = await b.replayState(0, 1);
+    const later = await b.replayState("1h", 0, 1);
     expect(later.tradesFrom).toBe(1);
     expect(later.trades).toEqual(all.trades.slice(1));
-    const past = await b.replayState(0, 9);
+    const past = await b.replayState("1h", 0, 9);
     expect([past.tradesFrom, past.trades.length]).toEqual([1, 1]);
   });
 
@@ -158,13 +163,13 @@ describe("mock replay session", () => {
     const close = st.bars.close.at(-1)!;
     await b.replayCommand({ kind: "open", time: st.cut, side: "short", stop: close + 1_000, take: close - 1_000 });
     await b.replayStep(3);
-    const before = await b.replayState(0, 0);
+    const before = await b.replayState("1h", 0, 0);
     expect(await b.replaySave()).toBe("BTCUSDT-1h.replay");
     const text = b.replayFile()!;
     expect(text.match(/^ {4}\[\d+, /gm)).toHaveLength(before.current + 1);
 
     await b.replayExit();
-    await expect(b.replayState(0, 0)).rejects.toMatchObject({ message: "no replay is open" });
+    await expect(b.replayState("1h", 0, 0)).rejects.toMatchObject({ message: "no replay is open" });
     const opened = await b.replayOpen(new TextEncoder().encode(text));
     expect(opened).toEqual({ ...before, atEnd: true });
     expect(text).toContain(`\n  "base": "1h",\n  "start": ${before.cut - 3 * H},\n  "cut": ${before.cut},\n`);
@@ -180,7 +185,7 @@ describe("mock replay session", () => {
     await b.subscribeLive({ source: "mock", symbol: "ETHUSDT" }, "1h", () => got.push("eth"));
     const e: LiveEvent = { kind: "disconnected" };
     const page = await b.getCandles(id, "1h");
-    await b.replayStart(id, "1h", page.time.at(-1)!);
+    await b.replayStart(id, "1h", page.time.at(-2)!);
     b.emitLive(e);
     expect(got).toEqual(["eth"]);
     await b.replayExit();
@@ -214,5 +219,83 @@ describe("mock replay session", () => {
     await b.replayExit();
     expect(await lastTime()).toBe(page.time.at(-1));
     expect(await outcome()).toBe("take");
+  });
+});
+
+const rowsOf = (b: CandleColumns): MockCandle[] =>
+  b.time.map((time, i) => ({ time, open: b.open[i]!, high: b.high[i]!, low: b.low[i]!, close: b.close[i]!, volume: b.volume[i]! }));
+
+describe("mock replay across timeframes", () => {
+  async function started() {
+    const b = createMockBackend({ candles: 2000 });
+    const page = await b.getCandles(id, "1h");
+    // The start opens in the second hour of a 4h bucket: its cut is two hours before the bucket ends.
+    const st = await b.replayStart(id, "1h", page.time[page.time.length - 100]!);
+    return { b, st, page };
+  }
+
+  it("splits a candle into lower ones that aggregate back to it", () => {
+    const c = { time: 0, open: 10, high: 15, low: 5, close: 12, volume: 7 };
+    expect(mockAggregate(mockSplit(c, "1h", "15m"), "15m", "1h")).toEqual([c]);
+    expect(mockAggregate(mockSplit(c, "1d", "1h"), "1h", "1d")).toEqual([c]);
+    expect(mockSplit(c, "1h", "1h")).toEqual([c]);
+  });
+
+  it("shows higher timeframes built from the revealed candles and refuses lower ones, as the engine", async () => {
+    const { b, st } = await started();
+    const v = await b.replayState("4h", 0, 0);
+    expect(rowsOf(v.bars)).toEqual(mockAggregate(rowsOf(st.bars), "1h", "4h"));
+    expect(v).toMatchObject({ base: "1h", tf: "4h", cut: st.cut, partial: true, current: v.bars.time.length - 1, start: v.bars.time.length - 1 });
+    await b.replayStep(2);
+    expect((await b.replayState("4h", 0, 0)).partial).toBe(false);
+    await expect(b.replayState("15m", 0, 0)).rejects.toMatchObject({
+      message: "the replay steps 1h candles, so 15m candles cannot be built from them; re-base it to 15m first",
+    });
+    await expect(b.replayState("3d", 0, 0)).rejects.toMatchObject({ message: "3d candles cannot be built from 1h candles" });
+    await expect(b.computeIndicators(id, "15m", 0)).rejects.toMatchObject({ message: /re-base it to 15m first/ });
+  });
+
+  it("re-bases down and up keeping the cut, the commands and the fills", async () => {
+    const { b, st } = await started();
+    const close = st.bars.close.at(-1)!;
+    await b.replayCommand({ kind: "open", time: st.cut, side: "long", stop: Math.round(close / 2), take: close * 2 });
+    await b.replayStep(1);
+    const hourly = await b.replayState("1h", 0, 0);
+    expect(await b.replaySetBase("15m")).toMatchObject({ base: "15m", tf: "15m", cut: hourly.cut });
+    const again = await b.replayState("1h", 0, 0);
+    expect(again.bars).toEqual(hourly.bars);
+    expect(again.trades[0]!.entryPrice).toBe(hourly.trades[0]!.entryPrice);
+    expect(await b.replayStep(1)).toBe(hourly.cut + H / 4);
+    await expect(b.replaySetBase("1h")).rejects.toMatchObject({
+      message: `the replay is at ${hourly.cut + H / 4}, inside a 1h candle; step to ${hourly.cut + H} first, where it closes`,
+    });
+    await b.replayStep(3);
+    const back = await b.replaySetBase("1h");
+    expect(back).toMatchObject({ base: "1h", tf: "1h", cut: hourly.cut + H });
+    expect(back.trades[0]!.entryPrice).toBe(hourly.trades[0]!.entryPrice);
+    expect(await b.replaySave()).toBe("BTCUSDT-1h.replay");
+    await expect(b.replaySetBase("1w")).rejects.toMatchObject({ message: /inside a 1w candle/ });
+  });
+
+  it("catches up at the newest candle: closed live candles join it and nothing is held back", async () => {
+    const b = createMockBackend({ candles: 2000 });
+    const page = await b.getCandles(id, "1h");
+    const got: LiveEvent[] = [];
+    await b.subscribeLive(id, "1h", (e) => got.push(e));
+    const st = await b.replayStart(id, "1h", page.time.at(-1)!);
+    expect(st).toMatchObject({ caughtUp: true, atEnd: true });
+    await expect(b.replayCommand({ kind: "close", time: st.cut })).rejects.toMatchObject({
+      message: "the replay has caught up with the live data and follows it now: it takes no commands",
+    });
+    const next = { time: page.time.at(-1)! + H, open: 1, high: 2, low: 1, close: 2, volume: 3 };
+    b.emitLive({ kind: "candle", ...next, closed: false });
+    expect((await b.replayState("1h", 0, 0)).cut).toBe(st.cut);
+    b.emitLive({ kind: "candle", ...next, closed: true });
+    const after = await b.replayState("1h", 0, 0);
+    expect(after.cut).toBe(next.time + H);
+    expect(after.bars.time.at(-1)).toBe(next.time);
+    expect(got).toHaveLength(2);
+    await b.replaySave();
+    expect(b.replayFile()).toContain(`[${next.time}, 1, 2, 1, 2, 3]`);
   });
 });

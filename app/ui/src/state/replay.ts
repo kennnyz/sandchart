@@ -313,8 +313,8 @@ export class ReplayController {
   /** The chart (back from another instrument) shows the replay again: every revealed bar. */
   resync(): Promise<void> {
     return this.run(async () => {
-      if (this.phase !== "on") return;
-      const st = await this.backend.replayState(0, 0);
+      if (this.phase !== "on" || !this.view) return;
+      const st = await this.backend.replayState(this.view.tf, 0, 0);
       this.cursor = 0;
       this.show(st);
     });
@@ -369,11 +369,12 @@ export class ReplayController {
   }
 
   private async sync(): Promise<void> {
-    const st = await this.backend.replayState(this.cursor, this.closed.length);
+    const tf = this.view!.tf;
+    const st = await this.backend.replayState(tf, this.cursor, this.closed.length);
     if (this.phase !== "on") return;
     if (st.from !== this.cursor) {
       // Not where the chart is: show everything again.
-      const all = await this.backend.replayState(0, 0);
+      const all = await this.backend.replayState(tf, 0, 0);
       this.cursor = 0;
       this.show(all);
       return;

@@ -104,7 +104,7 @@ describe("replay controller", () => {
     expect(c.error).toBeNull();
     expect(feed.shows).toBe(0);
     expect(held.exit).toHaveBeenCalledTimes(1);
-    await expect(backend.replayState(0, 0)).rejects.toMatchObject({ message: "no replay is open" });
+    await expect(backend.replayState("1h", 0, 0)).rejects.toMatchObject({ message: "no replay is open" });
   });
 
   it("a start overtaken by another chart (exit while picking) stays off", async () => {
@@ -117,7 +117,7 @@ describe("replay controller", () => {
     await started;
     expect(c.phase).toBe("off");
     expect(feed.shows).toBe(0);
-    await expect(backend.replayState(0, 0)).rejects.toMatchObject({ message: "no replay is open" });
+    await expect(backend.replayState("1h", 0, 0)).rejects.toMatchObject({ message: "no replay is open" });
     // Picking again later works.
     held.start.mockRestore();
     c.pick();
@@ -294,7 +294,7 @@ describe("replay controller", () => {
     expect(c.phase).toBe("off");
     expect(c.view).toBeNull();
     expect(feed.reloads).toBe(1);
-    await expect(backend.replayState(0, 0)).rejects.toMatchObject({ message: "no replay is open" });
+    await expect(backend.replayState("1h", 0, 0)).rejects.toMatchObject({ message: "no replay is open" });
 
     await c.open(new TextEncoder().encode(text));
     expect(c.phase).toBe("on");
@@ -311,7 +311,7 @@ describe("replay controller", () => {
     await c.open(new TextEncoder().encode("{}"));
     expect(c.error).toMatch(/./);
     expect(c.phase).toBe("on");
-    expect((await backend.replayState(0, 0)).current).toBe(501);
+    expect((await backend.replayState("1h", 0, 0)).current).toBe(501);
     await c.step();
     expect(c.error).toBeNull();
   });
@@ -338,9 +338,9 @@ describe("replay controller", () => {
     const { c, backend } = await started();
     const asked: number[] = [];
     const state = backend.replayState.bind(backend);
-    vi.spyOn(backend, "replayState").mockImplementation((cursor, from) => {
+    vi.spyOn(backend, "replayState").mockImplementation((tf, cursor, from) => {
       asked.push(from);
-      return state(cursor, from);
+      return state(tf, cursor, from);
     });
     await c.buy();
     await c.closeTrade();
@@ -352,7 +352,7 @@ describe("replay controller", () => {
     expect(c.view!.trades).toHaveLength(2);
     expect(c.view!.trades[0]).toMatchObject({ reason: "manual", exitTime: c.view!.trades[0]!.entryTime });
     expect(c.view!.open).toBe(c.view!.trades[1]);
-    expect(c.view!.trades).toEqual((await state(0, 0)).trades);
+    expect(c.view!.trades).toEqual((await state("1h", 0, 0)).trades);
   });
 
   it("a held → queues no step while one is on its way", async () => {
