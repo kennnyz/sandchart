@@ -545,12 +545,21 @@ test("replay_jumps_to_real_time_and_ends_the_backtest_there", async ({ page }) =
   const live = await lastBar(page);
   // A few bars before the newest one.
   await startAt(page, plot, plot.width - 100);
+  // Disabled controls say why; the status has its own room, so the bar does not move.
+  await expect(page.getByTestId("replay-close")).toHaveAttribute("title", "No open trade to close");
+  await expect(page.getByTestId("replay-save")).toHaveAttribute("title", "Save the replay as a .replay file");
+  const controls = page.locator(".replay-controls");
+  const boxBefore = (await controls.boundingBox())!;
   await page.getByTestId("replay-buy").click();
   await expect(stat(page, "open-r")).not.toHaveText("—");
+  await expect(page.getByTestId("replay-buy")).toHaveAttribute("title", "One trade at a time: close the open trade first");
+  await expect(page.getByTestId("replay-sell")).toHaveAttribute("title", "One trade at a time: close the open trade first");
   await page.getByTestId("replay-jump").click();
   const bar = page.getByTestId("replay-bar");
   await expect(bar).toHaveAttribute("data-finished", "true");
   await expect(page.getByTestId("replay-real-time")).toBeVisible();
+  const boxAfter = (await controls.boundingBox())!;
+  expect([boxAfter.x, boxAfter.width]).toEqual([boxBefore.x, boxBefore.width]);
   await expect.poll(() => lastBar(page)).toBe(live);
   // The backtest is over: the pair's live quote gives nothing away any more.
   await expect(page.locator('[data-testid="watchlist-row"][data-symbol="BTCUSDT"]')).toContainText("%");

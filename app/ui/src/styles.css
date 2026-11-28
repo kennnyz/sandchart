@@ -1255,6 +1255,17 @@ button:disabled {
   color: var(--muted);
   white-space: nowrap;
 }
+/* The status ("Real time reached", "End of data", a load failure) keeps its room when empty. */
+.replay-status {
+  flex: none;
+  width: 128px;
+  display: flex;
+  min-width: 0;
+}
+.replay-status .replay-end {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .ctx-menu-blank {
   width: 14px;
   height: 14px;

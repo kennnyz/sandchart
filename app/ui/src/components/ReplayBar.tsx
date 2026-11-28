@@ -227,7 +227,9 @@ export function ReplayBar({ replay: r, range, onDate }: ReplayBarProps) {
   // Steps and commands are refused once the backtest ended at real time; the tooltip says why.
   const stepTitle = (name: string, key: string) =>
     finished ? t("replay.realTime.title") : atEnd ? t("replay.endTitle") : titled(name, key);
-  const tradeTitle = (name: string, key: string) => (finished ? t("replay.realTime.title") : titled(name, key));
+  const tradeTitle = (name: string, key: string, off: string | null) =>
+    finished ? t("replay.realTime.title") : (off ?? titled(name, key));
+  const openOff = hasOpen ? t("replay.oneTrade") : null;
 
   const pickBar = (date: boolean) => {
     closeMenu();
@@ -392,7 +394,7 @@ export function ReplayBar({ replay: r, range, onDate }: ReplayBarProps) {
         <button
           className="text-button with-icon"
           data-testid="replay-buy"
-          title={tradeTitle(t("replay.buy"), KEYS.buy)}
+          title={tradeTitle(t("replay.buy"), KEYS.buy, openOff)}
           disabled={hasOpen || finished}
           onClick={() => void r.buy()}
         >
@@ -402,7 +404,7 @@ export function ReplayBar({ replay: r, range, onDate }: ReplayBarProps) {
         <button
           className="text-button with-icon"
           data-testid="replay-sell"
-          title={tradeTitle(t("replay.sell"), KEYS.sell)}
+          title={tradeTitle(t("replay.sell"), KEYS.sell, openOff)}
           disabled={hasOpen || finished}
           onClick={() => void r.sell()}
         >
@@ -412,7 +414,7 @@ export function ReplayBar({ replay: r, range, onDate }: ReplayBarProps) {
         <button
           className="text-button with-icon"
           data-testid="replay-close"
-          title={tradeTitle(t("replay.closeTrade"), KEYS.close)}
+          title={tradeTitle(t("replay.closeTrade"), KEYS.close, hasOpen ? null : t("replay.noTrade"))}
           disabled={!hasOpen || finished}
           onClick={() => void r.closeTrade()}
         >
@@ -420,23 +422,29 @@ export function ReplayBar({ replay: r, range, onDate }: ReplayBarProps) {
           {t("replay.closeTrade")}
         </button>
         <div className="divider" />
-        <button className="text-button with-icon" data-testid="replay-save" onClick={() => void r.save()}>
+        <button className="text-button with-icon" data-testid="replay-save" title={t("replay.saveTitle")} onClick={() => void r.save()}>
           <Save size={14} />
           {t("replay.save")}
         </button>
         {openButton}
-        {finished ? (
-          <span className="replay-end" data-testid="replay-real-time" title={t("replay.realTime.title")}>
-            {t("replay.realTime")}
-          </span>
-        ) : (
-          atEnd && <span className="replay-end">{t("replay.end")}</span>
-        )}
-        {v?.newerError && (
-          <span className="replay-end" data-testid="replay-newer-error" title={v.newerError}>
-            {t("replay.newerFailed")}
-          </span>
-        )}
+        {/* A slot of its own width whatever it says, so the centred bar never shifts. */}
+        <span className="replay-status">
+          {finished ? (
+            <span className="replay-end" data-testid="replay-real-time" title={t("replay.realTime.title")}>
+              {t("replay.realTime")}
+            </span>
+          ) : v?.newerError ? (
+            <span className="replay-end" data-testid="replay-newer-error" title={`${t("replay.newerFailed")}\n${v.newerError}`}>
+              {t("replay.newerFailed.short")}
+            </span>
+          ) : (
+            atEnd && (
+              <span className="replay-end" title={t("replay.endTitle")}>
+                {t("replay.end")}
+              </span>
+            )
+          )}
+        </span>
         {error}
       </div>
       <button
