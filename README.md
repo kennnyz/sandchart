@@ -17,7 +17,7 @@
 - **Nothing to steal.** The app never asks for exchange keys and only talks to Binance's public market-data hosts and, for updates, to GitHub (see [Privacy and network](#privacy-and-network)).
 - **Exact numbers.** Prices and volumes are integers counted in the pair's tick and lot size, from the exchange to the screen. No floating-point money anywhere in the core.
 - **Our own renderer.** The chart is a small Canvas 2D engine written for this project, not a wrapped charting library. A frame takes well under a millisecond to draw.
-- **Built to be extended.** Indicators are WebAssembly modules that run in a sandbox: they cannot read your files or reach the network. Next: drawing tools, a replay you can share and anyone can reproduce, and tools for AI agents. See the [roadmap](#roadmap).
+- **Built to be extended.** Indicators are WebAssembly modules that run in a sandbox: they cannot read your files or reach the network. Drawing tools, a replay anyone can reproduce from a shared file, alerts and a local MCP server for AI agents build on the same core. See the [roadmap](#roadmap).
 
 ## Features
 
@@ -62,13 +62,8 @@ flowchart LR
     binance["Binance public market data<br/>data-api.binance.vision (REST)<br/>data-stream.binance.vision (WebSocket)"]
     data <--> binance
 
-    subgraph planned["Planned"]
-        direction TB
-        replay["Replay + paper trading"]
-        mcp["MCP server for AI agents"]
-    end
-    engine -.-> replay
-    mcp -. "local socket" .-> engine
+    mcp["sandchart-mcp<br/>stdio MCP server for AI agents"]
+    mcp -- "same engine, same SQLite file" --> store
 ```
 
 | Crate or folder | What it does |
