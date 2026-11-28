@@ -130,9 +130,14 @@ impl Timeframe {
 
     /// Whether candles of this timeframe can be built from `base` candles: every bucket
     /// boundary of this timeframe must be one of `base`. True for the timeframe itself.
+    /// Never true for 3d from a lower timeframe: no recorded Binance candles confirm where
+    /// its buckets start, so it is not built from guesses (ADR 0008).
     pub fn builds_from(&self, base: Timeframe) -> bool {
         if *self == base {
             return true;
+        }
+        if *self == Timeframe::D3 {
+            return false;
         }
         let Some(b) = base.fixed_ms() else {
             return false;

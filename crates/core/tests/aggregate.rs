@@ -174,7 +174,6 @@ fn which_timeframes_build_from_which() {
         (H8, D1),
         (H8, W1),
         (H12, W1),
-        (D1, D3),
         (D1, W1),
         (D1, Mn1),
         (H4, Mn1),
@@ -191,6 +190,9 @@ fn which_timeframes_build_from_which() {
         (W1, Mn1),
         (Mn1, W1),
         (W1, D3),
+        (D1, D3),
+        (H1, D3),
+        (M1, D3),
         (D1, H12),
     ];
     for (base, tf) in ok {

@@ -62,9 +62,10 @@ export function mockCloseTime(tf: TimeframeCode, openTime: number): number {
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1);
 }
 
-/** `Timeframe::builds_from`: every bucket boundary of `tf` is one of `base`. */
+/** `Timeframe::builds_from`: every bucket boundary of `tf` is one of `base`; never 3d from a lower one. */
 export function mockBuildsFrom(tf: TimeframeCode, base: TimeframeCode): boolean {
   if (tf === base) return true;
+  if (tf === "3d") return false;
   const b = FIXED_MS[base];
   if (b === null) return false;
   const ms = FIXED_MS[tf];
