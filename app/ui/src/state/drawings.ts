@@ -26,7 +26,7 @@ export interface DrawingSurface {
   drawingStyle(action: StyleAction): void;
   setDrawingsHidden(on: boolean): void;
   drawingMenu(action: MenuAction): void;
-  showHiddenDrawings(): boolean;
+  showHiddenDrawings(): void;
   onDrawingCommit(cb: ((step: DrawingChange[]) => void) | null): void;
   onDrawingTool(cb: ((id: ToolId | null) => void) | null): void;
   onDrawingText(cb: ((edit: TextEdit | null) => void) | null): void;

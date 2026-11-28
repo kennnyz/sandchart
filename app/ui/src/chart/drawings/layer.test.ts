@@ -381,15 +381,15 @@ describe("context menu", () => {
     expect(l.state.drawings.some((d) => d.locked)).toBe(false);
     l.contextMenu(100, 400);
     l.menuAction("hide");
-    expect(l.state.hiddenCount()).toBe(2);
+    expect(l.state.drawings.filter((d) => d.hidden).length).toBe(2);
     expect(l.state.selection).toEqual([]);
     // A right click on a drawing outside the selection selects it alone.
     l.contextMenu(100, 700);
     expect(rec.menus.at(-1)).toMatchObject({ ids: ["c"], single: true });
     l.menuAction("remove");
     expect(l.state.drawings.map((d) => d.id)).toEqual(["a", "b"]);
-    expect(l.showHidden()).toBe(true);
-    expect(l.state.hiddenCount()).toBe(0);
+    l.showHidden();
+    expect(l.state.drawings.filter((d) => d.hidden).length).toBe(0);
   });
 
   it("opens the style popover from Settings, and Esc closes the menu", () => {

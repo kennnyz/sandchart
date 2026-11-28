@@ -108,11 +108,6 @@ export class DrawingState {
     return this.drawings.filter((d) => this.pickedSet.has(d.id));
   }
 
-  /** Drawings the user hid one by one (`hidden`), not painted until shown again. */
-  hiddenCount(): number {
-    return this.drawings.reduce((n, d) => n + (d.hidden ? 1 : 0), 0);
-  }
-
   setTool(id: ToolId | null): void {
     this.points = [];
     if (id !== null) this.pick([]);

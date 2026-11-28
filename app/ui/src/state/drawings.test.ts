@@ -66,7 +66,6 @@ function fakeSurface() {
     drawingMenu: (a) => menus.push(a),
     showHiddenDrawings: () => {
       showHidden++;
-      return true;
     },
     onDrawingMenu: (cb) => (menu = cb),
   };

@@ -339,10 +339,10 @@ describe("several selected", () => {
     expect(s.drawings.every((d) => d.hidden)).toBe(true);
     expect(s.selection).toEqual([]);
     expect(s.hover).toBeNull();
-    expect(s.hiddenCount()).toBe(2);
+    expect(s.drawings.filter((d) => d.hidden).length).toBe(2);
     // Undo shows and selects them again.
     expect(s.undo()).toBe(true);
-    expect(s.hiddenCount()).toBe(0);
+    expect(s.drawings.filter((d) => d.hidden).length).toBe(0);
     expect(s.selection).toEqual(["a", "b"]);
     expect(s.redo()).toBe(true);
     expect(s.updateMany(["a"], { hidden: true })).toBe(false);
@@ -355,11 +355,11 @@ describe("several selected", () => {
     s.reset([h1, stored("v", 3), h2]);
     expect(s.showHidden()).toBe(true);
     expect(commits).toHaveLength(2);
-    expect(s.hiddenCount()).toBe(0);
+    expect(s.drawings.filter((d) => d.hidden).length).toBe(0);
     expect(s.selection).toEqual(["h1", "h2"]);
     expect(s.showHidden()).toBe(false);
     expect(s.undo()).toBe(true);
-    expect(s.hiddenCount()).toBe(2);
+    expect(s.drawings.filter((d) => d.hidden).length).toBe(2);
     expect(s.selection).toEqual([]);
   });
 });

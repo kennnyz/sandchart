@@ -318,12 +318,9 @@ export class DrawingLayer {
     this.host.invalidate();
   }
 
-  /** Shows every drawing hidden one by one again (one undo step); false when there was none. */
-  showHidden(): boolean {
-    if (this.hiddenAll) this.setHiddenAll(false);
-    const done = this.state.showHidden();
-    if (done) this.host.invalidate();
-    return done;
+  /** Shows every drawing hidden one by one again, as one undo step. */
+  showHidden(): void {
+    if (this.state.showHidden()) this.host.invalidate();
   }
 
   /** Runs what the style popover asked for (see `StyleAction`). */

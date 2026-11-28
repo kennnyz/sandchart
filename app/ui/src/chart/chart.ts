@@ -440,9 +440,9 @@ export class Chart {
     this.drawings.menuAction(action);
   }
 
-  /** Shows every drawing hidden one by one again; false when there was none. */
-  showHiddenDrawings(): boolean {
-    return this.drawings.showHidden();
+  /** Shows every drawing hidden one by one again, as one undo step. */
+  showHiddenDrawings(): void {
+    this.drawings.showHidden();
   }
 
   /** Hide all drawings for this session (painting and hit-testing), or show them again. */
