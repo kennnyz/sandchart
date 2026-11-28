@@ -2,8 +2,8 @@
 //!
 //! Inputs are camelCase like the app's IPC and the core types they embed, and refuse
 //! unknown fields, so a misspelt optional field is an error instead of a silent default.
-//! Prices go in as integer ticks at a stated `priceScale`; outputs give ticks and, next to
-//! each, a decimal string (`price` and `priceDecimal`).
+//! Prices go in as integer ticks at a stated `priceScale`, which must be the pair's; outputs
+//! give ticks and, next to each, a decimal string (`price` and `priceDecimal`).
 
 use sandchart_core::alert::{Alert, AlertKind, Direction};
 use sandchart_core::replay::Trade;
@@ -85,7 +85,7 @@ pub struct DrawingInput {
     pub source: String,
     /// Symbol, e.g. "BTCUSDT".
     pub symbol: String,
-    /// Decimal places of the prices in `body` (the pair's priceScale from search_instruments).
+    /// Decimal places of the prices in `body`: the pair's priceScale from search_instruments.
     pub price_scale: u8,
     /// The shape. Prices `p`, `stop`, `take` are integer ticks; times `t`, `endT` are Unix ms.
     pub body: DrawingBody,
@@ -113,6 +113,8 @@ pub struct PositionInput {
     pub symbol: String,
     /// One of 1m 3m 5m 15m 30m 1h 2h 4h 6h 8h 12h 1d 3d 1w 1M.
     pub timeframe: String,
+    /// Decimal places of the prices in `position`: the pair's priceScale.
+    pub price_scale: u8,
     /// Entry {t: Unix ms, p: ticks}, stop and take in ticks at the pair's priceScale, and
     /// endT (Unix ms) after which it is no longer checked.
     pub position: PositionBody,
@@ -136,7 +138,7 @@ pub struct AlertInput {
     pub source: String,
     /// Symbol, e.g. "BTCUSDT".
     pub symbol: String,
-    /// Decimal places of `kind.price` (the pair's priceScale).
+    /// Decimal places of `kind.price`: the pair's priceScale.
     pub price_scale: u8,
     /// {"kind":"price","price":ticks} or {"kind":"drawing","drawingId":id} of an hline or
     /// trend drawing of the same pair.

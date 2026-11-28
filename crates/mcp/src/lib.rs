@@ -113,6 +113,18 @@ fn now_ms() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
+/// Ticks stated at `scale` must be at the pair's own: another scale is almost always a
+/// mistake that puts every price 10x or 100x off, so it is refused, not rescaled.
+fn check_scale(inst: &Instrument, scale: u8) -> Result<(), String> {
+    if scale == inst.price_scale {
+        return Ok(());
+    }
+    Err(format!(
+        "priceScale must be {}, the price scale of {}/{} (prices are ticks at it), not {scale}",
+        inst.price_scale, inst.id.source, inst.id.symbol
+    ))
+}
+
 /// A new id for a drawing or alert: unique across processes and calls.
 fn new_id(prefix: &str) -> String {
     static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -486,6 +498,7 @@ impl Sandchart {
     )]
     async fn save_drawing(&self, Parameters(p): Parameters<DrawingInput>) -> ToolResult {
         let inst = self.instrument(&p.source, &p.symbol).await?;
+        check_scale(&inst, p.price_scale)?;
         let d = Drawing {
             id: p.id.unwrap_or_else(|| new_id("mcp")),
             instrument: inst.id,
@@ -521,6 +534,7 @@ impl Sandchart {
         let tf = timeframe(&p.timeframe)?;
         p.position.validate()?;
         let inst = self.instrument(&p.source, &p.symbol).await?;
+        check_scale(&inst, p.price_scale)?;
         // Back from the bar after endT, so an old position is reached however long ago it
         // ended; one that ends from now on reads the newest candles.
         let bar = tf.fixed_ms().unwrap_or(MONTH_MS);
@@ -596,6 +610,7 @@ impl Sandchart {
     )]
     async fn set_alert(&self, Parameters(p): Parameters<AlertInput>) -> ToolResult {
         let inst = self.instrument(&p.source, &p.symbol).await?;
+        check_scale(&inst, p.price_scale)?;
         let a = Alert {
             id: p.id.unwrap_or_else(|| new_id("mcp")),
             instrument: inst.id,

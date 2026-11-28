@@ -63,7 +63,7 @@ Then ask in plain words, for example: "Show me the 4h RSI of ETHUSDT for the las
 
 ## Numbers, prices and times
 
-- **Prices are integers counted in ticks**, as everywhere in Sandchart. A pair's `priceScale` is the number of decimal places of one tick: on BTCUSDT (`priceScale` 2) the price 61443.01 is `6144301`. Inputs take ticks plus the `priceScale` they are written at; a drawing or alert at another scale is converted to the pair's, as the app does. Outputs give the ticks and, next to them, the same price as a decimal string (`price` and `priceDecimal`), so an agent never has to do float arithmetic on money.
+- **Prices are integers counted in ticks**, as everywhere in Sandchart. A pair's `priceScale` is the number of decimal places of one tick: on BTCUSDT (`priceScale` 2) the price 61443.01 is `6144301`. Inputs take ticks plus the `priceScale` they are written at, which must be the pair's (from `search_instruments`); another scale is refused (`priceScale must be 2, the price scale of binance/BTCUSDT ...`), because it almost always means every price is 10 or 100 times off. Outputs give the ticks and, next to them, the same price as a decimal string (`price` and `priceDecimal`), so an agent never has to do float arithmetic on money.
 - **Volumes** use the pair's `qtyScale` the same way.
 - **Times** are Unix milliseconds, UTC. A candle's `time` is its open time.
 - **Timeframes** are `1m 3m 5m 15m 30m 1h 2h 4h 6h 8h 12h 1d 3d 1w 1M`.
@@ -189,7 +189,7 @@ Saves a drawing with the same rules as the app ([Drawing tools](drawings.md)): a
 | --- | --- |
 | `id` | Optional, 1 to 64 characters from `A-Z a-z 0-9 _ -`. Leave it out for a new drawing; the server makes one. |
 | `source`, `symbol` | The pair. |
-| `priceScale` | The scale of the prices in `body`. |
+| `priceScale` | The scale of the prices in `body`: the pair's. |
 | `body` | The shape, by `kind` (below). |
 | `style` | Optional `{ "color": 0-7, "width": 1-4, "dash": false }`, default slot 0, width 1, solid. |
 | `locked`, `z` | Optional, default `false` and `0`. |
@@ -231,10 +231,11 @@ How a long or short position played out over the cached candles of a timeframe, 
 | Input | |
 | --- | --- |
 | `source`, `symbol`, `timeframe` | The pair and timeframe. |
+| `priceScale` | The scale of the prices in `position`: the pair's. |
 | `position` | `side`, `entry` `{ "t", "p" }`, `stop`, `take` (ticks), `endT` (ms, after the entry). |
 
 ```json
-{ "symbol": "BTCUSDT", "timeframe": "1h",
+{ "symbol": "BTCUSDT", "timeframe": "1h", "priceScale": 2,
   "position": { "side": "long", "entry": { "t": 1795752000000, "p": 6177735 }, "stop": 6150000, "take": 6233205,
                 "endT": 1795838400000 } }
 ```
@@ -289,7 +290,7 @@ Arms an alert ([Alerts](alerts.md)): a price alert, or an alert on an `hline` or
 | Input | |
 | --- | --- |
 | `id` | Optional; an existing id replaces that alert. |
-| `source`, `symbol`, `priceScale` | The pair and the scale of `kind.price`. |
+| `source`, `symbol`, `priceScale` | The pair and the scale of `kind.price`: the pair's. |
 | `kind` | `{ "kind": "price", "price": ticks }` or `{ "kind": "drawing", "drawingId": "..." }`. |
 | `direction` | `above`, `below` or `cross`. |
 

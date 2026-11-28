@@ -488,19 +488,21 @@ async fn drawings_are_saved_listed_and_deleted_with_the_apps_rules() {
     );
     assert!(saved["updatedAt"].as_i64().unwrap() > 0);
 
-    // A drawing at another price scale is rescaled to the pair's, like the app does.
-    let trend = h
-        .call(
-            "save_drawing",
-            json!({
-                "id": "t1", "symbol": "BTCUSDT", "priceScale": 3, "z": 2,
-                "body": { "kind": "trend", "a": { "t": T0, "p": 100_000 }, "b": { "t": T0 + H, "p": 101_000 },
-                          "extendLeft": false, "extendRight": true },
-                "style": { "color": 3, "width": 2, "dash": true }
-            }),
-        )
-        .await;
-    assert_eq!(trend["priceScale"], 2);
+    // Ticks at another price scale are a mistake (10x or 100x off), not rescaled.
+    let trend = json!({
+        "id": "t1", "symbol": "BTCUSDT", "priceScale": 3, "z": 2,
+        "body": { "kind": "trend", "a": { "t": T0, "p": 10_000 }, "b": { "t": T0 + H, "p": 10_100 },
+                  "extendLeft": false, "extendRight": true },
+        "style": { "color": 3, "width": 2, "dash": true }
+    });
+    let e = h.fail("save_drawing", trend.clone()).await;
+    assert_eq!(
+        e,
+        "priceScale must be 2, the price scale of binance/BTCUSDT (prices are ticks at it), not 3"
+    );
+    let mut trend = trend;
+    trend["priceScale"] = json!(2);
+    let trend = h.call("save_drawing", trend).await;
     assert_eq!(trend["body"]["a"]["p"], 10_000);
 
     let list = h
@@ -559,7 +561,7 @@ async fn a_position_resolves_over_the_candles_fetched_back_to_its_entry() {
     let got = h
         .call(
             "position_outcome",
-            json!({ "symbol": "BTCUSDT", "timeframe": "1h", "position": position }),
+            json!({ "symbol": "BTCUSDT", "timeframe": "1h", "priceScale": 2, "position": position }),
         )
         .await;
     assert_eq!(got["status"], "take");
@@ -570,12 +572,15 @@ async fn a_position_resolves_over_the_candles_fetched_back_to_its_entry() {
     let e = h
         .fail(
             "position_outcome",
-            json!({ "symbol": "BTCUSDT", "timeframe": "1h", "position": {
+            json!({ "symbol": "BTCUSDT", "timeframe": "1h", "priceScale": 2, "position": {
                 "side": "long", "entry": { "t": T0, "p": 100 }, "stop": 200, "take": 300, "endT": T0 + H
             } }),
         )
         .await;
     assert_eq!(e, "a long position needs stop < entry < take");
+    let mut wrong = json!({ "symbol": "BTCUSDT", "timeframe": "1h", "priceScale": 1, "position": position });
+    let e = h.fail("position_outcome", wrong.take()).await;
+    assert_contains(&e, "priceScale must be 2");
 }
 
 fn replay_file() -> String {
@@ -699,6 +704,14 @@ async fn alerts_are_set_listed_and_deleted() {
         "only while the Sandchart app",
     );
     let id = set["id"].as_str().unwrap().to_owned();
+    let e = h
+        .fail(
+            "set_alert",
+            json!({ "symbol": "BTCUSDT", "priceScale": 4, "kind": { "kind": "price", "price": 13_000 },
+                    "direction": "above" }),
+        )
+        .await;
+    assert_contains(&e, "priceScale must be 2, the price scale of binance/BTCUSDT");
 
     h.call(
         "save_drawing",
@@ -920,7 +933,7 @@ async fn a_position_is_resolved_from_its_end_back_and_refused_past_5000_bars() {
     let at = |i: i64| T0 + i * H;
     let position = |entry: i64, end: i64| {
         let p = candle(entry).close;
-        json!({ "symbol": "BTCUSDT", "timeframe": "1h", "position": {
+        json!({ "symbol": "BTCUSDT", "timeframe": "1h", "priceScale": 2, "position": {
             "side": "long", "entry": { "t": at(entry), "p": p },
             "stop": p - 100, "take": p + 150, "endT": at(end)
         } })
