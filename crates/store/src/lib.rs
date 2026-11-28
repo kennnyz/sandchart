@@ -1,5 +1,5 @@
 //! SQLite cache for instruments, candles, history-start markers, the watchlist, the chart
-//! indicators and drawings.
+//! indicators, drawings and alerts.
 //!
 //! All prices and volumes are stored as `INTEGER` ticks; floats never touch the database.
 
@@ -8,6 +8,7 @@ mod migrations;
 use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension, params};
+use sandchart_core::alert::{Alert, AlertKind, Direction};
 use sandchart_core::{Candle, Drawing, Instrument, InstrumentId, Timeframe};
 
 /// Errors returned by [`Store`].
@@ -23,10 +24,26 @@ pub enum StoreError {
     Json(#[from] serde_json::Error),
     #[error("an instrument can hold at most {max} drawings; delete some first")]
     TooManyDrawings { max: usize },
+    #[error("at most {max} alerts can be active at once; delete one or wait for one to fire")]
+    TooManyActiveAlerts { max: usize },
+    #[error(
+        "at most {max} pairs can have active alerts, each needs a live stream; \
+         delete the alerts of another pair first"
+    )]
+    TooManyAlertPairs { max: usize },
+    #[error("at most {max} alerts can be kept; delete some fired ones first")]
+    TooManyAlerts { max: usize },
 }
 
 /// Most drawings one instrument can hold.
 pub const MAX_DRAWINGS_PER_INSTRUMENT: usize = 2000;
+
+/// Most alerts that are active at once.
+pub const MAX_ACTIVE_ALERTS: usize = 100;
+/// Most pairs with an active alert: each needs a live stream (ADR 0007).
+pub const MAX_ALERT_PAIRS: usize = 30;
+/// Most alerts kept, active or fired.
+pub const MAX_ALERTS: usize = 500;
 
 /// An installed indicator module, as recorded at install time.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -511,10 +528,157 @@ impl Store {
         Ok(())
     }
 
-    /// Removes a drawing; an unknown id is not an error.
+    /// Removes a drawing and its alerts, atomically; an unknown id is not an error.
     pub fn delete_drawing(&mut self, id: &str) -> Result<(), StoreError> {
+        let tx = self.conn.transaction()?;
+        tx.execute("DELETE FROM alerts WHERE drawing_id = ?1", [id])?;
+        tx.execute("DELETE FROM drawings WHERE id = ?1", [id])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Every alert, oldest first. A row this version cannot read is left out and logged.
+    pub fn alerts(&self) -> Result<Vec<Alert>, StoreError> {
+        self.query_alerts("", [])
+    }
+
+    pub fn alert(&self, id: &str) -> Result<Option<Alert>, StoreError> {
+        Ok(self.query_alerts("WHERE id = ?1", [id])?.pop())
+    }
+
+    fn query_alerts<P: rusqlite::Params>(
+        &self,
+        filter: &str,
+        params: P,
+    ) -> Result<Vec<Alert>, StoreError> {
+        let mut stmt = self.conn.prepare_cached(&format!(
+            "SELECT id, source, symbol, price_scale, kind, price, drawing_id, direction, active,
+                    created_at, triggered_at, triggered_price
+             FROM alerts {filter} ORDER BY created_at, id"
+        ))?;
+        let rows = stmt.query_map(params, |row| {
+            let kind = match row.get::<_, String>(4)?.as_str() {
+                "price" => Some(AlertKind::Price { price: row.get(5)? }),
+                "drawing" => Some(AlertKind::Drawing {
+                    drawing_id: row.get(6)?,
+                }),
+                _ => None,
+            };
+            let direction = Direction::from_code(&row.get::<_, String>(7)?);
+            let id: String = row.get(0)?;
+            let (Some(kind), Some(direction)) = (kind, direction) else {
+                return Ok(Err(id));
+            };
+            Ok(Ok(Alert {
+                id,
+                instrument: InstrumentId {
+                    source: row.get(1)?,
+                    symbol: row.get(2)?,
+                },
+                price_scale: row.get(3)?,
+                kind,
+                direction,
+                active: row.get(8)?,
+                created_at: row.get(9)?,
+                triggered_at: row.get(10)?,
+                triggered_price: row.get(11)?,
+            }))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            match row? {
+                Ok(a) => out.push(a),
+                Err(id) => eprintln!("alert {id} cannot be read"),
+            }
+        }
+        Ok(out)
+    }
+
+    /// Inserts or replaces an alert by id. An active one is refused past
+    /// [`MAX_ACTIVE_ALERTS`] or [`MAX_ALERT_PAIRS`], any one past [`MAX_ALERTS`].
+    pub fn upsert_alert(&mut self, a: &Alert) -> Result<(), StoreError> {
+        let tx = self.conn.transaction()?;
+        let count = |sql: &str, p: &[&dyn rusqlite::ToSql]| -> Result<usize, StoreError> {
+            let n: i64 = tx.query_row(sql, p, |row| row.get(0))?;
+            Ok(usize::try_from(n).unwrap_or(usize::MAX))
+        };
+        if count("SELECT COUNT(*) FROM alerts WHERE id != ?1", &[&a.id])? >= MAX_ALERTS {
+            return Err(StoreError::TooManyAlerts { max: MAX_ALERTS });
+        }
+        if a.active {
+            let active = "SELECT COUNT(*) FROM alerts WHERE active = 1 AND id != ?1";
+            if count(active, &[&a.id])? >= MAX_ACTIVE_ALERTS {
+                return Err(StoreError::TooManyActiveAlerts {
+                    max: MAX_ACTIVE_ALERTS,
+                });
+            }
+            let pairs = count(
+                "SELECT COUNT(*) FROM (
+                    SELECT source, symbol FROM alerts WHERE active = 1 AND id != ?1
+                    UNION SELECT ?2, ?3)",
+                &[&a.id, &a.instrument.source, &a.instrument.symbol],
+            )?;
+            if pairs > MAX_ALERT_PAIRS {
+                return Err(StoreError::TooManyAlertPairs {
+                    max: MAX_ALERT_PAIRS,
+                });
+            }
+        }
+        let (kind, price, drawing_id) = match &a.kind {
+            AlertKind::Price { price } => ("price", Some(*price), None),
+            AlertKind::Drawing { drawing_id } => ("drawing", None, Some(drawing_id.as_str())),
+        };
+        tx.execute(
+            "INSERT OR REPLACE INTO alerts
+                (id, source, symbol, price_scale, kind, price, drawing_id, direction, active,
+                 created_at, triggered_at, triggered_price)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                a.id,
+                a.instrument.source,
+                a.instrument.symbol,
+                a.price_scale,
+                kind,
+                price,
+                drawing_id,
+                a.direction.code(),
+                a.active,
+                a.created_at,
+                a.triggered_at,
+                a.triggered_price
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Records that an active alert fired: `fired` holds the trigger and its prices at the
+    /// scale they were seen at. Only an alert that is still active changes, so one that
+    /// was deleted or already fired meanwhile stays as it is; returns whether it changed.
+    pub fn fire_alert(&mut self, fired: &Alert) -> Result<bool, StoreError> {
+        let price = match fired.kind {
+            AlertKind::Price { price } => Some(price),
+            AlertKind::Drawing { .. } => None,
+        };
+        let n = self.conn.execute(
+            "UPDATE alerts SET active = 0, triggered_at = ?2, triggered_price = ?3,
+                    price_scale = ?4, price = ?5
+             WHERE id = ?1 AND active = 1",
+            params![
+                fired.id,
+                fired.triggered_at,
+                fired.triggered_price,
+                fired.price_scale,
+                price
+            ],
+        )?;
+        Ok(n == 1)
+    }
+
+    /// Removes an alert; an unknown id is not an error.
+    pub fn delete_alert(&mut self, id: &str) -> Result<(), StoreError> {
         self.conn
-            .execute("DELETE FROM drawings WHERE id = ?1", [id])?;
+            .execute("DELETE FROM alerts WHERE id = ?1", [id])?;
         Ok(())
     }
 }
