@@ -1,6 +1,7 @@
-import { Activity, ChevronDown, Moon, PanelRightOpen, Sun } from "lucide-react";
+import { Activity, ChevronDown, History, Moon, PanelRightOpen, Sun } from "lucide-react";
 import type { ConnectionState, InstrumentId, TimeframeCode } from "../backend/types";
 import { getLanguage, setLanguage, t } from "../i18n";
+import type { ReplayPhase } from "../state/replay";
 import { shortcutLabel, sourceName } from "../labels";
 import { TimeframePicker } from "./TimeframePicker";
 
@@ -15,6 +16,9 @@ export interface TopBarProps {
   onTheme: (t: "dark" | "light") => void;
   onSearch: () => void;
   onIndicators: () => void;
+  /** Off: the button starts picking a replay start; otherwise it ends the replay. */
+  replayPhase: ReplayPhase;
+  onReplay: () => void;
   /** When the watchlist is hidden, a button here brings it back. */
   watchlistHidden: boolean;
   onShowWatchlist: () => void;
@@ -71,6 +75,17 @@ export function TopBar(p: TopBarProps) {
       >
         <Activity size={14} />
         {t("indicators.button")}
+      </button>
+      <button
+        className="text-button with-icon"
+        data-testid="replay-button"
+        aria-pressed={p.replayPhase !== "off"}
+        title={p.replayPhase === "off" ? t("replay.button.title") : t("replay.exit")}
+        disabled={!p.current}
+        onClick={p.onReplay}
+      >
+        <History size={14} />
+        {t("replay.button")}
       </button>
       <div className="spacer" />
       <div className="connection" data-testid="connection">

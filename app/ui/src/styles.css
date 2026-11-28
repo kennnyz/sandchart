@@ -1170,3 +1170,124 @@ button:disabled {
 .note-editor-bytes[data-full="true"] {
   color: var(--down);
 }
+
+/* ---- Replay ---- */
+
+.chart-row {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+.text-button[aria-pressed="true"] {
+  background: var(--fg-8);
+  color: var(--fg);
+}
+.replay-bar {
+  height: 36px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 12px;
+}
+.replay-bar .divider {
+  height: 18px;
+  margin: 0 6px;
+}
+.replay-bar .spacer {
+  flex: 1;
+}
+.replay-bar .icon-button[aria-pressed="true"] {
+  color: var(--fg);
+}
+.replay-bar .icon-button:hover,
+.replay-bar .text-button:hover {
+  color: var(--fg);
+}
+.replay-icon {
+  color: var(--muted);
+  margin: 0 4px;
+  flex: none;
+}
+.replay-hint {
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.replay-date {
+  height: 24px;
+  margin-left: 8px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 12px;
+}
+.replay-speeds {
+  display: flex;
+  gap: 1px;
+  margin-left: 4px;
+  padding: 2px;
+  border-radius: 6px;
+  background: var(--fg-5);
+}
+.replay-speed {
+  height: 22px;
+  min-width: 28px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.replay-speed:hover {
+  color: var(--fg);
+}
+.replay-speed[aria-pressed="true"] {
+  background: var(--bg);
+  color: var(--fg);
+}
+.replay-end,
+.replay-file-error {
+  margin-left: 8px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.replay-stats {
+  width: 184px;
+  flex: none;
+  padding: 10px 12px;
+  border-left: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 12px;
+  overflow-y: auto;
+}
+.replay-stats-title {
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.replay-stat {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  height: 22px;
+  align-items: center;
+}
+.replay-stat .label {
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.replay-stats-sep {
+  height: 1px;
+  margin: 6px 0;
+  background: var(--line);
+}

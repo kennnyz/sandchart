@@ -21,6 +21,8 @@ serde.workspace = true
 serde_json = "1"
 thiserror.workspace = true
 tauri = { version = "2", features = [] }
+# The native save panel for replay files, shown from Rust.
+tauri-plugin-dialog = "2"
 # Pinned to the minor: `configure_client` hands us its reqwest builder, which may change in a minor.
 tauri-plugin-updater = "~2.14"
 # Already in the tree through the updater (same 0.13); names the builder for the timeouts.

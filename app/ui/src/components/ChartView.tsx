@@ -10,12 +10,15 @@ import { ChartSession, type SessionState } from "../state/chartSession";
 import type { DrawingPatch } from "../chart/drawings/state";
 import type { DrawingStore } from "../state/drawings";
 import type { IndicatorStore } from "../state/indicators";
+import type { ReplayStore } from "../state/replay";
 import { Banner } from "./Banner";
 import { DrawingStyle } from "./DrawingStyle";
 import { IndicatorLegend } from "./IndicatorLegend";
 import { IndicatorSettings } from "./IndicatorSettings";
 import { Legend } from "./Legend";
 import { NoteEditor } from "./NoteEditor";
+import { ReplayBar } from "./ReplayBar";
+import { ReplayStats } from "./ReplayStats";
 import { tfLabel } from "./TimeframePicker";
 
 export interface ChartViewProps {
@@ -27,6 +30,7 @@ export interface ChartViewProps {
   connection: ConnectionState;
   indicators: IndicatorStore;
   drawings: DrawingStore;
+  replay: ReplayStore;
 }
 
 const NO_VALUES = new Map<string, Map<string, number>>();
@@ -47,7 +51,7 @@ export function Loading({ symbol, tf, source }: { symbol: string; tf: string; so
 }
 
 /** The chart column: banner, canvas with legend and states; a `ChartSession` feeds it. */
-export function ChartView({ backend, id, tf, theme, priceMode, connection, indicators, drawings }: ChartViewProps) {
+export function ChartView({ backend, id, tf, theme, priceMode, connection, indicators, drawings, replay }: ChartViewProps) {
   const lang = useLanguage();
   const hostRef = useRef<HTMLDivElement>(null);
   const [parts, setParts] = useState<{ chart: Chart; session: ChartSession } | null>(null);
@@ -60,6 +64,11 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
   );
   useSyncExternalStore(indicators.subscribe, indicators.version);
   useSyncExternalStore(drawings.subscribe, drawings.version);
+  useSyncExternalStore(replay.subscribe, replay.version);
+  const rp = replay.state;
+  /** The chart the props ask for, read when a replay ends. */
+  const wanted = useRef({ id, tf });
+  wanted.current = { id, tf };
   const ind = indicators.state;
   const textEdit = drawings.state.textEdit;
   const styleEdit = drawings.state.styleEdit;
@@ -111,8 +120,67 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
     ind.clear();
     computedFor.current = null;
     parts.chart.setIndicators(ind.layers(), 0);
+    // Back on the replayed chart (an opened file switched to it): show the replay again.
+    if (rp.matches({ source, symbol }, tf)) {
+      void rp.resync();
+      return;
+    }
+    // Another chart was picked: the replay ends, and this chart loads live.
+    if (rp.phase !== "off") void rp.exit(false);
     void parts.session.open({ source, symbol }, tf);
-  }, [parts, source, symbol, tf, ind]);
+  }, [parts, source, symbol, tf, ind, rp]);
+
+  // The replay puts its revealed bars on the chart, and the live chart back when it ends.
+  useEffect(() => {
+    if (!parts) return;
+    // The bars are swapped: indicator results and position outcomes of the old ones must go.
+    const swapped = () => {
+      ind.clear();
+      computedFor.current = null;
+      drawings.state.resetOutcomes();
+    };
+    return rp.attach({
+      show(st) {
+        swapped();
+        parts.session.showReplay(st);
+      },
+      append(bars) {
+        parts.session.appendReplay(bars);
+      },
+      reload() {
+        swapped();
+        const { id: to, tf: at } = wanted.current;
+        void parts.session.open(to, at);
+      },
+    });
+  }, [parts, rp, ind, drawings]);
+
+  // Picking a start: a click on a bar of this chart starts the replay there.
+  const picking = rp.phase === "picking";
+  useEffect(() => {
+    if (!chart || !picking) return;
+    chart.setPick((time) => void rp.start({ source, symbol }, tf, time));
+    return () => chart.setPick(null);
+  }, [chart, picking, rp, source, symbol, tf]);
+
+  const replayView = rp.phase === "on" ? rp.view : null;
+  useEffect(() => {
+    chart?.setReplay(
+      replayView ? { trades: replayView.trades, time: replayView.time, close: replayView.close, label: t("replay.marker") } : null,
+    );
+  }, [chart, replayView, lang]);
+  useEffect(() => {
+    if (!chart) return;
+    chart.onReplayEdit((stop, take) => void rp.edit(stop, take));
+    return () => chart.onReplayEdit(null);
+  }, [chart, rp]);
+  const pickByDate = useCallback(
+    (time: number) => {
+      const bar = chart?.barAtOrAfter(time);
+      if (bar != null) void rp.start({ source, symbol }, tf, bar);
+    },
+    [chart, rp, source, symbol, tf],
+  );
 
   const priceScale = state?.instrument?.priceScale ?? 0;
   const layers = ind.layers();
@@ -179,6 +247,10 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
   const settingsFor = settings ? ind.instances.find((i) => i.instance === settings.instance) : undefined;
   const settingsInfo = settingsFor ? ind.info(settingsFor.moduleId) : undefined;
 
+  const first = chart && count > 0 ? chart.candle(0) : null;
+  const lastBar = chart && count > 0 ? chart.candle(count - 1) : null;
+  const range: [number, number] | null = first && lastBar ? [first.time, lastBar.time] : null;
+
   let banner = null;
   if (problem || connection === "offline") {
     const last = chart && count > 0 ? chart.candle(count - 1) : null;
@@ -208,9 +280,20 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
           detail={drawingError.message}
         />
       )}
+      {rp.error !== null && (
+        <Banner
+          testId="replay-error"
+          text={t("replay.error", { error: rp.error })}
+          retryAt={null}
+          retryLabel={() => ""}
+          detail={rp.error}
+        />
+      )}
+      <div className="chart-row">
       <div
         ref={hostRef}
         data-testid="chart"
+        data-replay={rp.phase}
         style={{ position: "relative", flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden", background: theme.bg }}
       >
         <Legend
@@ -269,6 +352,9 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
         )}
         {loading && <Loading symbol={symbol} tf={tfLabel(tf)} source={sourceLabel} />}
       </div>
+      {replayView && <ReplayStats view={replayView} />}
+      </div>
+      {rp.phase !== "off" && <ReplayBar replay={rp} range={range} onDate={pickByDate} />}
     </>
   );
 }

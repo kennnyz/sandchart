@@ -51,6 +51,7 @@ async fn sync_instruments(engine: Arc<Engine>, ready: Arc<AtomicBool>, app: AppH
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
         .manage(UpdaterState::default())
         .setup(|app| {
             let dirs = directories::ProjectDirs::from("", "", "Sandchart")
@@ -116,6 +117,13 @@ fn main() {
             commands::save_drawing,
             commands::delete_drawing,
             commands::get_position_outcomes,
+            commands::replay_start,
+            commands::replay_step,
+            commands::replay_command,
+            commands::replay_state,
+            commands::replay_save,
+            commands::replay_open,
+            commands::replay_exit,
             update::check_update,
             update::install_update,
         ])

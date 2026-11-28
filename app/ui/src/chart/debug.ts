@@ -34,6 +34,14 @@ export interface ChartDebug {
   ruler: string | null;
   /** Position outcomes the chart was last given, by drawing id: "take", "stop", "open", with "?" when ambiguous. */
   outcomes: Record<string, string>;
+  /** Open time of the chart's last bar at the last base frame, null without bars. */
+  lastBarTime: number | null;
+  /** `lastTime` of every indicator layer with a result at the last base frame, in layer order. */
+  indicatorLastTimes: number[];
+  /** Stop and take handles of the open replay trade at the last base frame, in CSS px of the chart. */
+  replayHandles: { stop: { x: number; y: number }; take: { x: number; y: number } } | null;
+  /** Closed replay trades painted at the last base frame. */
+  replayClosed: number;
 }
 
 let debug: ChartDebug | null = null;
@@ -58,6 +66,10 @@ export function enableChartDebug(): void {
     selectedHandles: [],
     ruler: null,
     outcomes: {},
+    lastBarTime: null,
+    indicatorLastTimes: [],
+    replayHandles: null,
+    replayClosed: 0,
   };
   (window as unknown as { __sandchartDebug: ChartDebug }).__sandchartDebug = debug;
 }

@@ -16,14 +16,19 @@ import {
   type ParamValue,
   type PositionBody,
   type PositionOutcome,
+  type ReplayCommand,
+  type ReplayState,
   type SeriesData,
   type SeriesSpec,
   type Problem,
   type TimeframeCode,
   type UpdateInfo,
 } from "./types";
+import { MOCK_MAX_REPLAY_CANDLES, type MockCandle, mockReadReplay, mockSimulate, mockWriteReplay } from "./mockReplay";
 
 const PAGE = 1000;
+/** Bars of context before a replay's start, as `REPLAY_CONTEXT` in the engine. */
+const REPLAY_CONTEXT = 500;
 const MINUTE = 60_000;
 const STEP_MS: Record<TimeframeCode, number> = {
   "1m": MINUTE,
@@ -517,7 +522,25 @@ function column(): CandleColumns {
 
 /** The mock plus a way for tests to push live events into its open subscriptions. */
 export interface MockBackend extends Backend {
+  /** To every open subscription, except those of an instrument being replayed. */
   emitLive(e: LiveEvent): void;
+  /** The text of the last `replaySave`, or null. */
+  replayFile(): string | null;
+}
+
+/** A replay session over the mock's candles (made as they are revealed) or a file's. */
+interface MockSession {
+  instrument: Instrument;
+  tf: TimeframeCode;
+  /** Bars made so far, at least up to `current`. */
+  candles: MockCandle[];
+  /** How many bars the session has in all. */
+  total: number;
+  /** Makes bar `k`; null for a file, whose bars are all in `candles`. */
+  make: ((k: number) => MockCandle) | null;
+  start: number;
+  current: number;
+  commands: ReplayCommand[];
 }
 
 export function createMockBackend(opts: MockOptions): MockBackend {
@@ -532,7 +555,9 @@ export function createMockBackend(opts: MockOptions): MockBackend {
     ? SYMBOLS.filter((i) => opts.watchlist!.includes(i.id.symbol)).map((i) => i.id)
     : SYMBOLS.slice(0, 5).map((i) => i.id);
   let watchlist: InstrumentId[] = opts.watchlistStore?.load() ?? initial;
-  const live = new Set<(e: LiveEvent) => void>();
+  const live = new Map<(e: LiveEvent) => void, InstrumentId>();
+  let session: MockSession | null = null;
+  let savedReplay: string | null = null;
   const synced = new Set<() => void>();
   let ready = !opts.instrumentsAfterMs;
   if (!ready) {
@@ -610,11 +635,74 @@ export function createMockBackend(opts: MockOptions): MockBackend {
     const instrument = SYMBOLS.find((i) => i.id.symbol === symbol);
     if (!instrument) throw new Error(`unknown instrument ${symbol}`);
     const { timeOf, first } = timeline(tf);
-    const raw = column();
-    appendCandles(raw, timeOf, Math.max(first, opts.candles - BAR_CAP), opts.candles);
-    const k = 10 ** (opts.priceScale ?? instrument.priceScale);
-    const px = (a: number[]) => a.map((v) => v / k);
-    return { time: raw.time, open: px(raw.open), high: px(raw.high), low: px(raw.low), close: px(raw.close) };
+    const candles = [...candleRange(timeOf, Math.max(first, opts.candles - BAR_CAP), opts.candles)];
+    return toPriceBars(candles, opts.priceScale ?? instrument.priceScale);
+  }
+
+  function toPriceBars(candles: MockCandle[], scale: number): MockBars {
+    const k = 10 ** scale;
+    return {
+      time: candles.map((c) => c.time),
+      open: candles.map((c) => c.open / k),
+      high: candles.map((c) => c.high / k),
+      low: candles.map((c) => c.low / k),
+      close: candles.map((c) => c.close / k),
+    };
+  }
+
+  /** The open replay's revealed bars when it replays `(id, tf)`, as `replay_bars` in the engine. */
+  function replayBars(id: InstrumentId, tf: TimeframeCode): { scale: number; candles: MockCandle[] } | null {
+    const s = session;
+    if (!s || s.tf !== tf || s.instrument.id.source !== id.source || s.instrument.id.symbol !== id.symbol) return null;
+    reveal(s);
+    return { scale: s.instrument.priceScale, candles: s.candles.slice(0, s.current + 1) };
+  }
+
+  function openSession(): MockSession {
+    if (!session) throw problem("no replay is open");
+    return session;
+  }
+
+  /** Makes the bars up to the current one. */
+  function reveal(s: MockSession) {
+    while (s.make && s.candles.length <= s.current) s.candles.push(s.make(s.candles.length));
+  }
+
+  function simulateOrThrow(s: MockSession, commands: ReplayCommand[]) {
+    reveal(s);
+    try {
+      return mockSimulate(s.candles, s.start, s.current, commands);
+    } catch (e) {
+      throw problem(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  function replayStateOf(s: MockSession, cursor: number, tradesFrom: number): ReplayState {
+    const { trades, stats } = simulateOrThrow(s, s.commands);
+    const closed = trades.length - (trades.at(-1)?.reason === "open" ? 1 : 0);
+    const tf = Math.min(tradesFrom, closed);
+    const from = Math.min(cursor, s.current + 1);
+    const bars = column();
+    for (const c of s.candles.slice(from, s.current + 1)) {
+      bars.time.push(c.time);
+      bars.open.push(c.open);
+      bars.high.push(c.high);
+      bars.low.push(c.low);
+      bars.close.push(c.close);
+      bars.volume.push(c.volume);
+    }
+    return {
+      instrument: { ...s.instrument },
+      tf: s.tf,
+      start: s.start,
+      current: s.current,
+      atEnd: s.current + 1 >= s.total,
+      from,
+      bars,
+      tradesFrom: tf,
+      trades: trades.slice(tf),
+      stats,
+    };
   }
 
   function computeInstance(inst: IndicatorInstance, bars: MockBars, fromTime: number): IndicatorResult {
@@ -678,14 +766,86 @@ export function createMockBackend(opts: MockOptions): MockBackend {
 
     async subscribeLive(id, _tf, onEvent) {
       await delayFor(id.symbol);
-      live.add(onEvent);
+      live.set(onEvent, id);
       return () => {
         live.delete(onEvent);
       };
     },
 
     emitLive(e) {
-      for (const cb of live) cb(e);
+      for (const [cb, sub] of live) {
+        const paused = session?.instrument.id.source === sub.source && session.instrument.id.symbol === sub.symbol;
+        if (!paused) cb(e);
+      }
+    },
+
+    replayFile: () => savedReplay,
+
+    async replayStart(id, tf, startTime) {
+      await delayFor(id.symbol);
+      const instrument = SYMBOLS.find((i) => i.id.source === id.source && i.id.symbol === id.symbol);
+      if (!instrument) throw problem(`unknown instrument ${id.source}/${id.symbol}`);
+      const { step, timeOf, first } = timeline(tf);
+      const i = (startTime - timeOf(0)) / step;
+      if (!Number.isInteger(i) || i < first || i >= opts.candles) throw problem(`no cached ${tf} bar opens at ${startTime}`);
+      const ctx = Math.max(first, i - REPLAY_CONTEXT);
+      const make = (k: number) => candleAt(ctx + k, timeOf(ctx + k));
+      session = {
+        instrument: { ...instrument, priceScale: opts.priceScale ?? instrument.priceScale },
+        tf,
+        candles: [],
+        total: Math.min(opts.candles - ctx, MOCK_MAX_REPLAY_CANDLES),
+        make,
+        start: i - ctx,
+        current: i - ctx,
+        commands: [],
+      };
+      return replayStateOf(session, 0, 0);
+    },
+
+    async replayStep(n) {
+      await delay();
+      const s = openSession();
+      s.current = Math.min(s.current + n, s.total - 1);
+      return s.current;
+    },
+
+    async replayCommand(command) {
+      await delay();
+      const s = openSession();
+      const next = [...s.commands, structuredClone(command)];
+      simulateOrThrow(s, next);
+      s.commands = next;
+    },
+
+    async replayState(cursor, tradesFrom) {
+      await delay();
+      return replayStateOf(openSession(), cursor, tradesFrom);
+    },
+
+    async replaySave() {
+      await delay();
+      const s = openSession();
+      reveal(s);
+      savedReplay = await mockWriteReplay({ ...s, candles: s.candles.slice(0, s.current + 1) });
+      return `${s.instrument.id.symbol}-${s.tf}.replay`;
+    },
+
+    async replayOpen(bytes) {
+      await delay();
+      let f;
+      try {
+        f = await mockReadReplay(bytes);
+      } catch (e) {
+        throw problem(e instanceof Error ? e.message : String(e));
+      }
+      session = { ...f, total: f.candles.length, make: null };
+      return replayStateOf(session, 0, 0);
+    },
+
+    async replayExit() {
+      await delay();
+      session = null;
     },
 
     async getWatchlist() {
@@ -842,6 +1002,14 @@ export function createMockBackend(opts: MockOptions): MockBackend {
         const bad = mockValidatePosition(p.position);
         if (bad) throw problem(`position ${p.id}: ${bad}`);
       }
+      const replayed = replayBars(id, tf);
+      if (replayed) {
+        // Only the revealed bars count in a replay.
+        return positions.map(({ id: drawingId, position }) => ({
+          id: drawingId,
+          outcome: mockResolve(position, replayed.candles.filter((c) => c.time > position.entry.t)),
+        }));
+      }
       const { step, timeOf, first } = timeline(tf);
       return positions.map(({ id: drawingId, position }) => {
         // Bars with entry.t < time <= endT within the generated series, read up to the one that decides.
@@ -855,7 +1023,8 @@ export function createMockBackend(opts: MockOptions): MockBackend {
       await delayFor(id.symbol);
       const visible = chartIndicators.filter((i) => !i.hidden);
       if (visible.length === 0) return [];
-      const bars = priceBars(id.symbol, tf);
+      const replayed = replayBars(id, tf);
+      const bars = replayed ? toPriceBars(replayed.candles.slice(-BAR_CAP), replayed.scale) : priceBars(id.symbol, tf);
       return visible.map((i) => computeInstance(i, bars, fromTime));
     },
   };

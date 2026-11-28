@@ -435,6 +435,50 @@ describe("ChartSession", () => {
   });
 });
 
+describe("ChartSession in a replay", () => {
+  it("shows the revealed bars without live updates or older pages, and open goes live again", async () => {
+    const listeners: { stopped: boolean }[] = [];
+    const mock = createMockBackend({ candles: 3000 });
+    const backend: Backend = {
+      ...mock,
+      async subscribeLive() {
+        const l = { stopped: false };
+        listeners.push(l);
+        return () => {
+          l.stopped = true;
+        };
+      },
+    };
+    const { chart, session, last } = setup(backend);
+    await session.open(BTC, "1h");
+    const st = await mock.replayStart(ETH, "1h", (await mock.getCandles(ETH, "1h")).time.at(-50)!);
+    session.showReplay(st);
+    expect(listeners[0]!.stopped).toBe(true);
+    expect(chart.symbol).toBe("ETHUSDT");
+    expect(chart.count).toBe(501);
+    expect(last()).toMatchObject({ id: ETH, tf: "1h", status: "ready", replay: true });
+    const v = last().version;
+
+    await mock.replayStep(2);
+    session.appendReplay((await mock.replayState(501, 0)).bars);
+    expect(chart.count).toBe(503);
+    expect(last().version).toBe(v + 1);
+
+    const pages = vi.spyOn(backend, "getCandles");
+    await session.loadOlder();
+    expect(pages).not.toHaveBeenCalled();
+
+    await session.open(ETH, "1h");
+    expect(last()).toMatchObject({ status: "ready", replay: false });
+    expect(chart.count).toBe(1000);
+    expect(listeners).toHaveLength(2);
+    expect(listeners[1]!.stopped).toBe(false);
+    session.appendReplay((await mock.replayState(0, 0)).bars);
+    expect(chart.count).toBe(1000);
+    session.close();
+  });
+});
+
 const H = 3_600_000;
 
 function columns(time: number[], close: number): CandleColumns {

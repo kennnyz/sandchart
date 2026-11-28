@@ -10,16 +10,18 @@ Sandchart is a desktop chart app: a Rust core (candles, providers, SQLite cache)
 
 | Path | What |
 | --- | --- |
-| `crates/core` | Types shared by everything: `Candle`, `Instrument`, `Timeframe`, tick/price scaling. No I/O. `drawing.rs` holds the `Drawing` model and its validation, `position.rs` the outcome of a position (`resolve`), used by the engine and later by replay. |
+| `crates/core` | Types shared by everything: `Candle`, `Instrument`, `Timeframe`, tick/price scaling. No I/O. `drawing.rs` holds the `Drawing` model and its validation, `position.rs` the outcome of a position (`resolve`), used by the engine and by replay. `replay.rs` simulates a replay session (`simulate`, `stats`) and reads and writes the `.replay` file (`ReplayFile`, `candle_hash`, limits). |
 | `crates/store` | SQLite storage (rusqlite), versioned migrations in `crates/store/migrations`. |
 | `crates/data` | The `Provider` trait and its implementations (`binance/`). Fixtures and wiremock tests in `crates/data/tests`. |
-| `crates/engine` | `Engine`: caching, paging, live updates, connection state. Holds providers as `Arc<dyn Provider>`. |
+| `crates/engine` | `Engine`: caching, paging, live updates, connection state. Holds providers as `Arc<dyn Provider>`. `replay.rs` holds the one replay session (`replay_start`, `replay_step`, `replay_command`, `replay_state`, `replay_export`, `replay_file_name`, `replay_open`, `replay_exit`); while it is open, live events of its instrument are held back and indicators and position outcomes of its instrument and timeframe compute over its revealed bars only (`replay_bars`, a snapshot taken out of the lock). |
 | `crates/indicators` | The indicator host: loads indicator WebAssembly modules (wasmtime), runs them in a sandbox under memory and fuel limits, checks `meta` and output, runs the repaint check. Embeds the built-in modules with `include_bytes!`. |
 | `crates/indicator-cli` | The `sandchart-indicator` author tool (`new`, `build`, `test`) and its project template in `template/`. |
 | `indicators/` | A separate Cargo workspace (own `Cargo.lock`) built for `wasm32-wasip2`: `sdk` (the published `sandchart-indicator` crate and the contract `sdk/wit/indicator.wit`), `builtin/*` (SMA, EMA, Bollinger, RSI, MACD), `testguests/*` (modules that misbehave on purpose, for host tests). |
 | `app/src-tauri` | Tauri shell: commands and events over the engine. `tauri.conf.json` is here. |
 | `app/ui` | React UI, own Canvas chart (`src/chart`), i18n (`src/i18n`), unit tests (vitest) and e2e (`e2e/`, Playwright). |
 | `app/ui/src/chart/drawings` | Drawings on the chart: `registry.ts` (the `ToolDef` contract and `TOOLS`), one module per tool in `tools/`, `state.ts` (selection, placement, undo), `layer.ts` (painting on the base and overlay canvases, pointer input), `geometry.ts`, `magnet.ts`, `ruler.ts`, `keys.ts`. `src/state/drawings.ts` stores changes through the backend. User guide: `docs/drawings.md`. See ADR 0004. |
+| `app/ui/src/state/replay.ts`, `app/ui/src/chart/replay.ts` | Replay in the UI: the controller (start, step, play timer, trade commands, save, open, keys) and the chart layer (trades painted with the position tool, draggable stop and take, the cut, the start picker). `ReplayBar.tsx` and `ReplayStats.tsx` in `src/components`; `backend/mockReplay.ts` is the TEST-ONLY copy of the simulation for the browser mock. User guide: `docs/replay.md`. See ADR 0005. |
+| `crates/core/tests/fixtures/replay.json` | Hand-written replay cases (simulate, stats, files with their sha256) read by both `crates/core/tests/replay.rs` and `app/ui/src/backend/mockReplay.test.ts`, so the Rust simulation and the mock's copy cannot drift. Add a case there for every rule change, computed by hand, never with the code under test. |
 | `deny.toml` | cargo-deny licence and ban policy. |
 | `docs/adr` | Architecture decision records. |
 

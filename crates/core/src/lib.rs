@@ -6,6 +6,7 @@ pub mod decimal;
 pub mod drawing;
 pub mod model;
 pub mod position;
+pub mod replay;
 pub mod timeframe;
 
 pub use decimal::{

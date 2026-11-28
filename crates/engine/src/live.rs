@@ -165,6 +165,7 @@ async fn run(
                             gap.close();
                             backoff = Backoff::default();
                             if !candles.is_empty()
+                                && !shared.replaying(&inst.id)
                                 && tx
                                     .send(LiveEvent::Backfilled { candles, reset })
                                     .await
@@ -201,6 +202,10 @@ async fn run(
                 LiveEvent::Candle(live)
             }
         };
+        // Closed candles are stored above all the same; the UI reloads after the replay.
+        if shared.replaying(&inst.id) {
+            continue;
+        }
         if tx.send(event).await.is_err() {
             return;
         }

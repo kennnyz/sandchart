@@ -360,6 +360,62 @@ async fn closed_live_candles_are_stored() {
     assert_eq!(stored, vec![candle(1)], "only the closed candle is stored");
 }
 
+/// While a replay of the instrument is open its live events are held back (closed
+/// candles are still stored); other instruments are not affected.
+#[tokio::test]
+async fn live_events_pause_while_the_instrument_is_replayed() {
+    let f = fixture(&["BTCUSDT", "ETHUSDT"]).await;
+    let mut btc = f
+        .engine
+        .subscribe_live(&id("BTCUSDT"), Timeframe::H1)
+        .unwrap();
+    let mut eth = f
+        .engine
+        .subscribe_live(&id("ETHUSDT"), Timeframe::H1)
+        .unwrap();
+    f.live_tx.send(live(2, true)).unwrap();
+    next_event(&mut btc).await;
+    f.engine
+        .replay_start(&id("BTCUSDT"), Timeframe::H1, candle(2).open_time)
+        .await
+        .unwrap();
+
+    // A forming candle (never stored), then a closed one that shows when both were handled.
+    f.live_tx.send(live(0, false)).unwrap();
+    f.live_tx.send(live(1, true)).unwrap();
+    f.provider.sender("ETHUSDT").send(live(0, false)).unwrap();
+    assert_eq!(
+        next_event(&mut eth).await,
+        LiveEvent::Candle(live(0, false).unwrap())
+    );
+    let store = f.store();
+    let stored = || {
+        store
+            .candles_before(&id("BTCUSDT"), Timeframe::H1, None, 10)
+            .unwrap()
+    };
+    for _ in 0..500 {
+        if stored().len() == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(stored(), vec![candle(2), candle(1)]);
+
+    f.engine.replay_exit();
+    f.live_tx.send(live(0, true)).unwrap();
+    // The forming candle was dropped, not queued. The closed one may race the exit.
+    loop {
+        let e = next_event(&mut btc).await;
+        assert_ne!(e, LiveEvent::Candle(live(0, false).unwrap()));
+        if e == LiveEvent::Candle(live(0, true).unwrap()) {
+            break;
+        }
+    }
+    let stored = stored();
+    assert_eq!(stored, vec![candle(2), candle(1), candle(0)]);
+}
+
 #[tokio::test]
 async fn backfills_after_reconnect() {
     let f = fixture(&["BTCUSDT"]).await;

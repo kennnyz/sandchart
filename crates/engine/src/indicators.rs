@@ -21,7 +21,7 @@ use sandchart_store::{Store, StoreError, StoredInstance, StoredModule};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
-use crate::{Engine, EngineError, Shared, lock};
+use crate::{Engine, EngineError, Shared, lock, spawn_blocking};
 
 /// The compute window: at most this many of the newest cached bars.
 pub const MAX_INDICATOR_BARS: usize = 100_000;
@@ -161,9 +161,17 @@ impl BarState {
     }
 }
 
+/// What a result was computed over: the cached bars of one generation, or the revealed
+/// bars of a replay session up to its current bar (fixed while neither changes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Generation {
+    Cache(u64),
+    Replay { session: u64, current: u32 },
+}
+
 /// The last result of one instance and what it was computed from.
 struct Memo {
-    generation: u64,
+    generation: Generation,
     hash: [u8; 32],
     params: Vec<(String, ParamValue)>,
     from_time: i64,
@@ -743,6 +751,8 @@ impl Engine {
 
     /// Computes every visible chart indicator over all cached bars of `(id, tf)` (the
     /// newest [`MAX_INDICATOR_BARS`]) and returns the bars with `open_time >= from_time`.
+    /// While a replay of `(id, tf)` is open, it computes over the replay's revealed bars
+    /// instead, so no result depends on a bar after the current one.
     /// One failing instance gets its error as its result; the others still compute.
     pub async fn compute_indicators(
         &self,
@@ -758,13 +768,28 @@ impl Engine {
             Ok((s.indicator_instances()?, s.instrument(&key)?))
         })
         .await?;
-        let inst = inst.ok_or_else(|| EngineError::UnknownInstrument(id.clone()))?;
-        let shared = self.shared.clone();
-        let (bars, generation, read) =
-            spawn_blocking(move || Ok(cached_bars(&shared, &inst, tf)?)).await?;
-        if read {
-            svc.store_reads.fetch_add(1, Ordering::Relaxed);
-        }
+        // A replay computes over its revealed bars only, never the cache; its generation
+        // (session, current bar) keeps its results apart from the cache's in the memo. Its
+        // bars are converted on the first memo miss, off the replay lock and the async threads.
+        let (mut bars, generation, mut replay) = match self.shared.replay_bars(id, tf) {
+            Some(r) => {
+                let generation = Generation::Replay {
+                    session: r.session,
+                    current: r.current,
+                };
+                (None, generation, Some(r))
+            }
+            None => {
+                let inst = inst.ok_or_else(|| EngineError::UnknownInstrument(id.clone()))?;
+                let shared = self.shared.clone();
+                let (bars, generation, read) =
+                    spawn_blocking(move || Ok(cached_bars(&shared, &inst, tf)?)).await?;
+                if read {
+                    svc.store_reads.fetch_add(1, Ordering::Relaxed);
+                }
+                (Some(bars), Generation::Cache(generation), None)
+            }
+        };
 
         let visible: Vec<(Instance, Loaded)> = resolve(stored, svc)
             .into_iter()
@@ -782,12 +807,23 @@ impl Engine {
             let result = match hit {
                 Some(result) => result,
                 None => {
+                    let bars = match (&bars, replay.take()) {
+                        (Some(b), _) => Arc::clone(b),
+                        (None, Some(r)) => {
+                            let b = spawn_blocking(move || {
+                                let candles = r.revealed();
+                                let newest =
+                                    &candles[candles.len().saturating_sub(MAX_INDICATOR_BARS)..];
+                                Ok(Arc::new(to_bars(newest, &r.instrument)))
+                            })
+                            .await?;
+                            bars = Some(Arc::clone(&b));
+                            b
+                        }
+                        (None, None) => unreachable!("a replay without bars keeps its snapshot"),
+                    };
                     svc.module_calls.fetch_add(1, Ordering::Relaxed);
-                    let (module, params, bars) = (
-                        loaded.module.clone(),
-                        instance.params.clone(),
-                        Arc::clone(&bars),
-                    );
+                    let (module, params) = (loaded.module.clone(), instance.params.clone());
                     let result =
                         spawn_blocking(move || Ok(compute_one(&module, &params, &bars, from_time)))
                             .await?;
@@ -863,16 +899,6 @@ fn compute_one(
         series: cut(output.series, start),
         log: output.log,
     })
-}
-
-async fn spawn_blocking<T, F>(f: F) -> Result<T, EngineError>
-where
-    T: Send + 'static,
-    F: FnOnce() -> Result<T, EngineError> + Send + 'static,
-{
-    tokio::task::spawn_blocking(f)
-        .await
-        .map_err(|e| EngineError::Task(e.to_string()))?
 }
 
 #[cfg(test)]

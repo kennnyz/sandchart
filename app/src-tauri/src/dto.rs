@@ -1,6 +1,7 @@
 //! Wire types of the Tauri commands and events. JSON is camelCase; candles are columnar
 //! so a 200 000-candle history is six flat arrays, not 200 000 objects.
 
+use sandchart_core::replay::{Stats, Trade};
 use sandchart_core::{
     Candle, Drawing, DrawingBody, Instrument, InstrumentId, JS_SAFE_MAX, Outcome, PositionBody,
     Style,
@@ -8,7 +9,7 @@ use sandchart_core::{
 use sandchart_data::{DayChange, ProviderError};
 use sandchart_engine::{
     ChartPage, Computed, ConnectionState, EngineError, FailedIndicator, IndicatorInfo,
-    IndicatorList, Inspection, Instance, InstanceResult, LiveEvent,
+    IndicatorList, Inspection, Instance, InstanceResult, LiveEvent, ReplayState,
 };
 use sandchart_indicators::{
     Marker, Meta, ParamKind, ParamSpec, ParamValue, SeriesData, SeriesOut, SeriesSpec,
@@ -558,6 +559,49 @@ pub struct PositionOutcomeDto {
     pub outcome: Outcome,
 }
 
+// Replay.
+
+/// The replay session as the UI sees it: the revealed bars from index `from` on (never a
+/// bar after `current`), the trades from index `tradesFrom` on, and the statistics.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplayStateDto {
+    pub instrument: InstrumentDto,
+    pub tf: &'static str,
+    pub start: u32,
+    pub current: u32,
+    pub at_end: bool,
+    pub from: u32,
+    pub bars: ColumnsDto,
+    pub trades_from: u32,
+    pub trades: Vec<Trade>,
+    pub stats: Stats,
+}
+
+pub fn to_replay_state_dto(s: ReplayState) -> Result<ReplayStateDto, DtoError> {
+    for t in &s.trades {
+        for v in [t.entry_time, t.entry_price, t.initial_stop, t.stop, t.take]
+            .into_iter()
+            .chain(t.exit_time)
+            .chain(t.exit_price)
+        {
+            safe(v)?;
+        }
+    }
+    Ok(ReplayStateDto {
+        bars: ColumnsDto::from_candles(&s.bars)?,
+        instrument: s.instrument.into(),
+        tf: s.tf.code(),
+        start: s.start,
+        current: s.current,
+        at_end: s.at_end,
+        from: s.from,
+        trades_from: s.trades_from,
+        trades: s.trades,
+        stats: s.stats,
+    })
+}
+
 // Updates.
 
 /// Why this copy cannot update itself in place; the UI shows a link to the release instead.
@@ -944,6 +988,59 @@ mod tests {
             serde_json::json!({
                 "id": "p",
                 "outcome": { "status": "stop", "exitTime": 5, "ambiguous": true, "r": -1.0 }
+            })
+        );
+    }
+
+    #[test]
+    fn replay_state_json_matches_the_ui_types() {
+        use sandchart_core::replay::{Command, Simulation, simulate};
+        use sandchart_core::{Side, Timeframe};
+        let candles: Vec<Candle> = (0..4).map(|i| candle(i, 110 + i)).collect();
+        let commands = vec![Command::Open {
+            bar: 1,
+            side: Side::Long,
+            stop: 90,
+            take: 140,
+        }];
+        let simulation: Simulation = simulate(&candles, 1, 3, &commands).unwrap();
+        let state = ReplayState {
+            instrument: page(vec![]).instrument,
+            tf: Timeframe::H1,
+            start: 1,
+            current: 3,
+            at_end: false,
+            from: 3,
+            bars: candles[3..].to_vec(),
+            trades_from: 0,
+            trades: simulation.trades,
+            stats: simulation.stats,
+        };
+        let json = serde_json::to_value(to_replay_state_dto(state).unwrap()).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "instrument": {
+                    "id": { "source": "binance", "symbol": "BTCUSDT" },
+                    "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5
+                },
+                "tf": "1h", "start": 1, "current": 3, "atEnd": false, "from": 3,
+                "bars": {
+                    "time": [1_700_000_180_000i64], "open": [103], "high": [123], "low": [93],
+                    "close": [113], "volume": [8]
+                },
+                "tradesFrom": 0,
+                "trades": [{
+                    "side": "long", "entryBar": 1, "entryTime": 1_700_000_060_000i64,
+                    "entryPrice": 111, "initialStop": 90, "stop": 90, "take": 140,
+                    "exitBar": null, "exitTime": null, "exitPrice": null, "reason": "open",
+                    "ambiguous": false, "r": 2.0 / 21.0
+                }],
+                "stats": {
+                    "count": 0, "wins": 0, "losses": 0, "winRate": 0.0, "totalR": 0.0,
+                    "averageR": 0.0, "profitFactor": null,
+                    "maxDrawdownR": 0.0, "longestLosingStreak": 0
+                }
             })
         );
     }
