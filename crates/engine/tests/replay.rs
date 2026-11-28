@@ -1132,3 +1132,62 @@ async fn a_step_or_a_command_during_a_re_base_makes_the_re_base_fail_and_both_st
     let st = f.engine.replay_set_base(Timeframe::M15).await.unwrap();
     assert_eq!((st.base, st.trades.len()), (Timeframe::M15, 1));
 }
+
+#[tokio::test]
+async fn a_lower_re_base_the_provider_cannot_serve_is_refused_and_changes_nothing() {
+    let f = live_engine(T0 + BARS * H);
+    f.provider
+        .set(Timeframe::M15, (0..BARS).flat_map(quarters).collect());
+    f.engine
+        .replay_start(&id(), TF, T0 + 550 * H)
+        .await
+        .unwrap();
+    f.engine.replay_step(2).await.unwrap();
+    let before = f.engine.replay_state(TF, 0, 0).unwrap();
+    f.provider.down.store(true, Ordering::Relaxed);
+    let msg = replay_err(f.engine.replay_set_base(Timeframe::M15).await);
+    assert_eq!(
+        msg,
+        "the 15m candles could not be loaded: network error: connection refused"
+    );
+    assert_eq!(f.engine.replay_state(TF, 0, 0).unwrap(), before);
+    // Once it answers again the same re-base works.
+    f.provider.down.store(false, Ordering::Relaxed);
+    let st = f.engine.replay_set_base(Timeframe::M15).await.unwrap();
+    assert_eq!((st.base, st.cut), (Timeframe::M15, before.cut));
+}
+
+#[tokio::test]
+async fn gaps_in_the_lower_candles_move_the_start_up_and_the_cut_down() {
+    // The exchange has no quarter closing at the start (the last of hour 550) nor at the
+    // cut (the last of hour 555).
+    let f = live_engine(T0 + BARS * H);
+    let missing = [quarters(550)[3].open_time, quarters(555)[3].open_time];
+    let qs: Vec<Candle> = (0..BARS)
+        .flat_map(quarters)
+        .filter(|c| !missing.contains(&c.open_time))
+        .collect();
+    f.provider.set(Timeframe::M15, qs);
+    f.engine
+        .replay_start(&id(), TF, T0 + 550 * H)
+        .await
+        .unwrap();
+    f.engine.replay_step(5).await.unwrap();
+    let st = f.engine.replay_set_base(Timeframe::M15).await.unwrap();
+    assert_eq!(
+        st.cut,
+        T0 + 556 * H - Q,
+        "down to the quarter before the gap"
+    );
+    assert_eq!(*st.bars.last().unwrap(), quarters(555)[2]);
+    assert_eq!(
+        st.bars[st.start as usize],
+        quarters(551)[0],
+        "up to the first quarter after the gap"
+    );
+    // The next step reveals the quarter after the gap.
+    assert_eq!(
+        f.engine.replay_step(1).await.unwrap(),
+        quarters(556)[0].open_time + Q
+    );
+}
