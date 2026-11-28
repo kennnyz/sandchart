@@ -63,6 +63,9 @@ struct State {
     streams: HashMap<InstrumentId, Vec<Stream>>,
     /// The streams the engine opened, by pair: a task that owns the `LiveHandle`.
     own: HashMap<InstrumentId, JoinHandle<()>>,
+    /// Alerts that fired here (id, created_at) until their firing is written: a reload in
+    /// between still reads them as active and must not arm them again.
+    pending: HashSet<(String, i64)>,
     /// Generation of the armed set that is applied (see `reload`).
     applied: u64,
     /// Running streams of every pair.
@@ -168,7 +171,8 @@ impl Hub {
         candle: &Candle,
         now: i64,
     ) -> Vec<Alert> {
-        let mut st = self.state();
+        let mut guard = self.state();
+        let st = &mut *guard;
         if !st.armed.contains_key(id) || st.feeder(id) != Some(key) {
             return Vec::new();
         }
@@ -203,12 +207,23 @@ impl Hub {
                 None => true,
             }
         });
+        for a in &fired {
+            st.pending.insert((a.id.clone(), a.created_at));
+        }
         if armed.is_empty() {
             st.armed.remove(id);
             st.last.remove(id);
             self.wake.notify_one(); // its own stream can go
         }
         fired
+    }
+
+    /// The firings of `fired` are written (or given up): reloads may arm them again.
+    pub(crate) fn settled(&self, fired: &[Alert]) {
+        let mut st = self.state();
+        for a in fired {
+            st.pending.remove(&(a.id.clone(), a.created_at));
+        }
     }
 
     pub(crate) fn events(&self) -> broadcast::Receiver<AlertEvent> {
@@ -246,6 +261,9 @@ impl Hub {
             .collect();
         let mut armed: HashMap<InstrumentId, Vec<Armed>> = HashMap::new();
         for (alert, level) in fresh {
+            if st.pending.contains(&(alert.id.clone(), alert.created_at)) {
+                continue;
+            }
             let armed_at = match old.get(&alert.id) {
                 Some(&(created, at)) if created == alert.created_at => at,
                 _ => now,
@@ -550,8 +568,12 @@ pub(crate) async fn record_fired(shared: crate::Shared, fired: Vec<Alert>) {
     };
     for a in fired {
         match store(&a).await {
-            Ok(true) => shared.alerts.send(AlertEvent::Fired(a)),
-            Ok(false) => {} // deleted, replaced or fired meanwhile
+            Ok(true) => {
+                shared.alerts.settled(std::slice::from_ref(&a));
+                shared.alerts.send(AlertEvent::Fired(a));
+            }
+            // Deleted, replaced or fired meanwhile.
+            Ok(false) => shared.alerts.settled(std::slice::from_ref(&a)),
             Err(e) => {
                 eprintln!(
                     "alert {} fired but cannot be stored, trying again: {e}",
@@ -562,6 +584,7 @@ pub(crate) async fn record_fired(shared: crate::Shared, fired: Vec<Alert>) {
                 if let Err(e) = store(&a).await {
                     eprintln!("alert {} fired but cannot be stored: {e}", a.id);
                 }
+                shared.alerts.settled(std::slice::from_ref(&a));
                 // Whatever the store holds now is what must be armed.
                 let (st, hub, now) = (
                     shared.store.clone(),
@@ -575,5 +598,76 @@ pub(crate) async fn record_fired(shared: crate::Shared, fired: Vec<Alert>) {
                 shared.alerts.send(AlertEvent::Changed);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sandchart_core::Instrument;
+    use sandchart_core::alert::Direction;
+
+    fn bar(high: i64, close: i64) -> Candle {
+        Candle {
+            open_time: 0,
+            open: close,
+            high,
+            low: close,
+            close,
+            volume: 1,
+        }
+    }
+
+    fn armed_ids(hub: &Hub) -> Vec<String> {
+        hub.state()
+            .armed
+            .values()
+            .flatten()
+            .map(|a| a.alert.id.clone())
+            .collect()
+    }
+
+    #[test]
+    fn an_alert_that_fired_is_not_armed_again_before_its_firing_is_stored() {
+        let id = InstrumentId {
+            source: "fake".into(),
+            symbol: "BTCUSDT".into(),
+        };
+        let mut s = Store::open_in_memory().unwrap();
+        s.upsert_instruments(&[Instrument {
+            id: id.clone(),
+            base: "BTC".into(),
+            quote: "USDT".into(),
+            price_scale: 2,
+            qty_scale: 3,
+        }])
+        .unwrap();
+        let alert = Alert {
+            id: "a".into(),
+            instrument: id.clone(),
+            price_scale: 2,
+            kind: AlertKind::Price { price: 100 },
+            direction: Direction::Above,
+            active: true,
+            created_at: 1,
+            triggered_at: None,
+            triggered_price: None,
+        };
+        s.upsert_alert(&alert).unwrap();
+        let store = Mutex::new(s);
+        let hub = Arc::new(Hub::default());
+        let stream = hub.open_stream(&id, true).unwrap();
+        hub.reload(&store, 1).unwrap();
+        assert!(hub.evaluate(&id, stream.key, &bar(90, 90), 2).is_empty());
+        let fired = hub.evaluate(&id, stream.key, &bar(101, 101), 3);
+        assert_eq!(fired.len(), 1);
+
+        // A reload before the firing is written reads it as active: it stays disarmed.
+        hub.reload(&store, 4).unwrap();
+        assert!(armed_ids(&hub).is_empty());
+        // The write failed for good: the store still says active, so it is armed again.
+        hub.settled(&fired);
+        hub.reload(&store, 5).unwrap();
+        assert_eq!(armed_ids(&hub), ["a"]);
     }
 }
