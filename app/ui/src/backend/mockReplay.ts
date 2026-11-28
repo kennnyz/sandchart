@@ -255,7 +255,8 @@ export async function mockReadReplay(bytes: Uint8Array): Promise<MockReplayFile>
   }
   const tf = raw.timeframe as TimeframeCode;
   if (!TIMEFRAME_CODES.includes(tf)) throw new Error(`unknown timeframe ${JSON.stringify(raw.timeframe)}`);
-  if (rows.length > MOCK_MAX_REPLAY_CANDLES) throw new Error(`at most ${MOCK_MAX_REPLAY_CANDLES} candles, not ${rows.length}`);
+  if (rows.length > MOCK_MAX_REPLAY_CANDLES) throw new Error(`not a replay file: at most ${MOCK_MAX_REPLAY_CANDLES} candles`);
+  if (raw.commands.length > MOCK_MAX_REPLAY_COMMANDS) throw new Error(`not a replay file: at most ${MOCK_MAX_REPLAY_COMMANDS} commands`);
   const candles = (rows as number[][]).map(([time, open, high, low, close, volume]) => ({
     time: time!,
     open: open!,

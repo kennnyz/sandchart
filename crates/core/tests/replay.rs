@@ -211,16 +211,14 @@ fn files_over_the_limits_are_refused() {
 
     let mut many = session(3);
     many.commands = vec![Command::Close { bar: 2 }; MAX_COMMANDS + 1];
-    assert_eq!(
-        ReplayFile::from_json(many.to_json().as_bytes()).unwrap_err(),
-        format!("at most {MAX_COMMANDS} commands, not {}", MAX_COMMANDS + 1)
-    );
+    let err = ReplayFile::from_json(many.to_json().as_bytes()).unwrap_err();
+    let want = format!("not a replay file: at most {MAX_COMMANDS} commands");
+    assert!(err.starts_with(&want), "{err}");
 
     let long = session(MAX_CANDLES + 1);
-    assert_eq!(
-        ReplayFile::from_json(long.to_json().as_bytes()).unwrap_err(),
-        format!("at most {MAX_CANDLES} candles, not {}", MAX_CANDLES + 1)
-    );
+    let err = ReplayFile::from_json(long.to_json().as_bytes()).unwrap_err();
+    let want = format!("not a replay file: at most {MAX_CANDLES} candles");
+    assert!(err.starts_with(&want), "{err}");
 }
 
 #[test]

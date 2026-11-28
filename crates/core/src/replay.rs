@@ -403,6 +403,7 @@ struct FileInstrument {
     qty_scale: u8,
 }
 
+/// The version alone; every other value is skipped without being stored.
 #[derive(Deserialize)]
 struct Head {
     version: u32,
@@ -418,8 +419,58 @@ struct Body {
     start: u32,
     current: u32,
     sha256: String,
+    #[serde(deserialize_with = "capped_commands")]
     commands: Vec<Command>,
+    #[serde(deserialize_with = "capped_candles")]
     candles: Vec<[i64; 6]>,
+}
+
+/// A JSON array read into a `Vec` of at most `max` elements: the element after the cap
+/// fails the file at once, so a hostile file cannot make it allocate more.
+struct Capped<T> {
+    max: usize,
+    what: &'static str,
+    item: std::marker::PhantomData<T>,
+}
+
+impl<T> Capped<T> {
+    fn new(max: usize, what: &'static str) -> Self {
+        Capped {
+            max,
+            what,
+            item: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<'de, T: Deserialize<'de>> serde::de::Visitor<'de> for Capped<T> {
+    type Value = Vec<T>;
+
+    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "an array of at most {} {}", self.max, self.what)
+    }
+
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Vec<T>, A::Error> {
+        let mut out = Vec::with_capacity(seq.size_hint().unwrap_or(0).min(self.max));
+        while let Some(v) = seq.next_element()? {
+            if out.len() == self.max {
+                return Err(serde::de::Error::custom(format!(
+                    "at most {} {}",
+                    self.max, self.what
+                )));
+            }
+            out.push(v);
+        }
+        Ok(out)
+    }
+}
+
+fn capped_commands<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Command>, D::Error> {
+    d.deserialize_seq(Capped::new(MAX_COMMANDS, "commands"))
+}
+
+fn capped_candles<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<[i64; 6]>, D::Error> {
+    d.deserialize_seq(Capped::new(MAX_CANDLES, "candles"))
 }
 
 impl ReplayFile {
@@ -474,6 +525,8 @@ impl ReplayFile {
                 MAX_FILE_BYTES / (1024 * 1024)
             ));
         }
+        // A first pass reads only the version (it stores nothing else), so a newer file is
+        // refused for its version rather than for a field this version does not know.
         let head: Head =
             serde_json::from_slice(bytes).map_err(|e| format!("not a replay file: {e}"))?;
         if head.version != VERSION {
@@ -486,12 +539,6 @@ impl ReplayFile {
             serde_json::from_slice(bytes).map_err(|e| format!("not a replay file: {e}"))?;
         let timeframe = Timeframe::from_code(&body.timeframe)
             .ok_or_else(|| format!("unknown timeframe {:?}", body.timeframe))?;
-        if body.candles.len() > MAX_CANDLES {
-            return Err(format!(
-                "at most {MAX_CANDLES} candles, not {}",
-                body.candles.len()
-            ));
-        }
         let candles: Vec<Candle> = body
             .candles
             .iter()
@@ -563,4 +610,27 @@ pub fn check_candles(candles: &[Candle]) -> Result<(), String> {
 /// One-line JSON, for [`ReplayFile::to_json`].
 fn line<T: Serialize>(v: &T) -> String {
     serde_json::to_string(v).expect("plain data always serialises")
+}
+
+#[cfg(test)]
+mod tests {
+    use serde::Deserializer as _;
+
+    use super::Capped;
+
+    #[test]
+    fn capped_stops_at_the_first_element_past_the_cap() {
+        // Elements past the cap are never read: the broken tail would be a syntax error.
+        let mut de = serde_json::Deserializer::from_str("[1, 2, 3, 4, ???");
+        let err = de
+            .deserialize_seq(Capped::<i64>::new(3, "numbers"))
+            .unwrap_err();
+        assert!(err.to_string().starts_with("at most 3 numbers"), "{err}");
+        let mut ok = serde_json::Deserializer::from_str("[1, 2, 3]");
+        assert_eq!(
+            ok.deserialize_seq(Capped::<i64>::new(3, "numbers"))
+                .unwrap(),
+            vec![1, 2, 3]
+        );
+    }
 }
