@@ -140,7 +140,10 @@ impl Store {
 
     fn open_file(path: &Path, upgrade: bool) -> Result<Store, StoreError> {
         let conn = Connection::open(path)?;
-        // Before anything that may need a lock, switching to WAL included.
+        // Before anything that may need a lock, switching to WAL included. rusqlite 0.43
+        // already opens with 5 s, but documents that default as subject to change; the
+        // wait is part of how the app and the MCP server share the file (ADR 0006), so it
+        // is set here rather than left to the library.
         conn.busy_timeout(BUSY_TIMEOUT)?;
         conn.execute_batch("PRAGMA journal_mode = WAL;")?;
         Self::init(conn, upgrade)
