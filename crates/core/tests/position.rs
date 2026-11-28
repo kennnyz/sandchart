@@ -57,6 +57,39 @@ fn resolve_matches_the_fixture() {
     }
 }
 
+/// The iterator form gets every bar, the entry bar and older ones too, and reads none after
+/// the bar that decides (or the first one past the end): a bar that panics follows them.
+#[test]
+fn resolve_iter_matches_the_fixture_and_stops_reading_at_the_decision() {
+    for c in &cases() {
+        let body = PositionBody {
+            side: c.side,
+            entry: c.entry,
+            stop: c.stop,
+            take: c.take,
+            end_t: c.end_t,
+        };
+        let bars = candles(&c.candles);
+        // How many bars the scan needs: up to the deciding one, or the first past the end.
+        let needed = match c.expect.exit_time {
+            Some(t) => bars.iter().position(|b| b.open_time == t).map(|i| i + 1),
+            None => bars
+                .iter()
+                .position(|b| b.open_time > c.end_t)
+                .map(|i| i + 1),
+        };
+        let then_panic = std::iter::from_fn(|| -> Option<Candle> {
+            panic!("{}: read past the bar that decides", c.name)
+        });
+        let got = match needed {
+            Some(n) => body.resolve_iter(bars[..n].iter().copied().chain(then_panic)),
+            // Open with every bar in range: the scan ends with the bars.
+            None => body.resolve_iter(bars.iter().copied()),
+        };
+        assert_eq!(got, c.expect, "{}", c.name);
+    }
+}
+
 #[test]
 fn fixture_positions_are_valid_and_cover_every_status() {
     let cases = cases();

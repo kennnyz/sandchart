@@ -87,9 +87,10 @@ const sameId = (a: InstrumentId, b: InstrumentId) => a.source === b.source && a.
  * it reload the list, so the chart never shows what the backend does not have, and keeps
  * the error to show until a later change is stored or another instrument opens.
  *
- * It also asks the engine for the outcome of every position, all in one call: after a
+ * It also asks the engine for the outcomes of the positions, all in one call: after a
  * load, after a position changes, and when the candles of the timeframe change (another
- * timeframe, an older page, a new bar). A changed position loses its outcome at once.
+ * timeframe, an older page, a new bar). A take or a stop is final for that body, so only
+ * open and unknown ones are asked again. A changed position loses its outcome at once.
  */
 export class DrawingController {
   tool: ToolId | null = null;
@@ -116,11 +117,12 @@ export class DrawingController {
   /** The positions of the shown drawings, by id; a body is replaced, never changed in place. */
   private positions = new Map<string, PositionBody>();
   private outcomes = new Map<string, PositionOutcome>();
-  /** Timeframe and first and last bar time of the candles the outcomes are for. */
+  /** Timeframe of the outcomes, and of the candles last shown with their first and last bar time. */
   private tf: TimeframeCode | null = null;
-  private candlesKey = "";
-  /** Token of the latest outcome request. */
+  private bars: { tf: TimeframeCode; first: number; last: number } | null = null;
+  /** Token of the latest outcome request, and of the latest one that asked each position. */
   private outcomeToken = 0;
+  private asked = new Map<string, number>();
 
   constructor(
     private readonly backend: DrawingBackend,
@@ -165,25 +167,27 @@ export class DrawingController {
   /** Shows the drawings of `id`: the chart is cleared at once, then filled when they arrive. */
   async open(id: InstrumentId): Promise<void> {
     this.id = id;
-    this.candlesKey = "";
+    this.bars = null;
     this.setError(null);
     await this.load(id, true);
   }
 
   /**
-   * The chart shows candles of `id` at `tf` from `first` to `last` (open times). Outcomes
-   * are asked for again when any of these changed, so on every new bar.
+   * The chart shows candles of `id` at `tf` from `first` to `last` (open times). When any
+   * of these changed (so on every new bar), the positions still open are asked for again;
+   * a take or a stop is final, unless older bars came in before its entry.
    */
   candles(id: InstrumentId, tf: TimeframeCode, first: number, last: number): void {
     if (!this.id || !sameId(id, this.id)) return;
-    const key = `${tf}|${first}|${last}`;
-    if (key === this.candlesKey) return;
-    this.candlesKey = key;
+    const was = this.bars;
+    if (was && was.tf === tf && was.first === first && was.last === last) return;
+    this.bars = { tf, first, last };
     if (tf !== this.tf) {
       this.tf = tf;
       this.setOutcomes(new Map());
     }
-    void this.refreshOutcomes();
+    const older = was && was.tf === tf && first < was.first ? was.first : null;
+    void this.refreshOutcomes(older);
   }
 
   /** Picking a tool shows hidden drawings again: a new one should not be placed unseen. */
@@ -287,6 +291,7 @@ export class DrawingController {
   private show(list: Drawing[]): void {
     this.surface?.setDrawings(list);
     this.positions = new Map();
+    this.asked.clear();
     for (const d of list) {
       const p = positionOf(d.body);
       if (p) this.positions.set(d.id, p);
@@ -299,13 +304,25 @@ export class DrawingController {
     this.surface?.setPositionOutcomes(new Map(outcomes));
   }
 
-  /** Asks for the outcome of every position in one call; an answer for a position that changed since is dropped. */
-  private async refreshOutcomes(): Promise<void> {
+  /**
+   * Asks in one call for the outcome of every position that has none or is still open, and
+   * (`olderThan`) of every one entered before that time. An answer for a position that
+   * changed since, or that a later call asked again, is dropped.
+   */
+  private async refreshOutcomes(olderThan: number | null = null): Promise<void> {
     const id = this.id;
     const tf = this.tf;
-    if (!id || !tf || this.positions.size === 0) return;
+    if (!id || !tf) return;
+    const sent: { id: string; position: PositionBody }[] = [];
+    for (const [drawingId, position] of this.positions) {
+      const known = this.outcomes.get(drawingId);
+      if (!known || known.status === "open" || (olderThan !== null && position.entry.t < olderThan)) {
+        sent.push({ id: drawingId, position });
+      }
+    }
+    if (sent.length === 0) return;
     const token = ++this.outcomeToken;
-    const sent = [...this.positions].map(([drawingId, position]) => ({ id: drawingId, position }));
+    for (const p of sent) this.asked.set(p.id, token);
     let answer: { id: string; outcome: PositionOutcome }[];
     try {
       answer = await this.backend.getPositionOutcomes(id, tf, sent);
@@ -313,14 +330,17 @@ export class DrawingController {
       console.error("resolving the positions failed", e);
       return;
     }
-    if (token !== this.outcomeToken || this.id !== id || this.tf !== tf) return;
+    if (this.id !== id || this.tf !== tf) return;
     const bodies = new Map(sent.map((s) => [s.id, s.position]));
-    const next = new Map<string, PositionOutcome>();
+    let next: Map<string, PositionOutcome> | null = null;
     for (const { id: drawingId, outcome } of answer) {
       const now = this.positions.get(drawingId);
-      if (now && now === bodies.get(drawingId)) next.set(drawingId, outcome);
+      if (!now || now !== bodies.get(drawingId) || this.asked.get(drawingId) !== token) continue;
+      this.asked.delete(drawingId);
+      next ??= new Map(this.outcomes);
+      next.set(drawingId, outcome);
     }
-    this.setOutcomes(next);
+    if (next) this.setOutcomes(next);
   }
 
   /** Keeps the positions in step with a change; a changed one loses its outcome and all are asked for again. */

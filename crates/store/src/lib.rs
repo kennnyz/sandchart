@@ -234,13 +234,17 @@ impl Store {
     }
 
     /// Candles with `after < open_time <= until`, ascending.
-    pub fn candles_between(
+    /// Runs `f` over the candles with `after < open_time <= until`, ascending, read from the
+    /// database one at a time: rows `f` does not take are never fetched. A read error ends
+    /// the iterator early and is returned instead of `f`'s result.
+    pub fn scan_candles_between<R>(
         &self,
         id: &InstrumentId,
         tf: Timeframe,
         after: i64,
         until: i64,
-    ) -> Result<Vec<Candle>, StoreError> {
+        f: impl FnOnce(&mut dyn Iterator<Item = Candle>) -> R,
+    ) -> Result<R, StoreError> {
         let mut stmt = self.conn.prepare_cached(
             "SELECT open_time, open, high, low, close, volume FROM candles
              WHERE source = ?1 AND symbol = ?2 AND tf = ?3 AND open_time > ?4 AND open_time <= ?5
@@ -250,7 +254,14 @@ impl Store {
             params![id.source, id.symbol, tf.code(), after, until],
             candle_from_row,
         )?;
-        Ok(rows.collect::<Result<_, _>>()?)
+        let mut failed = None;
+        let mut it = rows.map_while(|r| r.map_err(|e| failed = Some(e)).ok());
+        let out = f(&mut it);
+        drop(it);
+        match failed {
+            Some(e) => Err(e.into()),
+            None => Ok(out),
+        }
     }
 
     pub fn newest_open_time(

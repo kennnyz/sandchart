@@ -322,7 +322,7 @@ describe("mock backend", () => {
       const cases = fixture.cases as Case[];
       expect(cases.length).toBeGreaterThanOrEqual(12);
       for (const c of cases) {
-        const bars = { time: c.candles.map((r) => r[0]!), high: c.candles.map((r) => r[2]!), low: c.candles.map((r) => r[3]!) };
+        const bars = c.candles.map((r) => ({ time: r[0]!, high: r[2]!, low: r[3]! }));
         expect(mockResolve(c, bars), c.name).toEqual(c.expect);
       }
     });
@@ -341,6 +341,20 @@ describe("mock backend", () => {
       await expect(b.getPositionOutcomes(id, "1h", [{ id: "z", position: { ...position, stop: entry.p } }])).rejects.toMatchObject({
         message: expect.stringContaining("position z"),
       });
+    });
+
+    it("resolves a position over every bar to its end, as the engine does (no bar cap)", async () => {
+      const n = 150_000;
+      const b = createMockBackend({ candles: n });
+      const page = await b.getCandles(id, "1h");
+      const last = page.time.at(-1)!;
+      const first = last - (n - 1) * 3_600_000;
+      // Runs through all 150 000 bars without a hit: open, and quickly, bar by bar.
+      const position: PositionBody = { side: "long", entry: { t: first, p: 10_000 }, stop: 1, take: 1e12, endT: last };
+      const started = performance.now();
+      const [r] = await b.getPositionOutcomes(id, "1h", [{ id: "p", position }]);
+      expect(r!.outcome.status).toBe("open");
+      expect(performance.now() - started).toBeLessThan(1_000);
     });
   });
 

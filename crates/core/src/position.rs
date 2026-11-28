@@ -80,6 +80,13 @@ impl PositionBody {
             self.side, self.entry, self.stop, self.take, self.end_t, candles,
         )
     }
+
+    /// [`resolve_iter`] for this position.
+    pub fn resolve_iter(&self, candles: impl IntoIterator<Item = Candle>) -> Outcome {
+        resolve_iter(
+            self.side, self.entry, self.stop, self.take, self.end_t, candles,
+        )
+    }
 }
 
 /// Scans `candles` (ascending by `open_time`) after the bar that contains `entry.t`, up to
@@ -95,7 +102,34 @@ pub fn resolve(
 ) -> Outcome {
     // The bar containing entry.t is the last with open_time <= entry.t; skip it and older ones.
     let start = candles.partition_point(|c| c.open_time <= entry.t);
-    for c in candles[start..].iter().take_while(|c| c.open_time <= end_t) {
+    resolve_iter(
+        side,
+        entry,
+        stop,
+        take,
+        end_t,
+        candles[start..].iter().copied(),
+    )
+}
+
+/// [`resolve`] over bars as they come (from a database cursor, say): bars at or before
+/// `entry.t` are skipped, and nothing is read after the bar that decides or the first bar
+/// past `end_t`.
+pub fn resolve_iter(
+    side: Side,
+    entry: Anchor,
+    stop: i64,
+    take: i64,
+    end_t: i64,
+    candles: impl IntoIterator<Item = Candle>,
+) -> Outcome {
+    for c in candles {
+        if c.open_time <= entry.t {
+            continue;
+        }
+        if c.open_time > end_t {
+            break;
+        }
         let (hit_stop, hit_take) = match side {
             Side::Long => (c.low <= stop, c.high >= take),
             Side::Short => (c.high >= stop, c.low <= take),

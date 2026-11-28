@@ -426,6 +426,7 @@ describe("position outcomes", () => {
   });
   const TAKE: PositionOutcome = { status: "take", exitTime: 12 * H, ambiguous: false, r: 3 };
   const STOP: PositionOutcome = { status: "stop", exitTime: 11 * H, ambiguous: false, r: -1 };
+  const OPEN: PositionOutcome = { status: "open", exitTime: null, ambiguous: false, r: 0 };
 
   async function loaded(list: Drawing[]) {
     const b = fakeBackend([]);
@@ -450,21 +451,68 @@ describe("position outcomes", () => {
     expect(b.resolves[0]!.positions[0]!.position).toEqual({ side: "long", entry: { t: 10 * H, p: 100 }, stop: 90, take: 130, endT: 30 * H });
     b.resolves[0]!.resolve([
       { id: "p1", outcome: TAKE },
-      { id: "p2", outcome: STOP },
+      { id: "p2", outcome: OPEN },
     ]);
     await flush();
-    expect(s.outcomes.at(-1)).toEqual(new Map([["p1", TAKE], ["p2", STOP]]));
-    // The same candles again (a live tick): no new call. A new bar, another timeframe or another instrument's candles:
+    expect(s.outcomes.at(-1)).toEqual(new Map([["p1", TAKE], ["p2", OPEN]]));
+    // The same candles again (a live tick): no new call. Another instrument's candles: none either.
     c.candles(BTC, "1h", 0, 100 * H);
     expect(b.resolves).toHaveLength(1);
     c.candles(ETH, "1h", 0, 101 * H);
     expect(b.resolves).toHaveLength(1);
+    // A new bar: only the open position is asked again; a take or a stop is final.
     c.candles(BTC, "1h", 0, 101 * H);
     expect(b.resolves).toHaveLength(2);
+    expect(b.resolves[1]!.positions.map((p) => p.id)).toEqual(["p2"]);
+    b.resolves[1]!.resolve([{ id: "p2", outcome: STOP }]);
+    await flush();
+    expect(s.outcomes.at(-1)).toEqual(new Map([["p1", TAKE], ["p2", STOP]]));
+    // Both closed: another new bar asks nothing.
+    c.candles(BTC, "1h", 0, 102 * H);
+    expect(b.resolves).toHaveLength(2);
     c.candles(BTC, "4h", 0, 101 * H);
-    // Another timeframe: the old outcomes go at once.
+    // Another timeframe: the old outcomes go at once, and every position is asked.
     expect(s.outcomes.at(-1)).toEqual(new Map());
     expect(b.resolves.at(-1)!.tf).toBe("4h");
+    expect(b.resolves.at(-1)!.positions.map((p) => p.id)).toEqual(["p1", "p2"]);
+  });
+
+  it("asks a closed position again when older bars before its entry came in", async () => {
+    const early = { ...(pos() as PositionBody), entry: { t: 2 * H, p: 100 } };
+    const { b, s, c } = await loaded([drawing("early", 0, BTC, { kind: "position", ...early }), drawing("late", 0, BTC, pos())]);
+    c.candles(BTC, "1h", 5 * H, 100 * H);
+    b.resolves[0]!.resolve([
+      { id: "early", outcome: TAKE },
+      { id: "late", outcome: STOP },
+    ]);
+    await flush();
+    // An older page from 0: the bars between 2h and 5h may change "early", not "late" (entry at 10h).
+    c.candles(BTC, "1h", 0, 100 * H);
+    expect(b.resolves[1]!.positions.map((p) => p.id)).toEqual(["early"]);
+    b.resolves[1]!.resolve([{ id: "early", outcome: STOP }]);
+    await flush();
+    expect(s.outcomes.at(-1)).toEqual(new Map([["early", STOP], ["late", STOP]]));
+  });
+
+  it("keeps the answer of an earlier call for the positions a later one did not ask", async () => {
+    const { b, s, c } = await loaded([drawing("p1", 0, BTC, pos()), drawing("p2", 0, BTC, pos(80))]);
+    c.candles(BTC, "1h", 0, 100 * H);
+    // p2 moves while the first call is on its way: the second asks both (neither is known yet).
+    const before = drawing("p2", 0, BTC, pos(80));
+    s.commit({ before, after: { ...before, body: pos(85) } });
+    expect(b.resolves[1]!.positions.map((p) => p.id)).toEqual(["p1", "p2"]);
+    b.resolves[1]!.resolve([
+      { id: "p1", outcome: TAKE },
+      { id: "p2", outcome: STOP },
+    ]);
+    await flush();
+    // The first answer is older for both: dropped.
+    b.resolves[0]!.resolve([
+      { id: "p1", outcome: OPEN },
+      { id: "p2", outcome: OPEN },
+    ]);
+    await flush();
+    expect(s.outcomes.at(-1)).toEqual(new Map([["p1", TAKE], ["p2", STOP]]));
   });
 
   it("drops the outcome of a moved position at once and asks again", async () => {

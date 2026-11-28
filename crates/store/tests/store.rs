@@ -433,27 +433,28 @@ fn an_instrument_holds_at_most_2000_drawings() {
 }
 
 #[test]
-fn candles_between_is_after_exclusive_until_inclusive() {
+fn scan_candles_between_is_after_exclusive_until_inclusive_and_can_stop_early() {
     let mut store = Store::open_in_memory().unwrap();
     let candles = series(6);
     store
         .upsert_candles(&id("BTCUSDT"), Timeframe::M1, &candles)
         .unwrap();
-    let got = store
-        .candles_between(
-            &id("BTCUSDT"),
-            Timeframe::M1,
-            candles[1].open_time,
-            candles[4].open_time,
-        )
+    let (after, until) = (candles[1].open_time, candles[4].open_time);
+    let all = store
+        .scan_candles_between(&id("BTCUSDT"), Timeframe::M1, after, until, |it| {
+            it.collect::<Vec<_>>()
+        })
         .unwrap();
-    assert_eq!(got, candles[2..=4].to_vec());
-    assert!(
-        store
-            .candles_between(&id("BTCUSDT"), Timeframe::H1, 0, i64::MAX)
-            .unwrap()
-            .is_empty()
-    );
+    assert_eq!(all, candles[2..=4].to_vec());
+    // The closure reads as far as it wants; the rest is never fetched.
+    let first = store
+        .scan_candles_between(&id("BTCUSDT"), Timeframe::M1, after, until, |it| it.next())
+        .unwrap();
+    assert_eq!(first, Some(candles[2]));
+    let none = store
+        .scan_candles_between(&id("BTCUSDT"), Timeframe::H1, 0, i64::MAX, |it| it.count())
+        .unwrap();
+    assert_eq!(none, 0);
 }
 
 /// Counts user tables by opening a second raw connection.

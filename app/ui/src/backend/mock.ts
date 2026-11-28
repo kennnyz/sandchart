@@ -481,14 +481,14 @@ function mockAtScale<D extends DrawingInput>(d: D, to: number): D | string {
 // TEST-ONLY CODE. The real outcome is `sandchart_core::position::resolve` in Rust; this copy
 // lets the browser mock answer, and mock.test.ts checks it against the same fixture as Rust
 // (crates/core/tests/fixtures/positions.json).
-/** Bars after the one containing `entry.t`, up to the one opening at `endT`; first hit decides. */
-export function mockResolve(p: PositionBody, bars: { time: number[]; high: number[]; low: number[] }): PositionOutcome {
-  for (let i = 0; i < bars.time.length; i++) {
-    const t = bars.time[i]!;
+/**
+ * Bars (ascending) after the one containing `entry.t`, up to the one opening at `endT`; the
+ * first hit decides, and no bar after it is read (`resolve_iter`).
+ */
+export function mockResolve(p: PositionBody, bars: Iterable<{ time: number; high: number; low: number }>): PositionOutcome {
+  for (const { time: t, high, low } of bars) {
     if (t <= p.entry.t) continue;
     if (t > p.endT) break;
-    const high = bars.high[i]!;
-    const low = bars.low[i]!;
     const long = p.side === "long";
     const hitStop = long ? low <= p.stop : high >= p.stop;
     const hitTake = long ? high >= p.take : low <= p.take;
@@ -572,17 +572,35 @@ export function createMockBackend(opts: MockOptions): MockBackend {
     return { step, timeOf, first };
   }
 
+  /** Candle number `i` in ticks. */
+  function candleAt(i: number, time: number) {
+    const open = priceAt(i, base);
+    const close = priceAt(i + 1, base);
+    return {
+      time,
+      open,
+      high: Math.max(open, close) + Math.round(noise(i, 2) * wick),
+      low: Math.min(open, close) - Math.round(noise(i, 3) * wick),
+      close,
+      volume: Math.round(1_000 + noise(i, 4) * 9_000),
+    };
+  }
+
   function appendCandles(out: CandleColumns, timeOf: (i: number) => number, start: number, end: number) {
     for (let i = start; i < end; i++) {
-      const open = priceAt(i, base);
-      const close = priceAt(i + 1, base);
-      out.time.push(timeOf(i));
-      out.open.push(open);
-      out.close.push(close);
-      out.high.push(Math.max(open, close) + Math.round(noise(i, 2) * wick));
-      out.low.push(Math.min(open, close) - Math.round(noise(i, 3) * wick));
-      out.volume.push(Math.round(1_000 + noise(i, 4) * 9_000));
+      const c = candleAt(i, timeOf(i));
+      out.time.push(c.time);
+      out.open.push(c.open);
+      out.high.push(c.high);
+      out.low.push(c.low);
+      out.close.push(c.close);
+      out.volume.push(c.volume);
     }
+  }
+
+  /** Candles `start..end`, made one at a time as they are read, like the engine's cursor. */
+  function* candleRange(timeOf: (i: number) => number, start: number, end: number) {
+    for (let i = start; i < end; i++) yield candleAt(i, timeOf(i));
   }
 
   /** The newest candles (at most BAR_CAP) in price units, like the engine's compute window. */
@@ -824,12 +842,10 @@ export function createMockBackend(opts: MockOptions): MockBackend {
       }
       const { step, timeOf, first } = timeline(tf);
       return positions.map(({ id: drawingId, position }) => {
-        // Bars with entry.t < time <= endT, within the generated series.
+        // Bars with entry.t < time <= endT within the generated series, read up to the one that decides.
         const start = Math.max(first, Math.floor((position.entry.t - timeOf(0)) / step) + 1);
-        const end = Math.min(opts.candles, Math.floor((position.endT - timeOf(0)) / step) + 1, start + BAR_CAP);
-        const bars = column();
-        appendCandles(bars, timeOf, start, end);
-        return { id: drawingId, outcome: mockResolve(position, bars) };
+        const end = Math.min(opts.candles, Math.floor((position.endT - timeOf(0)) / step) + 1);
+        return { id: drawingId, outcome: mockResolve(position, candleRange(timeOf, start, end)) };
       });
     },
 

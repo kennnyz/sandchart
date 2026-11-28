@@ -88,8 +88,11 @@ impl Engine {
             positions
                 .into_iter()
                 .map(|(drawing_id, p)| {
-                    let candles = s.candles_between(&id, tf, p.entry.t, p.end_t)?;
-                    Ok((drawing_id, p.resolve(&candles)))
+                    // Bars are read only up to the one that decides.
+                    let outcome = s.scan_candles_between(&id, tf, p.entry.t, p.end_t, |it| {
+                        p.resolve_iter(it)
+                    })?;
+                    Ok((drawing_id, outcome))
                 })
                 .collect()
         })
