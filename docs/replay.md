@@ -144,7 +144,7 @@ All results are worked out by the app's engine, from the bars and the commands y
 
 Files saved by earlier versions (format 1, which counted bars by index) still open and give the same trades; saving one again writes format 2.
 
-It holds no results. **Open** reads the file, checks its version, its limits and the hash of its candles, and plays the commands again to get the trades and statistics. A file that fails a check is refused with the reason, and the replay you had open stays as it was. An opened file switches the chart to its pair and timeframe, and since it has no bar after its current one, it cannot be stepped further.
+It holds no results. **Open** reads the file, checks its version, its limits, that every candle opens on its timeframe's grid (an hourly candle on the hour) and closes before 2^53 − 1 ms, and the hash of its candles, and plays the commands again to get the trades and statistics. A file that fails a check is refused with the reason, and the replay you had open stays as it was. An opened file switches the chart to its pair and timeframe, and since it has no bar after its current one, it cannot be stepped further.
 
 ## Sharing
 
