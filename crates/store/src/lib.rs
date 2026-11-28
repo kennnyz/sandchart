@@ -1,4 +1,5 @@
-//! SQLite cache for instruments, candles, history-start markers and the watchlist.
+//! SQLite cache for instruments, candles, history-start markers, the watchlist, the chart
+//! indicators and drawings.
 //!
 //! All prices and volumes are stored as `INTEGER` ticks; floats never touch the database.
 
@@ -7,7 +8,7 @@ mod migrations;
 use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension, params};
-use sandchart_core::{Candle, Instrument, InstrumentId, Timeframe};
+use sandchart_core::{Candle, Drawing, Instrument, InstrumentId, Timeframe};
 
 /// Errors returned by [`Store`].
 #[derive(Debug, thiserror::Error)]
@@ -18,7 +19,14 @@ pub enum StoreError {
     SchemaTooNew { found: u32, supported: u32 },
     #[error("limit {0} does not fit the database integer range")]
     LimitTooLarge(usize),
+    #[error("a stored drawing cannot be read: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("an instrument can hold at most {max} drawings; delete some first")]
+    TooManyDrawings { max: usize },
 }
+
+/// Most drawings one instrument can hold.
+pub const MAX_DRAWINGS_PER_INSTRUMENT: usize = 2000;
 
 /// An installed indicator module, as recorded at install time.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +56,17 @@ pub struct Store {
 
 fn limit_to_i64(limit: usize) -> Result<i64, StoreError> {
     i64::try_from(limit).map_err(|_| StoreError::LimitTooLarge(limit))
+}
+
+fn candle_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Candle> {
+    Ok(Candle {
+        open_time: row.get(0)?,
+        open: row.get(1)?,
+        high: row.get(2)?,
+        low: row.get(3)?,
+        close: row.get(4)?,
+        volume: row.get(5)?,
+    })
 }
 
 fn instrument_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Instrument> {
@@ -207,20 +226,42 @@ impl Store {
                 before.unwrap_or(i64::MAX),
                 limit
             ],
-            |row| {
-                Ok(Candle {
-                    open_time: row.get(0)?,
-                    open: row.get(1)?,
-                    high: row.get(2)?,
-                    low: row.get(3)?,
-                    close: row.get(4)?,
-                    volume: row.get(5)?,
-                })
-            },
+            candle_from_row,
         )?;
         let mut out: Vec<Candle> = rows.collect::<Result<_, _>>()?;
         out.reverse();
         Ok(out)
+    }
+
+    /// Candles with `after < open_time <= until`, ascending.
+    /// Runs `f` over the candles with `after < open_time <= until`, ascending, read from the
+    /// database one at a time: rows `f` does not take are never fetched. A read error ends
+    /// the iterator early and is returned instead of `f`'s result.
+    pub fn scan_candles_between<R>(
+        &self,
+        id: &InstrumentId,
+        tf: Timeframe,
+        after: i64,
+        until: i64,
+        f: impl FnOnce(&mut dyn Iterator<Item = Candle>) -> R,
+    ) -> Result<R, StoreError> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT open_time, open, high, low, close, volume FROM candles
+             WHERE source = ?1 AND symbol = ?2 AND tf = ?3 AND open_time > ?4 AND open_time <= ?5
+             ORDER BY open_time",
+        )?;
+        let rows = stmt.query_map(
+            params![id.source, id.symbol, tf.code(), after, until],
+            candle_from_row,
+        )?;
+        let mut failed = None;
+        let mut it = rows.map_while(|r| r.map_err(|e| failed = Some(e)).ok());
+        let out = f(&mut it);
+        drop(it);
+        match failed {
+            Some(e) => Err(e.into()),
+            None => Ok(out),
+        }
     }
 
     pub fn newest_open_time(
@@ -385,6 +426,95 @@ impl Store {
             }
         }
         tx.commit()?;
+        Ok(())
+    }
+
+    /// The drawings of one instrument in paint order: by `z`, then by id. A row whose body or
+    /// style cannot be read (a kind from a later version) is left out and logged; it stays
+    /// stored and still counts toward the cap.
+    pub fn drawings(&self, id: &InstrumentId) -> Result<Vec<Drawing>, StoreError> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT id, price_scale, body, style, locked, z, updated_at
+             FROM drawings WHERE source = ?1 AND symbol = ?2 ORDER BY z, id",
+        )?;
+        let rows = stmt.query_map(params![id.source, id.symbol], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, u8>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, bool>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (drawing_id, price_scale, body, style, locked, z, updated_at) = row?;
+            // A row this version cannot read (a kind from a later one) is skipped, not fatal.
+            let parsed = serde_json::from_str(&body)
+                .and_then(|body| serde_json::from_str(&style).map(|style| (body, style)));
+            let (body, style) = match parsed {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("drawing {drawing_id} cannot be read: {e}");
+                    continue;
+                }
+            };
+            out.push(Drawing {
+                id: drawing_id,
+                instrument: id.clone(),
+                price_scale,
+                body,
+                style,
+                locked,
+                z,
+                updated_at,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Inserts or replaces a drawing by id. Fails when its instrument already holds
+    /// [`MAX_DRAWINGS_PER_INSTRUMENT`] other drawings.
+    pub fn upsert_drawing(&mut self, d: &Drawing) -> Result<(), StoreError> {
+        let body = serde_json::to_string(&d.body)?;
+        let style = serde_json::to_string(&d.style)?;
+        let tx = self.conn.transaction()?;
+        let others: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM drawings WHERE source = ?1 AND symbol = ?2 AND id != ?3",
+            params![d.instrument.source, d.instrument.symbol, d.id],
+            |row| row.get(0),
+        )?;
+        if others >= limit_to_i64(MAX_DRAWINGS_PER_INSTRUMENT)? {
+            return Err(StoreError::TooManyDrawings {
+                max: MAX_DRAWINGS_PER_INSTRUMENT,
+            });
+        }
+        tx.execute(
+            "INSERT OR REPLACE INTO drawings
+                (id, source, symbol, price_scale, body, style, locked, z, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                d.id,
+                d.instrument.source,
+                d.instrument.symbol,
+                d.price_scale,
+                body,
+                style,
+                d.locked,
+                d.z,
+                d.updated_at
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Removes a drawing; an unknown id is not an error.
+    pub fn delete_drawing(&mut self, id: &str) -> Result<(), StoreError> {
+        self.conn
+            .execute("DELETE FROM drawings WHERE id = ?1", [id])?;
         Ok(())
     }
 }

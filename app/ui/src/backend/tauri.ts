@@ -104,6 +104,11 @@ export const tauriBackend: Backend = {
     });
     return wire.map(fromWire);
   },
+  getDrawings: (id) => invoke("get_drawings", { source: id.source, symbol: id.symbol }),
+  saveDrawing: (drawing) => invoke("save_drawing", { drawing }),
+  deleteDrawing: (id) => invoke("delete_drawing", { id }),
+  getPositionOutcomes: (id, tf, positions) =>
+    invoke("get_position_outcomes", { source: id.source, symbol: id.symbol, tf, positions }),
   checkUpdate: () => invoke("check_update"),
   async installUpdate(onProgress) {
     const channel = new Channel<UpdateProgress>();

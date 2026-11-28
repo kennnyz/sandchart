@@ -16,9 +16,10 @@ use tauri::ipc::Channel;
 use sandchart_indicators::MAX_MODULE_BYTES;
 
 use crate::dto::{
-    CandlesDto, DayChangeDto, IndicatorInfoDto, IndicatorListDto, InspectionDto, InstanceDto,
-    InstanceResultDto, InstrumentDto, InstrumentIdDto, LiveDto, ProblemDto, connection_name,
-    to_candles_dto, to_day_change_dto, to_live_dto,
+    CandlesDto, DayChangeDto, DrawingDto, DrawingInputDto, IndicatorInfoDto, IndicatorListDto,
+    InspectionDto, InstanceDto, InstanceResultDto, InstrumentDto, InstrumentIdDto, LiveDto,
+    PositionInputDto, PositionOutcomeDto, ProblemDto, connection_name, to_candles_dto,
+    to_day_change_dto, to_live_dto,
 };
 
 /// Most results one search returns.
@@ -303,6 +304,51 @@ pub async fn compute_indicators(
         .compute_indicators(&id, timeframe(&tf)?, from_time)
         .await?;
     Ok(results.into_iter().map(Into::into).collect())
+}
+
+#[tauri::command]
+pub async fn get_drawings(
+    state: State<'_, AppState>,
+    source: String,
+    symbol: String,
+) -> CmdResult<Vec<DrawingDto>> {
+    let id = InstrumentId { source, symbol };
+    let drawings = state.engine.drawings(&id).await?;
+    Ok(drawings.into_iter().map(Into::into).collect())
+}
+
+/// Returns the drawing as stored, with the engine's price scale and update time.
+#[tauri::command]
+pub async fn save_drawing(
+    state: State<'_, AppState>,
+    drawing: DrawingInputDto,
+) -> CmdResult<DrawingDto> {
+    Ok(state.engine.save_drawing(drawing.into()).await?.into())
+}
+
+#[tauri::command]
+pub async fn delete_drawing(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    Ok(state.engine.delete_drawing(&id).await?)
+}
+
+#[tauri::command]
+pub async fn get_position_outcomes(
+    state: State<'_, AppState>,
+    source: String,
+    symbol: String,
+    tf: String,
+    positions: Vec<PositionInputDto>,
+) -> CmdResult<Vec<PositionOutcomeDto>> {
+    let id = InstrumentId { source, symbol };
+    let positions = positions.into_iter().map(|p| (p.id, p.position)).collect();
+    let outcomes = state
+        .engine
+        .position_outcomes(&id, timeframe(&tf)?, positions)
+        .await?;
+    Ok(outcomes
+        .into_iter()
+        .map(|(id, outcome)| PositionOutcomeDto { id, outcome })
+        .collect())
 }
 
 #[cfg(test)]

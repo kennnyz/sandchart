@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createMockBackend, mockSma } from "./mock";
-import type { IndicatorInstance, IndicatorResult } from "./types";
+import invalidDrawings from "../../../../crates/core/tests/fixtures/drawings_invalid.json";
+import validDrawings from "../../../../crates/core/tests/fixtures/drawings_valid.json";
+import fixture from "../../../../crates/core/tests/fixtures/positions.json";
+import { createMockBackend, mockResolve, mockSma, mockValidateDrawing } from "./mock";
+import type { Drawing, DrawingBody, DrawingInput, IndicatorInstance, IndicatorResult, PositionBody, PositionOutcome } from "./types";
 
 const id = { source: "mock", symbol: "BTCUSDT" };
 
@@ -175,6 +178,171 @@ describe("mock backend", () => {
       await b.removeIndicator("test.echo");
       expect(await b.getChartIndicators()).toEqual([]);
       await expect(b.removeIndicator("builtin.sma")).rejects.toThrow();
+    });
+  });
+
+  describe("drawings", () => {
+    const input = (drawingId: string, body: DrawingBody, z = 0): DrawingInput => ({
+      id: drawingId,
+      instrument: id,
+      priceScale: 2,
+      body,
+      style: { color: 2, width: 1, dash: false },
+      locked: false,
+      z,
+    });
+    const long = (over: Partial<PositionBody> = {}): DrawingBody => ({
+      kind: "position",
+      side: "long",
+      entry: { t: 1_000, p: 100 },
+      stop: 90,
+      take: 120,
+      endT: 2_000,
+      ...over,
+    });
+
+    it("saves, lists in z then id order, replaces and deletes", async () => {
+      const b = createMockBackend({ candles: 10 });
+      const saved = await b.saveDrawing(input("b", { kind: "hline", p: 5 }));
+      expect(saved.priceScale).toBe(2);
+      expect(saved.updatedAt).toBeGreaterThan(0);
+      await b.saveDrawing(input("a", { kind: "note", t: 1, text: "hi" }));
+      await b.saveDrawing(input("c", long(), -1));
+      await b.saveDrawing({ ...input("x", { kind: "hline", p: 1 }), instrument: { source: "mock", symbol: "ETHUSDT" } });
+      expect((await b.getDrawings(id)).map((d) => d.id)).toEqual(["c", "a", "b"]);
+
+      await b.saveDrawing(input("b", { kind: "hline", p: 7 }, 5));
+      const list = await b.getDrawings(id);
+      expect(list.at(-1)!.body).toEqual({ kind: "hline", p: 7 });
+      // The list is a copy: changing it does not change what is stored.
+      list[0]!.z = 99;
+      expect((await b.getDrawings(id))[0]!.z).toBe(-1);
+
+      await b.deleteDrawing("b");
+      await b.deleteDrawing("b");
+      expect((await b.getDrawings(id)).map((d) => d.id)).toEqual(["c", "a"]);
+    });
+
+    it("rescales a drawing made at another tick size, as the engine does", async () => {
+      // The UI got the drawings at scale 2; the instrument now quotes four decimals.
+      const b = createMockBackend({ candles: 10, priceScale: 4 });
+      const saved = await b.saveDrawing(input("p", long()));
+      expect(saved.priceScale).toBe(4);
+      expect(saved.body).toMatchObject({ entry: { t: 1_000, p: 10_000 }, stop: 9_000, take: 12_000, endT: 2_000 });
+      // Down to scale 0: 12 345 (123.45) is stored as 123, and -12 350 as -124.
+      const down = createMockBackend({ candles: 10, priceScale: 0 });
+      expect((await down.saveDrawing(input("h", { kind: "hline", p: 12_345 }))).body).toEqual({ kind: "hline", p: 123 });
+      expect((await down.saveDrawing(input("n", { kind: "hline", p: -12_350 }))).body).toEqual({ kind: "hline", p: -124 });
+      await expect(b.saveDrawing(input("big", { kind: "hline", p: Math.floor(Number.MAX_SAFE_INTEGER / 10) }))).rejects.toMatchObject({
+        message: expect.stringMatching(/price scale 4.*±\(2\^53 - 1\)/),
+      });
+      await expect(down.saveDrawing(input("tight", long({ stop: 9_999, entry: { t: 1_000, p: 10_000 }, take: 10_001 })))).rejects.toMatchObject({
+        message: expect.stringMatching(/price scale 0.*stop < entry < take/),
+      });
+      expect((await b.getDrawings(id)).map((d) => d.id)).toEqual(["p"]);
+    });
+
+    it("lists drawings stored at another tick size rescaled, leaving out those that do not fit", async () => {
+      let kept: Drawing[] | null = null;
+      const store = { load: () => kept, save: (all: Drawing[]) => (kept = structuredClone(all)) };
+      const first = createMockBackend({ candles: 10, latencyMs: 0, drawingStore: store });
+      await first.saveDrawing(input("h", { kind: "hline", p: 12_345 }));
+      await first.saveDrawing(input("tight", long({ stop: 9_999, entry: { t: 1_000, p: 10_000 }, take: 10_001 })));
+      const later = createMockBackend({ candles: 10, latencyMs: 0, priceScale: 0, drawingStore: store });
+      const list = await later.getDrawings(id);
+      expect(list.map((d) => [d.id, d.priceScale, d.body])).toEqual([["h", 0, { kind: "hline", p: 123 }]]);
+      expect(kept!.length).toBe(2);
+    });
+
+    it("keeps drawings in the given store across backends", async () => {
+      let kept: Drawing[] | null = null;
+      const store = { load: () => kept, save: (all: Drawing[]) => (kept = structuredClone(all)) };
+      const first = createMockBackend({ candles: 10, latencyMs: 0, drawingStore: store });
+      await first.saveDrawing(input("a", { kind: "hline", p: 5 }));
+      await first.saveDrawing(input("b", { kind: "hline", p: 6 }));
+      await first.deleteDrawing("a");
+      const second = createMockBackend({ candles: 10, latencyMs: 0, drawingStore: store });
+      expect((await second.getDrawings(id)).map((d) => [d.id, d.body])).toEqual([["b", { kind: "hline", p: 6 }]]);
+    });
+
+    it("rejects what Rust rejects, with its message", async () => {
+      const b = createMockBackend({ candles: 10 });
+      await expect(b.saveDrawing(input("a b", { kind: "hline", p: 1 }))).rejects.toMatchObject({
+        code: "other",
+        message: expect.stringContaining("drawing id"),
+      });
+      await expect(b.saveDrawing(input("p", long({ stop: 100 })))).rejects.toMatchObject({
+        message: "a long position needs stop < entry < take",
+      });
+      await expect(b.saveDrawing({ ...input("u", { kind: "hline", p: 1 }), instrument: { source: "mock", symbol: "NOPE" } })).rejects.toMatchObject({
+        message: expect.stringContaining("unknown instrument"),
+      });
+      expect(await b.getDrawings(id)).toEqual([]);
+    });
+
+    it("validates as Rust does: the shared fixture, with the same messages", () => {
+      type Case = { name: string; drawing: Omit<DrawingInput, "instrument" | "priceScale" | "locked">; error?: string };
+      const full = (c: Case): DrawingInput => ({ ...c.drawing, instrument: id, priceScale: 2, locked: false });
+      const ok = validDrawings.cases as Case[];
+      const bad = invalidDrawings.cases as Case[];
+      expect(ok.length).toBeGreaterThanOrEqual(10);
+      expect(bad.length).toBeGreaterThanOrEqual(30);
+      for (const c of ok) expect(mockValidateDrawing(full(c)), c.name).toBeNull();
+      for (const c of bad) expect(mockValidateDrawing(full(c)), c.name).toBe(c.error);
+      // JSON has no NaN or infinity: these are checked here and in drawing.rs.
+      const fib = (levels: number[]) => input("f", { kind: "fib", a: { t: 1, p: 1 }, b: { t: 2, p: 2 }, levels });
+      expect(mockValidateDrawing(fib([NaN]))).toBe("Fibonacci level NaN is not a number in -5..=5");
+      expect(mockValidateDrawing(fib([Infinity]))).toBe("Fibonacci level inf is not a number in -5..=5");
+      expect(mockValidateDrawing(fib([0.5, -Infinity]))).toBe("Fibonacci level -inf is not a number in -5..=5");
+    });
+
+    it("keeps at most 2000 drawings per instrument", async () => {
+      const b = createMockBackend({ candles: 10 });
+      for (let i = 0; i < 2000; i++) await b.saveDrawing(input(`d${i}`, { kind: "hline", p: i }));
+      await expect(b.saveDrawing(input("more", { kind: "hline", p: 1 }))).rejects.toMatchObject({
+        message: expect.stringContaining("at most 2000"),
+      });
+      await b.saveDrawing(input("d0", { kind: "hline", p: 9 }));
+    });
+
+    it("resolve matches the Rust fixture", () => {
+      type Case = PositionBody & { name: string; candles: number[][]; expect: PositionOutcome };
+      const cases = fixture.cases as Case[];
+      expect(cases.length).toBeGreaterThanOrEqual(12);
+      for (const c of cases) {
+        const bars = c.candles.map((r) => ({ time: r[0]!, high: r[2]!, low: r[3]! }));
+        expect(mockResolve(c, bars), c.name).toEqual(c.expect);
+      }
+    });
+
+    it("resolves positions over its own candles", async () => {
+      const b = createMockBackend({ candles: 500 });
+      const page = await b.getCandles(id, "1h");
+      const i = 100;
+      const entry = { t: page.time[i]! + 1, p: page.close[i]! };
+      // A take just above the next bar's high and a far stop: the next bars decide.
+      const position: PositionBody = { side: "long", entry, stop: 1, take: page.high[i + 1]!, endT: page.time.at(-1)! };
+      const [r] = await b.getPositionOutcomes(id, "1h", [{ id: "p", position }]);
+      expect(r).toEqual({ id: "p", outcome: { status: "take", exitTime: page.time[i + 1], ambiguous: false, r: expect.any(Number) } });
+      const short: PositionBody = { ...position, endT: page.time[i]! + 2 };
+      expect((await b.getPositionOutcomes(id, "1h", [{ id: "q", position: short }]))[0]!.outcome.status).toBe("open");
+      await expect(b.getPositionOutcomes(id, "1h", [{ id: "z", position: { ...position, stop: entry.p } }])).rejects.toMatchObject({
+        message: expect.stringContaining("position z"),
+      });
+    });
+
+    it("resolves a position over every bar to its end, as the engine does (no bar cap)", async () => {
+      const n = 150_000;
+      const b = createMockBackend({ candles: n });
+      const page = await b.getCandles(id, "1h");
+      const last = page.time.at(-1)!;
+      const first = last - (n - 1) * 3_600_000;
+      // Runs through all 150 000 bars without a hit: open, and quickly, bar by bar.
+      const position: PositionBody = { side: "long", entry: { t: first, p: 10_000 }, stop: 1, take: 1e12, endT: last };
+      const started = performance.now();
+      const [r] = await b.getPositionOutcomes(id, "1h", [{ id: "p", position }]);
+      expect(r!.outcome.status).toBe("open");
+      expect(performance.now() - started).toBeLessThan(1_000);
     });
   });
 

@@ -37,7 +37,6 @@ export interface FrameInput {
   scale: PriceScale;
   priceDecimals: number;
   tf: TimeframeCode;
-  crosshair: Crosshair | null;
   /** Two lines for the start-of-history marker, or null when the first candle is not the first one. */
   historyStart: [string, string] | null;
   theme: ChartTheme;
@@ -50,6 +49,8 @@ const LABEL_PAD = 8;
 const MIN_TIME_LABEL_SPACING = 100;
 const MIN_PRICE_TICK_SPACING = 56;
 const BODY_RATIO = 0.72;
+/** Half height of the background that covers a tick label under a crosshair label: the 11 px glyphs plus a margin. */
+const COVER_HALF = 7;
 /** Tint of the empty area left of the first candle (Design Reference, States). */
 const HISTORY_TINT = "rgba(128,140,160,0.06)";
 
@@ -63,6 +64,13 @@ export class RenderBuffers {
   colVol = new Float64Array(0);
   markIndex = new Int32Array(512);
   markCount = 0;
+  /** Price axis labels (price and own pane ticks) the last base frame drew: centre rows in CSS px. */
+  priceLabelY = new Float64Array(128);
+  priceLabelCount = 0;
+  /** Time axis labels the last base frame drew: centre and half width in CSS px. */
+  timeLabelX = new Float64Array(512);
+  timeLabelHalf = new Float64Array(512);
+  timeLabelCount = 0;
   private fontDpr = 0;
   font = "";
   private markerFontDpr = 0;
@@ -104,9 +112,9 @@ function priceTicks(scale: PriceScale): number[] {
 }
 
 /**
- * Widest price label (tick labels, last price, crosshair price, own pane labels) in CSS
- * px, and the price axis width that fits it: at least PRICE_AXIS_WIDTH, else the label
- * plus padding.
+ * Widest price label (tick labels, last price, own pane labels, and the prices at the top
+ * and bottom of the scale, which bound any crosshair price label) in CSS px, and the
+ * price axis width that fits it: at least PRICE_AXIS_WIDTH, else the label plus padding.
  */
 export function priceAxisWidth(
   ctx: CanvasRenderingContext2D,
@@ -115,7 +123,6 @@ export function priceAxisWidth(
   scale: PriceScale,
   decimals: number,
   lastClose: number,
-  crosshairY: number | null,
   panes: readonly PaneFrame[] = [],
 ): { width: number; widest: number; widestText: string } {
   ctx.font = buf.axisFont(dpr);
@@ -130,11 +137,18 @@ export function priceAxisWidth(
   };
   for (const t of priceTicks(scale)) measure(formatPrice(Math.round(t), decimals));
   if (Number.isFinite(lastClose)) measure(formatPrice(lastClose, decimals));
-  if (crosshairY !== null) measure(formatPrice(Math.round(scale.fromY(crosshairY)), decimals));
+  if (scale.max > scale.min) {
+    measure(formatPrice(Math.round(scale.fromY(0)), decimals));
+    measure(formatPrice(Math.round(scale.fromY(scale.heightPx)), decimals));
+  }
   for (const p of panes) for (const t of p.ticks) measure(formatPaneValue(t));
   return { width: Math.max(PRICE_AXIS_WIDTH, Math.ceil(widest + 2 * LABEL_PAD)), widest, widestText };
 }
 
+/**
+ * Base layer: everything except the crosshair. Records where it drew the axis labels,
+ * so the overlay can cover the ones under its crosshair labels.
+ */
 export function draw(f: FrameInput, buf: RenderBuffers): void {
   const { ctx, dpr, theme: th, series: s, view } = f;
   const { plotW, plotH } = plotSize(f.width, f.height, f.axisWidth);
@@ -153,6 +167,8 @@ export function draw(f: FrameInput, buf: RenderBuffers): void {
   ctx.setLineDash([]);
   ctx.fillStyle = th.bg;
   ctx.fillRect(0, 0, W, H);
+  buf.priceLabelCount = 0;
+  buf.timeLabelCount = 0;
   if (plotW <= 0 || plotH <= 0) return;
 
   const [first, last] = visibleRange(view, plotW, s.count);
@@ -212,29 +228,6 @@ export function draw(f: FrameInput, buf: RenderBuffers): void {
     }
   }
 
-  // Crosshair: the vertical line crosses the price plot and every own pane.
-  const ch = f.crosshair;
-  let chX = 0;
-  if (ch) {
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(0, 0, pw, ph);
-    ctx.clip();
-    chX = ch.index === null ? ch.x : indexToX(view, ch.index, plotW);
-    ctx.strokeStyle = th.muted;
-    ctx.setLineDash([4 * px, 4 * px]);
-    ctx.beginPath();
-    const x = Math.round(chX * dpr) + px / 2;
-    const y = Math.round(ch.y * dpr) + px / 2;
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, ph);
-    ctx.moveTo(0, y);
-    ctx.lineTo(pw, y);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.restore();
-  }
-
   // Axis borders.
   ctx.fillStyle = th.line;
   ctx.fillRect(pw, 0, px, H);
@@ -243,7 +236,7 @@ export function draw(f: FrameInput, buf: RenderBuffers): void {
   ctx.font = buf.axisFont(dpr);
   ctx.textBaseline = "middle";
 
-  // Price axis: tick labels hidden where the last-price or crosshair label sits.
+  // Price axis: tick labels hidden where the last-price label sits.
   ctx.fillStyle = th.muted;
   ctx.textAlign = "left";
   let prevLabel = NaN;
@@ -254,52 +247,159 @@ export function draw(f: FrameInput, buf: RenderBuffers): void {
     const y = f.scale.toY(t);
     if (y < LABEL_HEIGHT / 2 || y > priceH - LABEL_HEIGHT / 2) continue;
     if (Math.abs(y - lastY) < LABEL_HEIGHT) continue;
-    if (ch && Math.abs(y - ch.y) < LABEL_HEIGHT) continue;
-    ctx.fillText(formatPrice(ticksValue, f.priceDecimals), pw + LABEL_PAD * dpr, Math.round(y * dpr));
+    const row = Math.round(y * dpr);
+    ctx.fillText(formatPrice(ticksValue, f.priceDecimals), pw + LABEL_PAD * dpr, row);
+    recordPriceLabel(buf, row / dpr);
   }
 
-  // Own pane labels: hidden at the pane edges and under the crosshair label.
-  let chPane: PaneFrame | null = null;
+  // Own pane labels: hidden at the pane edges.
   if (ind) {
     for (const p of ind.panes) {
-      if (ch && ch.y >= p.top && ch.y < p.top + p.height) chPane = p;
       if (!p.scale) continue;
       for (const t of p.ticks) {
         const y = p.top + p.scale.toY(t);
         if (y < p.top + LABEL_HEIGHT / 2 || y > p.top + p.height - LABEL_HEIGHT / 2) continue;
-        if (ch && Math.abs(y - ch.y) < LABEL_HEIGHT) continue;
-        ctx.fillText(formatPaneValue(t), pw + LABEL_PAD * dpr, Math.round(y * dpr));
+        const row = Math.round(y * dpr);
+        ctx.fillText(formatPaneValue(t), pw + LABEL_PAD * dpr, row);
+        recordPriceLabel(buf, row / dpr);
       }
     }
   }
 
-  // Time axis: labels under the crosshair time label are hidden.
   ctx.textAlign = "center";
   const timeY = ph + Math.round((TIME_AXIS_HEIGHT / 2) * dpr);
-  const chTime = ch && ch.index !== null ? formatCrosshairTime(s.time[ch.index]!, f.tf) : null;
-  const chHalf = chTime ? ctx.measureText(chTime).width / 2 + LABEL_PAD * dpr : 0;
   for (let m = 0; m < buf.markCount; m++) {
     const i = buf.markIndex[m]!;
     const prev = i > 0 ? s.time[i - 1]! : null;
     const text = formatTimeLabel(s.time[i]!, f.tf, prev);
     const x = Math.round(indexToX(view, i, plotW) * dpr);
-    if (chTime && Math.abs(x - chX * dpr) < chHalf + ctx.measureText(text).width / 2 + LABEL_PAD * dpr) continue;
     ctx.fillText(text, x, timeY);
+    if (buf.timeLabelCount < buf.timeLabelX.length) {
+      buf.timeLabelX[buf.timeLabelCount] = x / dpr;
+      buf.timeLabelHalf[buf.timeLabelCount] = ctx.measureText(text).width / 2 / dpr;
+      buf.timeLabelCount++;
+    }
   }
 
   if (Number.isFinite(lastY) && lastY >= 0 && lastY <= priceH) {
     priceLabel(ctx, formatPrice(lastClose, f.priceDecimals), lastY, pw, W, dpr, th.lastPriceBg, th.lastPriceText);
   }
-  if (ch) {
-    if (ch.y < priceH) {
-      const price = Math.round(f.scale.fromY(ch.y));
-      priceLabel(ctx, formatPrice(price, f.priceDecimals), ch.y, pw, W, dpr, th.crosshairLabelBg, th.fg);
-    } else if (chPane?.scale) {
-      const value = chPane.scale.fromY(ch.y - chPane.top);
-      priceLabel(ctx, formatPaneValue(value), ch.y, pw, W, dpr, th.crosshairLabelBg, th.fg);
-    }
-    if (chTime) timeLabel(ctx, f.theme, chTime, chX, ph, pw, dpr);
+}
+
+function recordPriceLabel(buf: RenderBuffers, y: number): void {
+  if (buf.priceLabelCount < buf.priceLabelY.length) buf.priceLabelY[buf.priceLabelCount++] = y;
+}
+
+/**
+ * Overlay layer, on a transparent canvas of the same size above the base: the crosshair
+ * lines over the price plot and every own pane, and its labels on both axes. `f` and
+ * `buf` are those of the last base frame. Axis labels the crosshair labels would crowd
+ * are covered with the chart ground instead of being left out of the base frame.
+ * `under` draws first, right after the clear.
+ */
+export function drawOverlay(
+  f: FrameInput,
+  ctx: CanvasRenderingContext2D,
+  ch: Crosshair | null,
+  buf: RenderBuffers,
+  under?: () => void,
+): void {
+  const { dpr, theme: th, series: s, view } = f;
+  const { plotW, plotH } = plotSize(f.width, f.height, f.axisWidth);
+  const W = Math.round(f.width * dpr);
+  const H = Math.round(f.height * dpr);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  // What sits under the crosshair (drawing handles and previews); it leaves the transform as it was.
+  under?.();
+  if (!ch || plotW <= 0 || plotH <= 0) return;
+  const pw = Math.round(plotW * dpr);
+  const ph = Math.round(plotH * dpr);
+  const px = Math.max(1, Math.round(dpr));
+  const ind = f.indicators;
+  const priceH = ind ? ind.priceH : plotH;
+
+  // The vertical line crosses the price plot and every own pane.
+  const chX = ch.index === null ? ch.x : indexToX(view, ch.index, plotW);
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, 0, pw, ph);
+  ctx.clip();
+  ctx.globalAlpha = 1;
+  // One device pixel: what the crosshair has always been drawn with (the base frame's
+  // `lineWidth = px` never reached it, it was set inside a save/restore).
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = th.muted;
+  ctx.setLineDash([4 * px, 4 * px]);
+  ctx.beginPath();
+  const x = Math.round(chX * dpr) + px / 2;
+  const y = Math.round(ch.y * dpr) + px / 2;
+  ctx.moveTo(x, 0);
+  ctx.lineTo(x, ph);
+  ctx.moveTo(0, y);
+  ctx.lineTo(pw, y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+
+  // Price axis: cover the tick labels next to the crosshair label, then draw it.
+  ctx.fillStyle = th.bg;
+  const coverH = 2 * COVER_HALF * dpr;
+  for (let k = 0; k < buf.priceLabelCount; k++) {
+    const ly = buf.priceLabelY[k]!;
+    if (Math.abs(ly - ch.y) < LABEL_HEIGHT) ctx.fillRect(pw + px, Math.round(ly * dpr - coverH / 2), W - pw - px, coverH);
   }
+  ctx.font = buf.axisFont(dpr);
+  ctx.textBaseline = "middle";
+  if (ch.y < priceH) {
+    const price = Math.round(f.scale.fromY(ch.y));
+    priceLabel(ctx, formatPrice(price, f.priceDecimals), ch.y, pw, W, dpr, th.crosshairLabelBg, th.fg);
+  } else if (ind) {
+    for (const p of ind.panes) {
+      if (ch.y < p.top || ch.y >= p.top + p.height) continue;
+      if (p.scale) priceLabel(ctx, formatPaneValue(p.scale.fromY(ch.y - p.top)), ch.y, pw, W, dpr, th.crosshairLabelBg, th.fg);
+      break;
+    }
+  }
+
+  // Time axis: the same for the labels next to the crosshair time label.
+  if (ch.index === null) return;
+  const chTime = formatCrosshairTime(s.time[ch.index]!, f.tf);
+  const chHalf = ctx.measureText(chTime).width / 2 / dpr + LABEL_PAD;
+  ctx.fillStyle = th.bg;
+  for (let k = 0; k < buf.timeLabelCount; k++) {
+    const lx = buf.timeLabelX[k]!;
+    const half = buf.timeLabelHalf[k]!;
+    if (Math.abs(lx - chX) >= chHalf + half + LABEL_PAD) continue;
+    const left = Math.floor((lx - half) * dpr) - px;
+    ctx.fillRect(left, ph + px, Math.ceil((lx + half) * dpr) + px - left, H - ph - px);
+  }
+  timeLabel(ctx, th, chTime, chX, ph, pw, dpr);
+}
+
+/**
+ * A drawing's price tag on the price axis, `bg` with the chart ground as text, on either
+ * layer: the tick labels it would crowd are covered first. Nothing outside the price plot.
+ */
+export function drawingTag(ctx: CanvasRenderingContext2D, f: FrameInput, buf: RenderBuffers, price: number, bg: string): void {
+  const { dpr, theme: th } = f;
+  const { plotW, plotH } = plotSize(f.width, f.height, f.axisWidth);
+  const priceH = f.indicators ? f.indicators.priceH : plotH;
+  const y = f.scale.toY(price);
+  if (!(y >= 0 && y <= priceH) || plotW <= 0) return;
+  const pw = Math.round(plotW * dpr);
+  const W = Math.round(f.width * dpr);
+  const px = Math.max(1, Math.round(dpr));
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = th.bg;
+  const coverH = 2 * COVER_HALF * dpr;
+  for (let k = 0; k < buf.priceLabelCount; k++) {
+    const ly = buf.priceLabelY[k]!;
+    if (Math.abs(ly - y) < LABEL_HEIGHT) ctx.fillRect(pw + px, Math.round(ly * dpr - coverH / 2), W - pw - px, coverH);
+  }
+  ctx.font = buf.axisFont(dpr);
+  ctx.textBaseline = "middle";
+  priceLabel(ctx, formatPrice(price, f.priceDecimals), y, pw, W, dpr, bg, th.bg);
 }
 
 /** Tints the area before the first candle, draws a 1 px line at its edge and the label. */

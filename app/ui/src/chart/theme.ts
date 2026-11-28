@@ -36,6 +36,9 @@ export interface ChartTheme {
   indicatorPalette: readonly string[];
   /** Fill opacity of a band between two indicator lines. */
   bandOpacity: number;
+  /** Position zones, both grey: the profit zone lighter, the risk zone darker. */
+  positionProfit: string;
+  positionRisk: string;
 }
 
 export const AXIS_FONT = '11px "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
@@ -68,6 +71,8 @@ export const dark: ChartTheme = {
   // Blue, amber, teal, violet, rose, green, orange, slate.
   indicatorPalette: ["#6E9FD8", "#D7A85A", "#4FB0A0", "#A58BD6", "#D9829B", "#94B85E", "#E08A5C", "#8FA3B8"],
   bandOpacity: 0.12,
+  positionProfit: "rgba(210, 210, 214, 0.16)",
+  positionRisk: "rgba(120, 120, 126, 0.30)",
 };
 
 export const light: ChartTheme = {
@@ -90,4 +95,6 @@ export const light: ChartTheme = {
   lastPriceLine: "#6B6B70",
   indicatorPalette: ["#2F6DB5", "#B07A1E", "#1F8A7A", "#7357B8", "#B84F6E", "#5E8A2A", "#C2602E", "#5E7085"],
   bandOpacity: 0.12,
+  positionProfit: "rgba(17, 17, 17, 0.05)",
+  positionRisk: "rgba(17, 17, 17, 0.13)",
 };

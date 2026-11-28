@@ -1,5 +1,9 @@
-use sandchart_core::{Candle, Instrument, InstrumentId, Timeframe};
-use sandchart_store::{Store, StoredInstance, StoredModule};
+use sandchart_core::{
+    Anchor, Candle, Drawing, DrawingBody, Instrument, InstrumentId, Style, Timeframe,
+};
+use sandchart_store::{
+    MAX_DRAWINGS_PER_INSTRUMENT, Store, StoreError, StoredInstance, StoredModule,
+};
 
 fn id(symbol: &str) -> InstrumentId {
     InstrumentId {
@@ -196,12 +200,12 @@ fn migrations_go_down_and_up() {
     {
         let mut store = Store::open(&path).unwrap();
         store.upsert_instruments(&[instrument("BTCUSDT")]).unwrap();
-        assert_eq!(table_count(&path), 6);
+        assert_eq!(table_count(&path), 7);
         store.migrate_down_to(0).unwrap();
         assert_eq!(table_count(&path), 0);
     }
     let store = Store::open(&path).unwrap();
-    assert_eq!(table_count(&path), 6);
+    assert_eq!(table_count(&path), 7);
     assert_eq!(store.instrument(&id("BTCUSDT")).unwrap(), None);
 }
 
@@ -236,7 +240,7 @@ fn indicator_migration_goes_down_to_1_and_up_again() {
         assert_eq!(rusqlite_count(&path), 4);
     }
     let store = Store::open(&path).unwrap();
-    assert_eq!(rusqlite_count(&path), 6);
+    assert_eq!(rusqlite_count(&path), 7);
     assert!(store.indicator_modules().unwrap().is_empty());
 }
 
@@ -275,6 +279,182 @@ fn instances_keep_order_and_can_be_emptied() {
     assert_eq!(store.indicator_instances().unwrap(), items);
     store.set_indicator_instances(&[]).unwrap();
     assert!(store.indicator_instances().unwrap().is_empty());
+}
+
+fn drawing(drawing_id: &str, symbol: &str, z: i64) -> Drawing {
+    Drawing {
+        id: drawing_id.into(),
+        instrument: id(symbol),
+        price_scale: 2,
+        body: DrawingBody::Trend {
+            a: Anchor { t: 1, p: 100 },
+            b: Anchor { t: 2, p: 200 },
+            extend_left: false,
+            extend_right: true,
+        },
+        style: Style {
+            color: 3,
+            width: 2,
+            dash: true,
+        },
+        locked: true,
+        z,
+        updated_at: 1_700_000_000_000,
+    }
+}
+
+#[test]
+fn drawing_migration_goes_down_to_2_and_up_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sandchart.db");
+    {
+        let mut store = Store::open(&path).unwrap();
+        store.upsert_drawing(&drawing("d", "BTCUSDT", 0)).unwrap();
+        store.upsert_indicator_module(&module("m", "1")).unwrap();
+        store.migrate_down_to(2).unwrap();
+        assert_eq!(rusqlite_count(&path), 6);
+        // Going down to 2 keeps the 0.2 tables and their rows.
+        assert_eq!(store.indicator_modules().unwrap().len(), 1);
+    }
+    let store = Store::open(&path).unwrap();
+    assert_eq!(rusqlite_count(&path), 7);
+    assert!(store.drawings(&id("BTCUSDT")).unwrap().is_empty());
+}
+
+#[test]
+fn drawings_round_trip_per_instrument_ordered_by_z_then_id() {
+    let mut store = Store::open_in_memory().unwrap();
+    let mut position = drawing("p", "BTCUSDT", 1);
+    position.body = DrawingBody::Position(sandchart_core::PositionBody {
+        side: sandchart_core::Side::Short,
+        entry: Anchor { t: 10, p: 100 },
+        stop: 110,
+        take: 85,
+        end_t: 20,
+    });
+    position.locked = false;
+    let items = [
+        drawing("b", "BTCUSDT", 0),
+        position.clone(),
+        drawing("a", "BTCUSDT", 0),
+        drawing("x", "ETHUSDT", -5),
+    ];
+    for d in &items {
+        store.upsert_drawing(d).unwrap();
+    }
+    let got = store.drawings(&id("BTCUSDT")).unwrap();
+    let ids: Vec<&str> = got.iter().map(|d| d.id.as_str()).collect();
+    assert_eq!(ids, ["a", "b", "p"]);
+    assert_eq!(got[2], position);
+    assert_eq!(got[0], items[2]);
+    assert_eq!(
+        store.drawings(&id("ETHUSDT")).unwrap(),
+        vec![items[3].clone()]
+    );
+    assert!(store.drawings(&id("SOLUSDT")).unwrap().is_empty());
+}
+
+#[test]
+fn an_unreadable_drawing_row_is_left_out_of_the_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sandchart.db");
+    let mut store = Store::open(&path).unwrap();
+    store.upsert_drawing(&drawing("a", "BTCUSDT", 0)).unwrap();
+    store.upsert_drawing(&drawing("c", "BTCUSDT", 2)).unwrap();
+    // A later version wrote a kind this one does not know, and a style it cannot read.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute(
+        "INSERT INTO drawings (id, source, symbol, price_scale, body, style, locked, z, updated_at)
+         VALUES ('b', 'binance', 'BTCUSDT', 2, '{\"kind\":\"spiral\"}',
+                 '{\"color\":0,\"width\":1,\"dash\":false}', 0, 1, 0),
+                ('d', 'binance', 'BTCUSDT', 2, '{\"kind\":\"hline\",\"p\":1}', 'nope', 0, 3, 0)",
+        [],
+    )
+    .unwrap();
+    let got = store.drawings(&id("BTCUSDT")).unwrap();
+    let ids: Vec<&str> = got.iter().map(|d| d.id.as_str()).collect();
+    assert_eq!(ids, ["a", "c"]);
+    // It stays stored and counts toward the cap.
+    store.delete_drawing("a").unwrap();
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM drawings", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 3);
+}
+
+#[test]
+fn upsert_replaces_a_drawing_and_delete_removes_it() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.upsert_drawing(&drawing("a", "BTCUSDT", 0)).unwrap();
+    let mut moved = drawing("a", "BTCUSDT", 9);
+    moved.body = DrawingBody::Hline { p: 555 };
+    moved.price_scale = 4;
+    store.upsert_drawing(&moved).unwrap();
+    assert_eq!(store.drawings(&id("BTCUSDT")).unwrap(), vec![moved]);
+
+    store.delete_drawing("a").unwrap();
+    assert!(store.drawings(&id("BTCUSDT")).unwrap().is_empty());
+    // Deleting what is not there is not an error: the UI may retry a delete.
+    store.delete_drawing("a").unwrap();
+}
+
+#[test]
+fn an_instrument_holds_at_most_2000_drawings() {
+    let mut store = Store::open_in_memory().unwrap();
+    for i in 0..MAX_DRAWINGS_PER_INSTRUMENT {
+        store
+            .upsert_drawing(&drawing(&format!("d{i}"), "BTCUSDT", 0))
+            .unwrap();
+    }
+    let err = store
+        .upsert_drawing(&drawing("one-more", "BTCUSDT", 0))
+        .unwrap_err();
+    assert!(
+        matches!(err, StoreError::TooManyDrawings { max: 2000 }),
+        "{err:?}"
+    );
+    assert!(err.to_string().contains("2000"));
+    // Updating one that exists still works at the cap, and other instruments are free.
+    store.upsert_drawing(&drawing("d0", "BTCUSDT", 7)).unwrap();
+    store.upsert_drawing(&drawing("e", "ETHUSDT", 0)).unwrap();
+    // Moving a drawing to a full instrument counts as a new one there.
+    let err = store
+        .upsert_drawing(&drawing("e", "BTCUSDT", 0))
+        .unwrap_err();
+    assert!(matches!(err, StoreError::TooManyDrawings { .. }));
+    store.delete_drawing("d1").unwrap();
+    store
+        .upsert_drawing(&drawing("one-more", "BTCUSDT", 0))
+        .unwrap();
+    assert_eq!(
+        store.drawings(&id("BTCUSDT")).unwrap().len(),
+        MAX_DRAWINGS_PER_INSTRUMENT
+    );
+}
+
+#[test]
+fn scan_candles_between_is_after_exclusive_until_inclusive_and_can_stop_early() {
+    let mut store = Store::open_in_memory().unwrap();
+    let candles = series(6);
+    store
+        .upsert_candles(&id("BTCUSDT"), Timeframe::M1, &candles)
+        .unwrap();
+    let (after, until) = (candles[1].open_time, candles[4].open_time);
+    let all = store
+        .scan_candles_between(&id("BTCUSDT"), Timeframe::M1, after, until, |it| {
+            it.collect::<Vec<_>>()
+        })
+        .unwrap();
+    assert_eq!(all, candles[2..=4].to_vec());
+    // The closure reads as far as it wants; the rest is never fetched.
+    let first = store
+        .scan_candles_between(&id("BTCUSDT"), Timeframe::M1, after, until, |it| it.next())
+        .unwrap();
+    assert_eq!(first, Some(candles[2]));
+    let none = store
+        .scan_candles_between(&id("BTCUSDT"), Timeframe::H1, 0, i64::MAX, |it| it.count())
+        .unwrap();
+    assert_eq!(none, 0);
 }
 
 /// Counts user tables by opening a second raw connection.

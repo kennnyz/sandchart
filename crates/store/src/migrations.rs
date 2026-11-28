@@ -19,6 +19,10 @@ const MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0002_indicators.up.sql"),
         down: include_str!("../migrations/0002_indicators.down.sql"),
     },
+    Migration {
+        up: include_str!("../migrations/0003_drawings.up.sql"),
+        down: include_str!("../migrations/0003_drawings.down.sql"),
+    },
 ];
 
 fn user_version(conn: &Connection) -> Result<u32, StoreError> {

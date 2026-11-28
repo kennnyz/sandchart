@@ -27,6 +27,7 @@
 - Polite to the exchange: retries back off (1, 2, 4… up to 30 s) and honour Binance's `Retry-After`.
 - Search over all Binance spot pairs (Cmd/Ctrl+K) and a watchlist with last price and 24 h change: add with the `+` button, drag to reorder, hide the panel to give the chart more room.
 - Indicators: SMA, EMA, Bollinger bands, RSI and MACD are built in, and you can add your own as WebAssembly modules. They run in a sandbox with no files, no network and no clock, under memory and work limits. Lines, histograms, markers and bands draw over the candles or in panes of their own, and a repaint check warns about indicators that change their past. Write one in Rust with the `sandchart-indicator` command, or let your coding agent do it: see [Writing indicators](docs/indicators.md).
+- Drawing tools: trend lines, horizontal levels, rectangles, Fibonacci retracements, long and short positions with their outcome, a brush, notes on bars and a ruler. Drawings are stored per pair in the local SQLite file, show on every timeframe, snap to bar prices with the magnet and undo with Cmd/Ctrl+Z. See [Drawing tools](docs/drawings.md).
 - Monochrome candles (colour appears only in numbers and indicator series), dark and light themes, English and Russian interface.
 - Builds for macOS (Apple silicon and Intel), Windows and Linux.
 

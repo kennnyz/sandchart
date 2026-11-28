@@ -8,6 +8,11 @@ export function shortcutLabel(key: string): string {
   return isMac ? `⌘${key}` : `Ctrl ${key}`;
 }
 
+/** "⌥T" on macOS, "Alt T" elsewhere. */
+export function altShortcutLabel(key: string): string {
+  return isMac ? `⌥${key}` : `Alt ${key}`;
+}
+
 /** Display name of a data source id ("binance" -> "Binance"); unknown ids as they are. */
 export function sourceName(source: string): string {
   const key = `source.${source}`;

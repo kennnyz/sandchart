@@ -1,0 +1,89 @@
+{
+  "about": "Position outcome cases, written by hand from the rules in ADR 0004. Read by crates/core/tests/position.rs (the Rust resolve) and app/ui/src/backend/mock.test.ts (the TEST-ONLY copy in the mock). Candle rows are [openTime, open, high, low, close]. Long: entry 100, stop 90, take 120 (R 2). Short: entry 100, stop 110, take 85 (R 1.5).",
+  "cases": [
+    {
+      "name": "long take; the entry bar touches both and is skipped",
+      "side": "long", "entry": { "t": 1500, "p": 100 }, "stop": 90, "take": 120, "endT": 9000,
+      "candles": [[1000, 100, 125, 85, 100], [2000, 100, 110, 95, 105], [3000, 105, 121, 100, 118], [4000, 118, 119, 80, 82]],
+      "expect": { "status": "take", "exitTime": 3000, "ambiguous": false, "r": 2 }
+    },
+    {
+      "name": "long stop",
+      "side": "long", "entry": { "t": 1500, "p": 100 }, "stop": 90, "take": 120, "endT": 9000,
+      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 105, 89, 92], [3000, 92, 130, 91, 125]],
+      "expect": { "status": "stop", "exitTime": 2000, "ambiguous": false, "r": -1 }
+    },
+    {
+      "name": "long open: neither level reached",
+      "side": "long", "entry": { "t": 1500, "p": 100 }, "stop": 90, "take": 120, "endT": 9000,
+      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 119, 91, 110], [3000, 110, 119, 91, 95]],
+      "expect": { "status": "open", "exitTime": null, "ambiguous": false, "r": 0 }
+    },
+    {
+      "name": "long ambiguous: one bar touches stop and take exactly, counts as stop",
+      "side": "long", "entry": { "t": 1500, "p": 100 }, "stop": 90, "take": 120, "endT": 9000,
+      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 120, 90, 100]],
+      "expect": { "status": "stop", "exitTime": 2000, "ambiguous": true, "r": -1 }
+    },
+    {
+      "name": "long: a hit after endT does not count",
+      "side": "long", "entry": { "t": 1500, "p": 100 }, "stop": 90, "take": 120, "endT": 2999,
+      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 110, 95, 105], [3000, 105, 121, 100, 118]],
+      "expect": { "status": "open", "exitTime": null, "ambiguous": false, "r": 0 }
+    },
+    {
+      "name": "long: the bar opening at endT counts",
+      "side": "long", "entry": { "t": 1500, "p": 100 }, "stop": 90, "take": 120, "endT": 3000,
+      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 110, 95, 105], [3000, 105, 121, 100, 118]],
+      "expect": { "status": "take", "exitTime": 3000, "ambiguous": false, "r": 2 }
+    },
+    {
+      "name": "long: entry at a bar open skips that bar",
+      "side": "long", "entry": { "t": 2000, "p": 100 }, "stop": 90, "take": 120, "endT": 9000,
+      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 125, 100, 120], [3000, 120, 119, 85, 88]],
+      "expect": { "status": "stop", "exitTime": 3000, "ambiguous": false, "r": -1 }
+    },
+    {
+      "name": "long: entry before the first cached bar scans from that bar",
+      "side": "long", "entry": { "t": 500, "p": 100 }, "stop": 90, "take": 120, "endT": 9000,
+      "candles": [[1000, 100, 130, 95, 125]],
+      "expect": { "status": "take", "exitTime": 1000, "ambiguous": false, "r": 2 }
+    },
+    {
+      "name": "long: no candles is open",
+      "side": "long", "entry": { "t": 1500, "p": 100 }, "stop": 90, "take": 120, "endT": 9000,
+      "candles": [],
+      "expect": { "status": "open", "exitTime": null, "ambiguous": false, "r": 0 }
+    },
+    {
+      "name": "short take",
+      "side": "short", "entry": { "t": 1500, "p": 100 }, "stop": 110, "take": 85, "endT": 9000,
+      "candles": [[1000, 100, 115, 80, 100], [2000, 100, 105, 90, 92], [3000, 92, 95, 85, 86]],
+      "expect": { "status": "take", "exitTime": 3000, "ambiguous": false, "r": 1.5 }
+    },
+    {
+      "name": "short stop",
+      "side": "short", "entry": { "t": 1500, "p": 100 }, "stop": 110, "take": 85, "endT": 9000,
+      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 110, 99, 108], [3000, 108, 109, 80, 82]],
+      "expect": { "status": "stop", "exitTime": 2000, "ambiguous": false, "r": -1 }
+    },
+    {
+      "name": "short open",
+      "side": "short", "entry": { "t": 1500, "p": 100 }, "stop": 110, "take": 85, "endT": 9000,
+      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 109, 86, 90]],
+      "expect": { "status": "open", "exitTime": null, "ambiguous": false, "r": 0 }
+    },
+    {
+      "name": "short ambiguous",
+      "side": "short", "entry": { "t": 1500, "p": 100 }, "stop": 110, "take": 85, "endT": 9000,
+      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 111, 80, 95]],
+      "expect": { "status": "stop", "exitTime": 2000, "ambiguous": true, "r": -1 }
+    },
+    {
+      "name": "short: a hit after endT does not count",
+      "side": "short", "entry": { "t": 1500, "p": 100 }, "stop": 110, "take": 85, "endT": 2500,
+      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 105, 95, 98], [3000, 98, 99, 80, 81]],
+      "expect": { "status": "open", "exitTime": null, "ambiguous": false, "r": 0 }
+    }
+  ]
+}

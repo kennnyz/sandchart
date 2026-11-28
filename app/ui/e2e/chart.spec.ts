@@ -138,6 +138,10 @@ test("pan_to_history_start_stops_loading", async ({ page }) => {
 
 interface ChartDebug {
   drawMs: number[];
+  baseMs: number[];
+  overlayMs: number[];
+  baseDraws: number;
+  overlayDraws: number;
   axisWidth: number;
   widestLabel: number;
   widestText: string;
@@ -149,7 +153,7 @@ interface ChartDebug {
 async function chartDebug(page: Page): Promise<ChartDebug> {
   return page.evaluate(() => {
     const d = (window as unknown as { __sandchartDebug: ChartDebug }).__sandchartDebug;
-    return { ...d, drawMs: [...d.drawMs] };
+    return { ...d, drawMs: [...d.drawMs], baseMs: [...d.baseMs], overlayMs: [...d.overlayMs] };
   });
 }
 
@@ -247,4 +251,62 @@ test("draw_time_with_indicators_under_budget @perf", async ({ page }, info) => {
   });
   // The indicators were drawn: RSI and MACD each have a pane.
   expect((await chartDebug(page)).panes).toBe(2);
+});
+
+/** RGBA of one CSS pixel of the chart's overlay canvas (the second canvas). */
+async function overlayPixel(page: Page, x: number, y: number): Promise<number[]> {
+  return page.getByTestId("chart").evaluate(
+    (el, [cx, cy]) => {
+      const c = el.querySelectorAll("canvas")[1]!;
+      const r = c.getBoundingClientRect();
+      const k = c.width / r.width;
+      const d = c.getContext("2d")!.getImageData(Math.round((cx! - r.left) * k), Math.round((cy! - r.top) * k), 1, 1).data;
+      return [d[0]!, d[1]!, d[2]!, d[3]!];
+    },
+    [x, y],
+  );
+}
+
+test("mouse_move_redraws_only_the_overlay", async ({ page }) => {
+  const plot = await openChart(page, "?mockIndicators=sma,rsi");
+  const rows = page.getByTestId("indicator-legend-row");
+  await expect(rows).toHaveCount(2);
+  for (let i = 0; i < 2; i++) await expect(rows.nth(i).getByTestId("indicator-value").first()).toHaveText(/\d/);
+  await expect.poll(async () => (await chartDebug(page)).panes).toBe(1);
+  const y = plot.top + plot.height / 3;
+  await hover(page, plot.left + 100, y);
+  await nextFrame(page);
+  const before = await chartDebug(page);
+
+  for (let i = 0; i < 60; i++) await hover(page, plot.left + 100 + i * 9, y + (i % 5) * 20);
+  const after = await chartDebug(page);
+  expect(after.baseDraws).toBe(before.baseDraws);
+  expect(after.overlayDraws).toBeGreaterThanOrEqual(before.overlayDraws + 30);
+  const overlay = after.overlayMs.slice(before.overlayMs.length).sort((a, b) => a - b);
+  const median = overlay[Math.floor(overlay.length / 2)]!;
+  console.log(`overlay frame median ${median.toFixed(2)} ms over ${overlay.length} mouse moves`);
+  expect(median).toBeLessThanOrEqual(1);
+
+  // The crosshair and its labels are on the overlay: price label on the price axis,
+  // time label on the time axis, and the opaque label background.
+  const x = plot.left + 100 + 59 * 9;
+  const cy = y + (59 % 5) * 20;
+  expect((await overlayPixel(page, plot.left + plot.width + 3, cy))[3]).toBe(255);
+  expect((await overlayPixel(page, x, plot.top + plot.height + TIME_AXIS / 2))[3]).toBe(255);
+  // Away from the crosshair the overlay is transparent.
+  expect((await overlayPixel(page, plot.left + 20, plot.top + 20))[3]).toBe(0);
+  // Over the own pane the crosshair label shows the pane value.
+  const paneY = plot.top + plot.height - 30;
+  await hover(page, x, paneY);
+  expect((await overlayPixel(page, plot.left + plot.width + 3, paneY))[3]).toBe(255);
+  expect((await chartDebug(page)).baseDraws).toBe(before.baseDraws);
+
+  // Leaving the plot clears the overlay, still without a base frame.
+  await hover(page, x, plot.top + plot.height + TIME_AXIS / 2);
+  expect((await overlayPixel(page, plot.left + plot.width + 3, paneY))[3]).toBe(0);
+  expect((await chartDebug(page)).baseDraws).toBe(before.baseDraws);
+
+  // A drag changes the view: both layers are drawn.
+  await drag(page, plot.left + 300, y, 100);
+  expect((await chartDebug(page)).baseDraws).toBeGreaterThan(before.baseDraws);
 });

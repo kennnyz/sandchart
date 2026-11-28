@@ -3,9 +3,11 @@
 //! * [`Engine::load_chart`] serves candles cache-first and fetches pages on demand.
 //! * [`Engine::subscribe_live`] streams live candles and backfills gaps after reconnects.
 //! * [`Engine::import_csv`] loads local files as the `csv` source.
+//! * [`Engine::drawings`] and [`Engine::save_drawing`] keep the chart drawings.
 
 mod chart;
 mod csv_import;
+mod drawings;
 mod indicators;
 mod live;
 
@@ -57,6 +59,9 @@ pub enum EngineError {
     NoRuntime,
     #[error("{0}")]
     Indicator(String),
+    /// A drawing or position the UI sent breaks a rule.
+    #[error("{0}")]
+    Drawing(String),
 }
 
 type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;

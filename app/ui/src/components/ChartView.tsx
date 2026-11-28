@@ -7,11 +7,15 @@ import type { ChartTheme } from "../chart/theme";
 import { t, useLanguage } from "../i18n";
 import { bannerText, sourceName } from "../labels";
 import { ChartSession, type SessionState } from "../state/chartSession";
+import type { DrawingPatch } from "../chart/drawings/state";
+import type { DrawingStore } from "../state/drawings";
 import type { IndicatorStore } from "../state/indicators";
 import { Banner } from "./Banner";
+import { DrawingStyle } from "./DrawingStyle";
 import { IndicatorLegend } from "./IndicatorLegend";
 import { IndicatorSettings } from "./IndicatorSettings";
 import { Legend } from "./Legend";
+import { NoteEditor } from "./NoteEditor";
 import { tfLabel } from "./TimeframePicker";
 
 export interface ChartViewProps {
@@ -22,6 +26,7 @@ export interface ChartViewProps {
   priceMode: PriceScaleMode;
   connection: ConnectionState;
   indicators: IndicatorStore;
+  drawings: DrawingStore;
 }
 
 const NO_VALUES = new Map<string, Map<string, number>>();
@@ -42,18 +47,23 @@ export function Loading({ symbol, tf, source }: { symbol: string; tf: string; so
 }
 
 /** The chart column: banner, canvas with legend and states; a `ChartSession` feeds it. */
-export function ChartView({ backend, id, tf, theme, priceMode, connection, indicators }: ChartViewProps) {
+export function ChartView({ backend, id, tf, theme, priceMode, connection, indicators, drawings }: ChartViewProps) {
   const lang = useLanguage();
   const hostRef = useRef<HTMLDivElement>(null);
   const [parts, setParts] = useState<{ chart: Chart; session: ChartSession } | null>(null);
   const [state, setState] = useState<SessionState | null>(null);
   const [hover, setHover] = useState<number | null>(null);
   const [hostHeight, setHostHeight] = useState(0);
+  const [hostWidth, setHostWidth] = useState(0);
   const [settings, setSettings] = useState<{ instance: string; top: number; bottom: number; left: number } | null>(
     null,
   );
   useSyncExternalStore(indicators.subscribe, indicators.version);
+  useSyncExternalStore(drawings.subscribe, drawings.version);
   const ind = indicators.state;
+  const textEdit = drawings.state.textEdit;
+  const styleEdit = drawings.state.styleEdit;
+  const drawingError = drawings.state.error;
   /** Chart and first bar time of the last recompute; a change of either recomputes at once. */
   const computedFor = useRef<{ key: string; first: number } | null>(null);
 
@@ -65,7 +75,10 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
     chart.onCrosshair(setHover);
     chart.onNeedOlder(() => void session.loadOlder());
     setParts({ chart, session });
-    const resize = new ResizeObserver(() => setHostHeight(host.clientHeight));
+    const resize = new ResizeObserver(() => {
+      setHostHeight(host.clientHeight);
+      setHostWidth(host.clientWidth);
+    });
     resize.observe(host);
     return () => {
       resize.disconnect();
@@ -84,7 +97,14 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
     chart?.setHistoryLabel((first) => [t("history.start"), t("history.first", { date: formatDate(first) })]);
   }, [chart, lang]);
 
+  // The chart reports drawing changes to the controller, which stores them; attached before the first load.
+  useEffect(() => (chart ? drawings.state.attach(chart) : undefined), [chart, drawings]);
+
   const { source, symbol } = id;
+  useEffect(() => {
+    if (chart) void drawings.state.open({ source, symbol });
+  }, [chart, drawings, source, symbol]);
+
   useEffect(() => {
     if (!parts) return;
     // Results of the old chart would align by time on the new one: drop them first.
@@ -117,6 +137,22 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
     ind.recompute({ id: state.id, tf: state.tf, fromTime: first.time }, prev?.key !== key || prev.first !== first.time);
     // `state` is read for its id and tf, which change only together with `version`.
   }, [chart, ind, version, state?.status, state?.instrument]);
+
+  // Position outcomes follow the candles: another timeframe, an older page, a new bar.
+  useEffect(() => {
+    if (!chart || !state?.id || state.status !== "ready" || chart.count === 0) return;
+    const first = chart.candle(0)!;
+    const last = chart.candle(chart.count - 1)!;
+    drawings.state.candles(state.id, state.tf, first.time, last.time);
+    // `state` is read for its id and tf, which change only together with `version`.
+  }, [chart, drawings, version, state?.status]);
+
+  const saveText = useCallback((text: string) => drawings.state.saveText(text), [drawings]);
+  const cancelText = useCallback(() => drawings.state.cancelText(), [drawings]);
+  const deleteText = useCallback(() => drawings.state.deleteText(), [drawings]);
+  const restyle = useCallback((patch: DrawingPatch) => drawings.state.restyle(patch), [drawings]);
+  const closeStyle = useCallback(() => drawings.state.closeStyle(), [drawings]);
+  const deleteStyled = useCallback(() => drawings.state.deleteStyled(), [drawings]);
 
   const openSettings = useCallback((instance: string, row: HTMLElement) => {
     const host = hostRef.current;
@@ -163,6 +199,15 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
   return (
     <>
       {banner}
+      {drawingError !== null && (
+        <Banner
+          testId="drawing-error"
+          text={t(drawingError.kind === "load" ? "drawings.loadError" : "drawings.saveError")}
+          retryAt={null}
+          retryLabel={() => ""}
+          detail={drawingError.message}
+        />
+      )}
       <div
         ref={hostRef}
         data-testid="chart"
@@ -197,6 +242,29 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
             anchor={settings}
             hostHeight={hostHeight}
             onClose={closeSettings}
+          />
+        )}
+        {textEdit && (
+          <NoteEditor
+            key={`${textEdit.id}/${textEdit.isNew}`}
+            edit={textEdit}
+            hostWidth={hostWidth}
+            hostHeight={hostHeight}
+            onSave={saveText}
+            onCancel={cancelText}
+            onDelete={deleteText}
+          />
+        )}
+        {styleEdit && (
+          <DrawingStyle
+            key={styleEdit.drawing.id}
+            edit={styleEdit}
+            palette={theme.indicatorPalette}
+            hostWidth={hostWidth}
+            hostHeight={hostHeight}
+            onChange={restyle}
+            onDelete={deleteStyled}
+            onClose={closeStyle}
           />
         )}
         {loading && <Loading symbol={symbol} tf={tfLabel(tf)} source={sourceLabel} />}

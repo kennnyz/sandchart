@@ -3,6 +3,9 @@ import {
   type CandleColumns,
   type Candles,
   type ConnectionState,
+  type Drawing,
+  type DrawingBody,
+  type DrawingInput,
   type Instrument,
   type IndicatorInfo,
   type IndicatorInstance,
@@ -11,6 +14,8 @@ import {
   type InstrumentId,
   type LiveEvent,
   type ParamValue,
+  type PositionBody,
+  type PositionOutcome,
   type SeriesData,
   type SeriesSpec,
   type Problem,
@@ -85,6 +90,8 @@ export interface MockOptions {
   indicatorError?: boolean;
   /** Every `setChartIndicators` rejects with "mock: cannot save". */
   indicatorSaveError?: boolean;
+  /** Every `saveDrawing` and `deleteDrawing` rejects with "mock: cannot save the drawing". */
+  drawingSaveError?: boolean;
   /** `listIndicators` reports the installed module `test.broken` as failed to load, and a service error. */
   indicatorProblems?: boolean;
   /** The first this many `listIndicators` calls reject with "mock: engine starting". */
@@ -95,6 +102,8 @@ export interface MockOptions {
   updateError?: "check" | "install";
   /** Keeps the watchlist across page loads (the browser mock uses localStorage). */
   watchlistStore?: { load(): InstrumentId[] | null; save(ids: InstrumentId[]): void };
+  /** Keeps the drawings across page loads (the browser mock uses localStorage). */
+  drawingStore?: { load(): Drawing[] | null; save(all: Drawing[]): void };
 }
 
 // ---- Indicators -------------------------------------------------------------------
@@ -346,6 +355,151 @@ function resolveParams(m: IndicatorMeta, saved: [string, ParamValue][]): P {
   return out;
 }
 
+// ---- Drawings ----------------------------------------------------------------------
+// The rules of `sandchart_core::drawing::validate`, so the mock rejects what Rust rejects.
+
+const MAX_DRAWINGS = 2000; // the store's MAX_DRAWINGS_PER_INSTRUMENT
+
+function checkInt(what: string, v: number): string | null {
+  return Number.isSafeInteger(v) ? null : `${what} ${v} is outside ±(2^53 - 1)`;
+}
+
+function checkPair(a: { t: number; p: number }, b: { t: number; p: number }): string | null {
+  return (
+    checkInt("point a time", a.t) ??
+    checkInt("point a price", a.p) ??
+    checkInt("point b time", b.t) ??
+    checkInt("point b price", b.p) ??
+    (a.t === b.t && a.p === b.p ? "the two points of a drawing must differ" : null)
+  );
+}
+
+export function mockValidatePosition(p: PositionBody): string | null {
+  const bad =
+    checkInt("position entry time", p.entry.t) ??
+    checkInt("position entry price", p.entry.p) ??
+    checkInt("position stop", p.stop) ??
+    checkInt("position take", p.take) ??
+    checkInt("position end time", p.endT);
+  if (bad) return bad;
+  if (p.side === "long" && !(p.stop < p.entry.p && p.entry.p < p.take)) return "a long position needs stop < entry < take";
+  if (p.side === "short" && !(p.take < p.entry.p && p.entry.p < p.stop)) return "a short position needs take < entry < stop";
+  if (p.endT <= p.entry.t) return "a position must end after its entry";
+  return null;
+}
+
+/** The error message Rust would give, or null when the drawing is valid. */
+export function mockValidateDrawing(d: DrawingInput): string | null {
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(d.id)) {
+    return "a drawing id must be 1 to 64 characters from A-Z, a-z, 0-9, _ and -";
+  }
+  const { color, width } = d.style;
+  if (!Number.isInteger(color) || color < 0 || color > 7) return `colour slot ${color} is not in 0..=7`;
+  if (!Number.isInteger(width) || width < 1 || width > 4) return `line width ${width} is not in 1..=4`;
+  const z = checkInt("z", d.z);
+  if (z) return z;
+  const b = d.body;
+  switch (b.kind) {
+    case "trend":
+    case "rect":
+      return checkPair(b.a, b.b);
+    case "hline":
+      return checkInt("price", b.p);
+    case "fib": {
+      const bad = checkPair(b.a, b.b);
+      if (bad) return bad;
+      if (b.levels.length < 1 || b.levels.length > 16) {
+        return `a Fibonacci drawing needs 1 to 16 levels, not ${b.levels.length}`;
+      }
+      const l = b.levels.find((x) => !(Number.isFinite(x) && Math.abs(x) <= 5));
+      // Rust prints infinity as "inf".
+      const shown = l === Infinity ? "inf" : l === -Infinity ? "-inf" : String(l);
+      return l === undefined ? null : `Fibonacci level ${shown} is not a number in -5..=5`;
+    }
+    case "position":
+      return mockValidatePosition(b);
+    case "brush":
+      if (b.points.length < 2 || b.points.length > 500) {
+        return `a brush stroke needs 2 to 500 points, not ${b.points.length}`;
+      }
+      for (const a of b.points) {
+        const bad = checkInt("brush point time", a.t) ?? checkInt("brush point price", a.p);
+        if (bad) return bad;
+      }
+      return null;
+    case "note": {
+      const bytes = new TextEncoder().encode(b.text).length;
+      return (
+        checkInt("note time", b.t) ??
+        (bytes < 1 || bytes > 2000 ? `a note needs 1 to 2000 bytes of text, not ${bytes}` : null)
+      );
+    }
+  }
+}
+
+/** `v` ticks at `from` decimals expressed at `to`, rounded half away from zero (`rescale_ticks`); null past i64. */
+function rescaleTicks(v: number, from: number, to: number): number | null {
+  const big = BigInt(v);
+  let q: bigint;
+  if (to >= from) {
+    q = big * 10n ** BigInt(to - from);
+  } else {
+    const d = 10n ** BigInt(from - to);
+    q = big / d;
+    const r = big % d;
+    if ((r < 0n ? -r : r) * 2n >= d) q += big < 0n ? -1n : 1n;
+  }
+  return q >= -(2n ** 63n) && q < 2n ** 63n ? Number(q) : null;
+}
+
+/** `d` with its prices at scale `to`, validated (`at_scale` in the engine); the error is Rust's. */
+function mockAtScale<D extends DrawingInput>(d: D, to: number): D | string {
+  const from = d.priceScale;
+  if (from === to) return mockValidateDrawing(d) ?? d;
+  let fits = true;
+  const px = (v: number) => {
+    const r = rescaleTicks(v, from, to);
+    if (r === null) fits = false;
+    return r ?? 0;
+  };
+  const at = (a: { t: number; p: number }) => ({ t: a.t, p: px(a.p) });
+  const b = d.body;
+  const body: DrawingBody =
+    b.kind === "trend" || b.kind === "rect" || b.kind === "fib"
+      ? { ...b, a: at(b.a), b: at(b.b) }
+      : b.kind === "hline"
+        ? { ...b, p: px(b.p) }
+        : b.kind === "position"
+          ? { ...b, entry: at(b.entry), stop: px(b.stop), take: px(b.take) }
+          : b.kind === "brush"
+            ? { ...b, points: b.points.map(at) }
+            : b;
+  if (!fits) return `at price scale ${to}: its prices do not fit the new tick size`;
+  const r = { ...d, priceScale: to, body };
+  const bad = mockValidateDrawing(r);
+  return bad ? `at price scale ${to}: ${bad}` : r;
+}
+
+// TEST-ONLY CODE. The real outcome is `sandchart_core::position::resolve` in Rust; this copy
+// lets the browser mock answer, and mock.test.ts checks it against the same fixture as Rust
+// (crates/core/tests/fixtures/positions.json).
+/**
+ * Bars (ascending) after the one containing `entry.t`, up to the one opening at `endT`; the
+ * first hit decides, and no bar after it is read (`resolve_iter`).
+ */
+export function mockResolve(p: PositionBody, bars: Iterable<{ time: number; high: number; low: number }>): PositionOutcome {
+  for (const { time: t, high, low } of bars) {
+    if (t <= p.entry.t) continue;
+    if (t > p.endT) break;
+    const long = p.side === "long";
+    const hitStop = long ? low <= p.stop : high >= p.stop;
+    const hitTake = long ? high >= p.take : low <= p.take;
+    if (hitStop) return { status: "stop", exitTime: t, ambiguous: hitTake, r: -1 };
+    if (hitTake) return { status: "take", exitTime: t, ambiguous: false, r: (p.take - p.entry.p) / (p.entry.p - p.stop) };
+  }
+  return { status: "open", exitTime: null, ambiguous: false, r: 0 };
+}
+
 /** Deterministic pseudo-random value in [0, 1) for candle number `n`. */
 function noise(n: number, salt: number): number {
   const x = Math.sin(n * 12.9898 + salt * 78.233) * 43758.5453;
@@ -400,6 +554,9 @@ export function createMockBackend(opts: MockOptions): MockBackend {
     colors: {},
     hidden: false,
   }));
+  const drawings = new Map<string, Drawing>((opts.drawingStore?.load() ?? []).map((d) => [d.id, d]));
+  const keepDrawings = () => opts.drawingStore?.save([...drawings.values()]);
+  const problem = (message: string) => ({ code: "other", message });
   const infos = (): IndicatorInfo[] => [
     ...MOCK_BUILTINS.map((b) => ({ meta: b.meta, builtin: true, repaints: false })),
     ...(echoInstalled ? [MOCK_ECHO] : []),
@@ -417,17 +574,35 @@ export function createMockBackend(opts: MockOptions): MockBackend {
     return { step, timeOf, first };
   }
 
+  /** Candle number `i` in ticks. */
+  function candleAt(i: number, time: number) {
+    const open = priceAt(i, base);
+    const close = priceAt(i + 1, base);
+    return {
+      time,
+      open,
+      high: Math.max(open, close) + Math.round(noise(i, 2) * wick),
+      low: Math.min(open, close) - Math.round(noise(i, 3) * wick),
+      close,
+      volume: Math.round(1_000 + noise(i, 4) * 9_000),
+    };
+  }
+
   function appendCandles(out: CandleColumns, timeOf: (i: number) => number, start: number, end: number) {
     for (let i = start; i < end; i++) {
-      const open = priceAt(i, base);
-      const close = priceAt(i + 1, base);
-      out.time.push(timeOf(i));
-      out.open.push(open);
-      out.close.push(close);
-      out.high.push(Math.max(open, close) + Math.round(noise(i, 2) * wick));
-      out.low.push(Math.min(open, close) - Math.round(noise(i, 3) * wick));
-      out.volume.push(Math.round(1_000 + noise(i, 4) * 9_000));
+      const c = candleAt(i, timeOf(i));
+      out.time.push(c.time);
+      out.open.push(c.open);
+      out.high.push(c.high);
+      out.low.push(c.low);
+      out.close.push(c.close);
+      out.volume.push(c.volume);
     }
+  }
+
+  /** Candles `start..end`, made one at a time as they are read, like the engine's cursor. */
+  function* candleRange(timeOf: (i: number) => number, start: number, end: number) {
+    for (let i = start; i < end; i++) yield candleAt(i, timeOf(i));
   }
 
   /** The newest candles (at most BAR_CAP) in price units, like the engine's compute window. */
@@ -622,6 +797,58 @@ export function createMockBackend(opts: MockOptions): MockBackend {
       }
       onProgress({ kind: "installing" });
       await sleep(300);
+    },
+
+    async getDrawings(id) {
+      await delay();
+      const instrument = SYMBOLS.find((i) => i.id.source === id.source && i.id.symbol === id.symbol);
+      const scale = opts.priceScale ?? instrument?.priceScale ?? 2;
+      return [...drawings.values()]
+        .filter((d) => d.instrument.source === id.source && d.instrument.symbol === id.symbol)
+        .sort((a, b) => a.z - b.z || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+        .flatMap((d) => {
+          // A drawing that does not fit the current scale is left out and stays stored, as in Rust.
+          const r = mockAtScale(structuredClone(d), scale);
+          return typeof r === "string" ? [] : [r];
+        });
+    },
+
+    async saveDrawing(d) {
+      await delay();
+      const instrument = SYMBOLS.find((i) => i.id.source === d.instrument.source && i.id.symbol === d.instrument.symbol);
+      if (!instrument) throw problem(`unknown instrument ${d.instrument.source}/${d.instrument.symbol}`);
+      if (opts.drawingSaveError) throw problem("mock: cannot save the drawing");
+      const scaled = mockAtScale(structuredClone(d), opts.priceScale ?? instrument.priceScale);
+      if (typeof scaled === "string") throw problem(scaled);
+      const same = (o: Drawing) => o.instrument.source === d.instrument.source && o.instrument.symbol === d.instrument.symbol;
+      const others = [...drawings.values()].filter((o) => same(o) && o.id !== d.id).length;
+      if (others >= MAX_DRAWINGS) throw problem(`an instrument can hold at most ${MAX_DRAWINGS} drawings; delete some first`);
+      const saved: Drawing = { ...scaled, updatedAt: Date.now() };
+      drawings.set(d.id, saved);
+      keepDrawings();
+      return structuredClone(saved);
+    },
+
+    async deleteDrawing(id) {
+      await delay();
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw problem("a drawing id must be 1 to 64 characters from A-Z, a-z, 0-9, _ and -");
+      if (opts.drawingSaveError) throw problem("mock: cannot save the drawing");
+      if (drawings.delete(id)) keepDrawings();
+    },
+
+    async getPositionOutcomes(id, tf, positions) {
+      await delayFor(id.symbol);
+      for (const p of positions) {
+        const bad = mockValidatePosition(p.position);
+        if (bad) throw problem(`position ${p.id}: ${bad}`);
+      }
+      const { step, timeOf, first } = timeline(tf);
+      return positions.map(({ id: drawingId, position }) => {
+        // Bars with entry.t < time <= endT within the generated series, read up to the one that decides.
+        const start = Math.max(first, Math.floor((position.entry.t - timeOf(0)) / step) + 1);
+        const end = Math.min(opts.candles, Math.floor((position.endT - timeOf(0)) / step) + 1);
+        return { id: drawingId, outcome: mockResolve(position, candleRange(timeOf, start, end)) };
+      });
     },
 
     async computeIndicators(id, tf, fromTime) {

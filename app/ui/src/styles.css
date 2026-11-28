@@ -126,6 +126,46 @@ select:focus-visible {
   background: var(--bg);
 }
 
+/* ---- Drawing tools rail ---- */
+
+.tools {
+  width: 44px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 0;
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+}
+.tool-button {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+}
+.tool-button:hover {
+  background: var(--fg-5);
+  color: var(--fg);
+}
+.tool-button[aria-pressed="true"] {
+  background: var(--fg-8);
+  color: var(--fg);
+}
+.tools-sep {
+  width: 20px;
+  height: 1px;
+  margin: 4px 0;
+  background: var(--line);
+}
+.tools-bottom {
+  margin-top: auto;
+}
+
 /* ---- Top bar ---- */
 
 .topbar {
@@ -1032,4 +1072,101 @@ button:disabled {
   font-size: 11px;
   white-space: pre-wrap;
   user-select: text;
+}
+
+/* ---- Drawing style popover (on .ind-settings) ---- */
+
+.dstyle-widths {
+  display: flex;
+  gap: 4px;
+}
+.dstyle-width {
+  width: 26px;
+  height: 22px;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.dstyle-width span {
+  width: 14px;
+  background: var(--muted);
+}
+.dstyle-width[aria-checked="true"] {
+  border-color: var(--fg);
+}
+.dstyle-width[aria-checked="true"] span {
+  background: var(--fg);
+}
+.dstyle-levels {
+  margin: 4px 0;
+  padding: 0;
+  border: 0;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px 8px;
+}
+.dstyle-levels legend {
+  padding: 4px 0;
+  color: var(--muted);
+}
+.dstyle-levels label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+.dstyle-levels input {
+  accent-color: var(--fg);
+}
+.dstyle-footer {
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+
+/* ---- Note editor ---- */
+
+.note-editor {
+  position: absolute;
+  z-index: 10;
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.note-editor textarea {
+  width: 100%;
+  min-height: 72px;
+  resize: vertical;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  line-height: 18px;
+}
+.note-editor textarea:focus-visible {
+  outline: 1px solid var(--muted);
+  outline-offset: 0;
+}
+.note-editor-footer {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.note-editor-bytes {
+  margin-right: auto;
+  color: var(--muted);
+  font-size: 11px;
+}
+.note-editor-bytes[data-full="true"] {
+  color: var(--down);
 }

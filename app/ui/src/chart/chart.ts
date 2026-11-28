@@ -1,7 +1,11 @@
-import type { CandleColumns, Candles, Instrument, LiveCandle, TimeframeCode } from "../backend/types";
+import type { CandleColumns, Candles, Drawing, Instrument, LiveCandle, PositionOutcome, TimeframeCode } from "../backend/types";
 import { chartDebug } from "./debug";
+import { Coords, type Step } from "./drawings/geometry";
+import { DrawingLayer, type DrawingCommand, type StyleAction, type StyleEdit, type TextEdit, type TextResult } from "./drawings/layer";
+import type { ToolId } from "./drawings/registry";
+import type { DrawingChange } from "./drawings/state";
 import { alignOffset, hasOwnPane, layoutPanes, overlayRange, paneRange, seriesValues, type IndicatorLayer } from "./indicators";
-import { draw, plotSize, priceAxisWidth, RenderBuffers, type Crosshair, type Series } from "./render";
+import { draw, drawingTag, drawOverlay, plotSize, priceAxisWidth, RenderBuffers, type Crosshair, type FrameInput, type Series } from "./render";
 import type { IndicatorFrame } from "./renderIndicators";
 import { autoscale, PriceScale, type PriceScaleMode } from "./scale";
 import { AXIS_FONT, PRICE_AXIS_WIDTH, type ChartTheme } from "./theme";
@@ -23,6 +27,8 @@ const TF_STEPS: [TimeframeCode, number][] = [
   ["8h", 480 * MINUTE], ["12h", 720 * MINUTE], ["1d", 1440 * MINUTE], ["3d", 4320 * MINUTE],
   ["1w", 10_080 * MINUTE], ["1M", 43_200 * MINUTE],
 ];
+
+const STEP_MS = new Map(TF_STEPS);
 
 function inferTimeframe(s: Series): TimeframeCode {
   if (s.count < 2) return "1h";
@@ -65,15 +71,20 @@ interface GestureEventLike extends UIEvent {
   readonly clientY: number;
 }
 
-type Drag = { kind: "pan" | "price"; pointerId: number; lastX: number; lastY: number };
+type Drag = { kind: "pan" | "price" | "drawing"; pointerId: number; lastX: number; lastY: number };
 
 /**
- * Candlestick chart on one Canvas 2D: main pane, price axis on the right, time axis
- * at the bottom. Draws on requestAnimationFrame only when something changed.
+ * Candlestick chart on two stacked Canvas 2D layers: main pane, price axis on the right,
+ * time axis at the bottom. The opaque base layer holds everything that depends on data,
+ * view and theme; the transparent overlay above it holds the crosshair, so a mouse move
+ * redraws only the overlay. Draws on requestAnimationFrame only when something changed.
  */
 export class Chart {
+  /** Base layer; it also takes every pointer event (the overlay lets them through). */
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
+  private readonly overlay: HTMLCanvasElement;
+  private readonly octx: CanvasRenderingContext2D;
   private readonly buffers = new RenderBuffers();
   private readonly resizeObserver: ResizeObserver;
   private series = emptySeries(0);
@@ -92,6 +103,11 @@ export class Chart {
   private axisWidth = PRICE_AXIS_WIDTH;
   private dpr = 1;
   private frame = 0;
+  private baseDirty = false;
+  private overlayDirty = false;
+  /** Input of the last base frame; the overlay draws against it. */
+  private lastFrame: FrameInput | null = null;
+  private readonly crosshair: Crosshair = { x: 0, y: 0, index: null };
   private mouse: { x: number; y: number } | null = null;
   private drag: Drag | null = null;
   private crosshairIndex: number | null = null;
@@ -107,6 +123,19 @@ export class Chart {
   private readonly ind: IndicatorFrame = { layers: [], offsets: [], tickMul: 1, priceH: 0, panes: [] };
   /** Plot height `ind.priceH` and the pane rows were laid out for; -1 forces a new layout. */
   private layoutH = -1;
+  private drawingCommitCb: ((c: DrawingChange) => void) | null = null;
+  private drawingToolCb: ((id: ToolId | null) => void) | null = null;
+  private drawingTextCb: ((edit: TextEdit | null) => void) | null = null;
+  private drawingStyleCb: ((edit: StyleEdit | null) => void) | null = null;
+  /** Drawings: painted on both layers, and first in line for pointer input on the price plot. */
+  private readonly drawings = new DrawingLayer({
+    invalidate: () => this.invalidate(),
+    invalidateOverlay: () => this.invalidateOverlay(),
+    commit: (c) => this.drawingCommitCb?.(c),
+    tool: (k) => this.drawingToolCb?.(k),
+    text: (e) => this.drawingTextCb?.(e),
+    style: (e) => this.drawingStyleCb?.(e),
+  });
 
   constructor(
     private readonly host: HTMLElement,
@@ -119,6 +148,12 @@ export class Chart {
     const ctx = this.canvas.getContext("2d", { alpha: false });
     if (!ctx) throw new Error("Canvas 2D is not available");
     this.ctx = ctx;
+    this.overlay = document.createElement("canvas");
+    this.overlay.style.cssText = "position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none";
+    host.appendChild(this.overlay);
+    const octx = this.overlay.getContext("2d");
+    if (!octx) throw new Error("Canvas 2D is not available");
+    this.octx = octx;
 
     this.canvas.addEventListener("pointerdown", this.onPointerDown);
     this.canvas.addEventListener("pointermove", this.onPointerMove);
@@ -158,6 +193,7 @@ export class Chart {
     s.count = n;
     this.series = s;
     this.instrument = c.instrument;
+    this.drawings.setOwner({ instrument: c.instrument.id, priceScale: c.instrument.priceScale });
     this.tf = inferTimeframe(s);
     this.atHistoryStart = c.atHistoryStart || n === 0;
     this.olderPending = false;
@@ -169,6 +205,7 @@ export class Chart {
   clear(): void {
     this.series = emptySeries(0);
     this.instrument = null;
+    this.drawings.setOwner(null);
     this.atHistoryStart = false;
     this.olderPending = false;
     this.axisWidth = PRICE_AXIS_WIDTH;
@@ -309,6 +346,71 @@ export class Chart {
     this.crosshairCb = cb;
   }
 
+  /** The drawings of the instrument on the chart; selection and undo history start over. */
+  setDrawings(list: Drawing[]): void {
+    this.drawings.setDrawings(list);
+  }
+
+  /** Whether placed and dragged points snap to bar prices (⌘ or Ctrl inverts it per move). */
+  setDrawingMagnet(on: boolean): void {
+    this.drawings.setMagnet(on);
+  }
+
+  /** Picks the tool the next clicks on the price plot place, or none. */
+  setDrawingTool(id: ToolId | null): void {
+    this.drawings.setTool(id);
+  }
+
+  /** Engine outcomes of the positions by drawing id; a position without one shows none. */
+  /** The engine stored `sent` as `saved` (rescaled to a new price scale). */
+  drawingStored(sent: Drawing, saved: Drawing): void {
+    this.drawings.stored(sent, saved);
+  }
+
+  setPositionOutcomes(outcomes: ReadonlyMap<string, PositionOutcome>): void {
+    this.drawings.setOutcomes(outcomes);
+  }
+
+  /** The text editor of a drawing opens (where, in CSS px of the chart) or closes (null). */
+  onDrawingText(cb: ((edit: TextEdit | null) => void) | null): void {
+    this.drawingTextCb = cb;
+  }
+
+  /** Closes the open text editor: save with the text, delete the drawing, or cancel (null). */
+  finishDrawingText(result: TextResult): void {
+    this.drawings.finishText(result);
+  }
+
+  /** The style popover of a drawing opens or shows a change (where, in CSS px of the chart), or closes (null). */
+  onDrawingStyle(cb: ((edit: StyleEdit | null) => void) | null): void {
+    this.drawingStyleCb = cb;
+  }
+
+  /** Changes or deletes the drawing of the open style popover, or closes it (null). */
+  drawingStyle(action: StyleAction): void {
+    this.drawings.styleAction(action);
+  }
+
+  /** Hide all drawings for this session (painting and hit-testing), or show them again. */
+  setDrawingsHidden(on: boolean): void {
+    this.drawings.setHiddenAll(on);
+  }
+
+  /** Undo, redo, delete the selection, cancel, arm the ruler, or edit the text of the selection; false when there was nothing to do. */
+  drawingCommand(cmd: DrawingCommand): boolean {
+    return this.drawings.command(cmd);
+  }
+
+  /** Every change of a drawing by the user, undo and redo included, to be stored. */
+  onDrawingCommit(cb: ((c: DrawingChange) => void) | null): void {
+    this.drawingCommitCb = cb;
+  }
+
+  /** The active tool changed on the chart (placed, cancelled). */
+  onDrawingTool(cb: ((id: ToolId | null) => void) | null): void {
+    this.drawingToolCb = cb;
+  }
+
   /** Candle `index` of the current series (indices shift by the size of every prepend). */
   candle(index: number): LiveCandle | null {
     const s = this.series;
@@ -345,8 +447,14 @@ export class Chart {
       this.canvas.removeEventListener("gestureend", this.onGestureEnd);
     }
     this.canvas.remove();
+    this.overlay.remove();
+    this.lastFrame = null;
     this.needOlderCb = null;
     this.crosshairCb = null;
+    this.drawingCommitCb = null;
+    this.drawingToolCb = null;
+    this.drawingTextCb = null;
+    this.drawingStyleCb = null;
   }
 
   // ---- Internals ----
@@ -359,7 +467,15 @@ export class Chart {
     this.series = s;
   }
 
+  /** Redraws both layers on the next frame. */
   private invalidate(): void {
+    this.baseDirty = true;
+    this.invalidateOverlay();
+  }
+
+  /** Redraws only the overlay on the next frame (unless the base is dirty too). */
+  private invalidateOverlay(): void {
+    this.overlayDirty = true;
     if (this.frame !== 0 || this.destroyed) return;
     this.frame = requestAnimationFrame(this.render);
   }
@@ -371,6 +487,8 @@ export class Chart {
     this.dpr = window.devicePixelRatio || 1;
     this.canvas.width = Math.max(1, Math.round(rect.width * this.dpr));
     this.canvas.height = Math.max(1, Math.round(rect.height * this.dpr));
+    this.overlay.width = this.canvas.width;
+    this.overlay.height = this.canvas.height;
     this.afterViewChange();
   }
 
@@ -389,7 +507,7 @@ export class Chart {
     else if (v.rightIndex > hi) this.view = { barWidth: v.barWidth, rightIndex: hi };
   }
 
-  /** Call after any change of data, viewport or mouse position. */
+  /** Call after any change of data or viewport. */
   private afterViewChange(): void {
     this.clampView();
     this.updateCrosshair();
@@ -486,24 +604,40 @@ export class Chart {
       return;
     }
     const started = performance.now();
-    const { plotH } = this.plot();
+    const debug = chartDebug();
+    if (this.baseDirty) {
+      this.baseDirty = false;
+      this.renderBase();
+      if (debug) {
+        if (debug.baseMs.length >= 10_000) debug.baseMs.length = 0;
+        debug.baseMs.push(performance.now() - started);
+        debug.baseDraws++;
+      }
+    }
+    if (this.overlayDirty) {
+      this.overlayDirty = false;
+      const overlayStarted = performance.now();
+      this.renderOverlay();
+      if (debug) {
+        if (debug.overlayMs.length >= 10_000) debug.overlayMs.length = 0;
+        debug.overlayMs.push(performance.now() - overlayStarted);
+        debug.overlayDraws++;
+      }
+    }
+    if (debug) {
+      if (debug.drawMs.length >= 10_000) debug.drawMs.length = 0;
+      debug.drawMs.push(performance.now() - started);
+    }
+  };
+
+  private renderBase(): void {
     const priceH = this.priceH();
     const decimals = this.instrument?.priceScale ?? 0;
     const s = this.series;
     const lastClose = s.count > 0 ? s.close[s.count - 1]! : NaN;
     let scale = this.priceScale(priceH);
     this.updatePanes();
-    const m = this.mouse;
-    const axis = priceAxisWidth(
-      this.ctx,
-      this.buffers,
-      this.dpr,
-      scale,
-      decimals,
-      lastClose,
-      m && m.y < priceH ? m.y : null,
-      this.ind.panes,
-    );
+    const axis = priceAxisWidth(this.ctx, this.buffers, this.dpr, scale, decimals, lastClose, this.ind.panes);
     // Grow-only within one series, so the plot does not jitter as labels change length.
     if (axis.width > this.axisWidth) {
       this.axisWidth = axis.width;
@@ -514,33 +648,33 @@ export class Chart {
       this.updatePanes();
     }
     const { plotW } = this.plot();
-    const inPlot = m !== null && m.x >= 0 && m.x < plotW && m.y >= 0 && m.y < plotH;
-    const crosshair: Crosshair | null = inPlot ? { x: m.x, y: m.y, index: this.crosshairIndex } : null;
     const historyStart =
       this.atHistoryStart && s.count > 0 && this.historyLabel ? this.historyLabel(s.time[0]!) : null;
-    draw(
-      {
-        ctx: this.ctx,
-        dpr: this.dpr,
-        width: this.width,
-        height: this.height,
-        axisWidth: this.axisWidth,
-        series: s,
-        view: this.view,
-        scale,
-        priceDecimals: decimals,
-        tf: this.tf,
-        crosshair,
-        historyStart,
-        theme: this.theme,
-        indicators: this.ind,
-      },
-      this.buffers,
+    const f: FrameInput = {
+      ctx: this.ctx,
+      dpr: this.dpr,
+      width: this.width,
+      height: this.height,
+      axisWidth: this.axisWidth,
+      series: s,
+      view: this.view,
+      scale,
+      priceDecimals: decimals,
+      tf: this.tf,
+      historyStart,
+      theme: this.theme,
+      indicators: this.ind,
+    };
+    draw(f, this.buffers);
+    // Months differ in length: 1M extrapolates by calendar months, not by 30 days.
+    const step: Step = this.tf === "1M" ? "month" : (STEP_MS.get(this.tf) ?? 60 * MINUTE);
+    const coords = new Coords(s.time, s.count, this.view, scale, plotW, priceH, step, decimals, s);
+    this.drawings.paintBase(this.ctx, coords, this.dpr, this.theme, (p, color) =>
+      drawingTag(this.ctx, f, this.buffers, p, color),
     );
+    this.lastFrame = f;
     const debug = chartDebug();
     if (debug) {
-      if (debug.drawMs.length >= 10_000) debug.drawMs.length = 0;
-      debug.drawMs.push(performance.now() - started);
       debug.axisWidth = this.axisWidth;
       debug.widestLabel = axis.widest;
       debug.widestText = axis.widestText;
@@ -549,7 +683,25 @@ export class Chart {
       debug.historyLabel = historyStart ? historyStart.join("|") : null;
       debug.panes = this.ind.panes.length;
     }
-  };
+  }
+
+  private renderOverlay(): void {
+    const f = this.lastFrame;
+    if (!f) return;
+    const { plotW, plotH } = this.plot();
+    const m = this.mouse;
+    const inPlot = m !== null && m.x >= 0 && m.x < plotW && m.y >= 0 && m.y < plotH;
+    const ch = this.crosshair;
+    if (inPlot) {
+      ch.x = m.x;
+      ch.y = m.y;
+      ch.index = this.crosshairIndex;
+    }
+    const octx = this.octx;
+    drawOverlay(f, octx, inPlot ? ch : null, this.buffers, () =>
+      this.drawings.paintOverlay(octx, this.dpr, this.theme, (p, color) => drawingTag(octx, f, this.buffers, p, color)),
+    );
+  }
 
   private local(e: { clientX: number; clientY: number }): { x: number; y: number } {
     const r = this.canvas.getBoundingClientRect();
@@ -560,18 +712,37 @@ export class Chart {
     if (e.button !== 0) return;
     const p = this.local(e);
     const { plotW } = this.plot();
-    const onPriceAxis = p.x >= plotW && p.y < this.priceH();
-    this.drag = { kind: onPriceAxis ? "price" : "pan", pointerId: e.pointerId, lastX: e.clientX, lastY: e.clientY };
+    const priceH = this.priceH();
+    const onPriceAxis = p.x >= plotW && p.y < priceH;
+    // On the price plot drawings come first: a tool places, a press on a drawing selects it.
+    const onDrawing = this.inPricePlot(p) && this.drawings.pointerDown(p.x, p.y, e.shiftKey, e.metaKey || e.ctrlKey);
+    const kind = onDrawing ? "drawing" : onPriceAxis ? "price" : "pan";
+    this.drag = { kind, pointerId: e.pointerId, lastX: e.clientX, lastY: e.clientY };
     this.canvas.setPointerCapture(e.pointerId);
-    if (this.drag.kind === "pan") this.canvas.style.cursor = "grabbing";
+    if (kind === "pan") this.canvas.style.cursor = "grabbing";
+    else this.updateCursor(p);
   };
+
+  private inPricePlot(p: { x: number; y: number }): boolean {
+    return p.x >= 0 && p.x < this.plot().plotW && p.y >= 0 && p.y < this.priceH();
+  }
+
+  private updateCursor(p: { x: number; y: number }): void {
+    const onPriceAxis = p.x >= this.plot().plotW && p.y < this.priceH();
+    this.canvas.style.cursor = onPriceAxis ? "ns-resize" : (this.drawings.cursor() ?? "crosshair");
+  }
 
   private readonly onPointerMove = (e: PointerEvent): void => {
     const p = this.local(e);
     this.mouse = p;
-    const { plotW } = this.plot();
     const priceH = this.priceH();
     const d = this.drag;
+    if (d?.kind === "drawing" && d.pointerId === e.pointerId) {
+      this.drawings.pointerMove(p.x, p.y, e.shiftKey, e.metaKey || e.ctrlKey);
+      this.updateCrosshair();
+      this.invalidateOverlay();
+      return;
+    }
     if (d && d.pointerId === e.pointerId) {
       const dx = e.clientX - d.lastX;
       const dy = e.clientY - d.lastY;
@@ -583,24 +754,38 @@ export class Chart {
       } else {
         this.stretchPrice(dy, priceH);
       }
-    } else {
-      this.canvas.style.cursor = p.x >= plotW && p.y < priceH ? "ns-resize" : "crosshair";
+      this.afterViewChange();
+      return;
     }
-    this.afterViewChange();
+    if (this.inPricePlot(p)) this.drawings.pointerMove(p.x, p.y, e.shiftKey, e.metaKey || e.ctrlKey);
+    else this.drawings.leave();
+    this.updateCursor(p);
+    // Only the mouse moved: the base layer stays as it is.
+    this.updateCrosshair();
+    this.invalidateOverlay();
   };
 
   private readonly onPointerUp = (e: PointerEvent): void => {
     if (this.drag?.pointerId !== e.pointerId) return;
+    const kind = this.drag.kind;
     this.drag = null;
     if (this.canvas.hasPointerCapture(e.pointerId)) this.canvas.releasePointerCapture(e.pointerId);
     const p = this.local(e);
-    this.canvas.style.cursor = p.x >= this.plot().plotW && p.y < this.priceH() ? "ns-resize" : "crosshair";
+    if (kind === "drawing") {
+      // A cancelled pointer (a system gesture) stores nothing.
+      if (e.type === "pointercancel") this.drawings.abort();
+      else this.drawings.pointerUp(p.x, p.y, e.shiftKey, e.metaKey || e.ctrlKey);
+      this.invalidateOverlay();
+    }
+    this.updateCursor(p);
   };
 
   private readonly onPointerLeave = (): void => {
     if (this.drag) return;
+    this.drawings.leave();
     this.mouse = null;
-    this.afterViewChange();
+    this.updateCrosshair();
+    this.invalidateOverlay();
   };
 
   private readonly onWheel = (e: WheelEvent): void => {
@@ -652,6 +837,10 @@ export class Chart {
 
   private readonly onDoubleClick = (e: MouseEvent): void => {
     const p = this.local(e);
+    if (this.inPricePlot(p)) {
+      this.drawings.doubleClick(p.x, p.y);
+      return;
+    }
     if (p.x < this.plot().plotW || p.y >= this.priceH()) return;
     this.autoScale = true;
     this.invalidate();

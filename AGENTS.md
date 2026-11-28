@@ -10,7 +10,7 @@ Sandchart is a desktop chart app: a Rust core (candles, providers, SQLite cache)
 
 | Path | What |
 | --- | --- |
-| `crates/core` | Types shared by everything: `Candle`, `Instrument`, `Timeframe`, tick/price scaling. No I/O. |
+| `crates/core` | Types shared by everything: `Candle`, `Instrument`, `Timeframe`, tick/price scaling. No I/O. `drawing.rs` holds the `Drawing` model and its validation, `position.rs` the outcome of a position (`resolve`), used by the engine and later by replay. |
 | `crates/store` | SQLite storage (rusqlite), versioned migrations in `crates/store/migrations`. |
 | `crates/data` | The `Provider` trait and its implementations (`binance/`). Fixtures and wiremock tests in `crates/data/tests`. |
 | `crates/engine` | `Engine`: caching, paging, live updates, connection state. Holds providers as `Arc<dyn Provider>`. |
@@ -19,6 +19,7 @@ Sandchart is a desktop chart app: a Rust core (candles, providers, SQLite cache)
 | `indicators/` | A separate Cargo workspace (own `Cargo.lock`) built for `wasm32-wasip2`: `sdk` (the published `sandchart-indicator` crate and the contract `sdk/wit/indicator.wit`), `builtin/*` (SMA, EMA, Bollinger, RSI, MACD), `testguests/*` (modules that misbehave on purpose, for host tests). |
 | `app/src-tauri` | Tauri shell: commands and events over the engine. `tauri.conf.json` is here. |
 | `app/ui` | React UI, own Canvas chart (`src/chart`), i18n (`src/i18n`), unit tests (vitest) and e2e (`e2e/`, Playwright). |
+| `app/ui/src/chart/drawings` | Drawings on the chart: `registry.ts` (the `ToolDef` contract and `TOOLS`), one module per tool in `tools/`, `state.ts` (selection, placement, undo), `layer.ts` (painting on the base and overlay canvases, pointer input), `geometry.ts`, `magnet.ts`, `ruler.ts`, `keys.ts`. `src/state/drawings.ts` stores changes through the backend. User guide: `docs/drawings.md`. See ADR 0004. |
 | `deny.toml` | cargo-deny licence and ban policy. |
 | `docs/adr` | Architecture decision records. |
 
@@ -97,6 +98,17 @@ The user-facing guide for writing indicators is `docs/indicators.md`; read it fi
 5. Add the same indicator to `MOCK_BUILTINS` in `app/ui/src/backend/mock.ts`, so the browser mock and the Playwright tests list and draw it.
 6. Run the indicators block under "Commands", then the root Rust checks. The five built-ins together must stay inside the timing budgets (50 ms on 100 000 bars); the `perf_` tests check it.
 7. If the module needs a new `ta` helper, add it to `indicators/sdk/src/ta.rs` with unit tests. That crate is published to users, so keep the helpers small and stable. Do not change a type in `indicator.wit` without a new contract version (see ADR 0002).
+
+## Add a drawing tool
+
+Read ADR 0004 and `docs/drawings.md` first. The chart core has no per-tool code: a tool is data in Rust plus one module in the UI.
+
+1. Add a `DrawingBody` variant in `crates/core/src/drawing.rs` (serde `kind` in snake_case) and its rules in `validate`. Add a case per rule, with the whole message, to `crates/core/tests/fixtures/drawings_invalid.json`, and a valid one to `drawings_valid.json`. Prices are `i64` ticks inside `±(2^53 - 1)`; points are `Anchor { t, p }`, never bar indices.
+2. Mirror the type in `app/ui/src/backend/types.ts` (`DrawingBody`) and the same rules in `mockValidateDrawing` in `app/ui/src/backend/mock.ts`, so the browser mock rejects what Rust rejects. `crates/core/tests/drawing.rs` and `mock.test.ts` both run the fixtures, so the two cannot drift.
+3. Write `app/ui/src/chart/drawings/tools/<name>.ts` implementing `ToolDef` (placement, `create`, `timeSpan`, `layout`, `paint`, `hitTest`, `handles`, `moveBy`, `moveHandle`). Cache a `Path2D` in the geometry; put any text on a `pill` (`label.ts`). Icons come from Lucide.
+4. Add it to `TOOLS` in `registry.ts`. Pick a free Alt shortcut (`code`, not R or M, which are the ruler and the magnet); `tools.test.ts` checks the shortcuts do not clash. If it has options, add them to `BodyOptions` in `app/ui/src/components/DrawingStyle.tsx`.
+5. Add `tools.<name>` (and any other strings) to `en.json` and `ru.json`.
+6. Tests: geometry and editing in `app/ui/src/chart/drawings/tools.test.ts`, an end-to-end placement and reload in `app/ui/e2e/drawings.spec.ts`, and a line for the tool in `docs/drawings.md`.
 
 ## Rules
 

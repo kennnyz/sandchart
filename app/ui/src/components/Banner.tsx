@@ -8,10 +8,11 @@ export interface BannerProps {
   retryLabel: (seconds: number) => string;
   /** The raw provider error, shown as a tooltip. */
   detail?: string;
+  testId?: string;
 }
 
 /** The warning strip at the top of the chart (Design Reference, States). */
-export function Banner({ text, retryAt, retryLabel, detail }: BannerProps) {
+export function Banner({ text, retryAt, retryLabel, detail, testId = "banner" }: BannerProps) {
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     if (retryAt === null) return;
@@ -21,7 +22,7 @@ export function Banner({ text, retryAt, retryLabel, detail }: BannerProps) {
   }, [retryAt]);
   const seconds = retryAt === null ? null : Math.max(0, Math.ceil((retryAt - now) / 1000));
   return (
-    <div className="banner" data-testid="banner" role="status" title={detail}>
+    <div className="banner" data-testid={testId} role="status" title={detail}>
       <TriangleAlert size={14} />
       <span className="text">{text}</span>
       {seconds !== null && <span className="retry mono">{retryLabel(seconds)}</span>}
