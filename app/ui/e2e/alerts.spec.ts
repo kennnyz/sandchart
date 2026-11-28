@@ -223,6 +223,41 @@ test("deleting_lines_with_alerts_asks_first_with_the_key_and_for_a_group", async
   await expect(ask).toHaveCount(0);
 });
 
+test("a_line_menu_adds_a_crossing_alert_at_once_and_removes_it", async ({ page }) => {
+  const plot = await openChart(page);
+  const cx = Math.round(plot.left + plot.width / 2) - 120;
+  const y = Math.round(plot.top + plot.height * 0.4);
+  await page.keyboard.press("Alt+KeyH");
+  await page.mouse.click(cx, y);
+  await expect.poll(async () => (await storedDrawings(page)).length).toBe(1);
+  const [line] = await storedDrawings(page);
+
+  await page.mouse.click(cx, y, { button: "right" });
+  const menu = page.getByTestId("drawing-menu");
+  await expect(menu.getByTestId("drawing-menu-remove-alert")).toHaveCount(0);
+  await menu.getByTestId("drawing-menu-add-alert").click();
+  await expect(menu).toHaveCount(0);
+  const [set] = await alertCount(page, 1);
+  expect(set).toMatchObject({ direction: "cross", active: true, kind: { kind: "drawing", drawingId: line!.id } });
+  await expect(page.getByTestId("alert-row")).toHaveCount(1);
+
+  await page.mouse.click(cx, y, { button: "right" });
+  await expect(menu.getByTestId("drawing-menu-add-alert")).toHaveCount(0);
+  await menu.getByTestId("drawing-menu-remove-alert").click();
+  await alertCount(page, 0);
+  expect(await storedDrawings(page)).toHaveLength(1);
+
+  // Several selected: no alert items.
+  await page.keyboard.press("Alt+KeyH");
+  await page.mouse.click(cx, y + 60);
+  await page.keyboard.down("ControlOrMeta");
+  await page.mouse.click(cx - 60, y);
+  await page.keyboard.up("ControlOrMeta");
+  await page.mouse.click(cx - 60, y, { button: "right" });
+  await expect(menu).toBeVisible();
+  await expect(menu.getByTestId("drawing-menu-add-alert")).toHaveCount(0);
+});
+
 test("removing_an_alert_from_the_popover_keeps_the_line", async ({ page }) => {
   const plot = await openChart(page);
   const cx = Math.round(plot.left + plot.width / 2);

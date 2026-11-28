@@ -448,7 +448,7 @@ describe("DrawingController", () => {
     const s = fakeSurface();
     const c = new DrawingController(fakeBackend([]).backend, () => {});
     c.attach(s.surface);
-    const edit = { ids: ["a", "b"], locked: false, single: false, x: 5, y: 6 };
+    const edit = { ids: ["a", "b"], locked: false, single: false, line: null, x: 5, y: 6 };
     s.openMenu(edit);
     expect(c.menu).toEqual(edit);
     c.menuAction("lock");

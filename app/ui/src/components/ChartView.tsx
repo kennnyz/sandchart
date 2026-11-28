@@ -1,6 +1,6 @@
-import { Bell, ChevronsDown, ChevronsUp, EyeOff, Lock, LockOpen, Settings2, Trash2 } from "lucide-react";
+import { Bell, BellOff, ChevronsDown, ChevronsUp, EyeOff, Lock, LockOpen, Settings2, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
-import type { Backend, ConnectionState, InstrumentId, TimeframeCode } from "../backend/types";
+import type { Backend, ConnectionState, Drawing, InstrumentId, TimeframeCode } from "../backend/types";
 import { Chart, type AlertMenuAt, type PriceMenuAt } from "../chart/chart";
 import { formatDate, formatPrice, formatUtcClock } from "../chart/format";
 import { priceMenuEntries } from "../chart/plus";
@@ -310,12 +310,33 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
   const closeStyle = useCallback(() => drawings.state.closeStyle(), [drawings]);
   const deleteStyled = useCallback(() => drawings.state.deleteStyled(), [drawings]);
   const closeMenu = useCallback(() => drawings.state.menuAction(null), [drawings]);
+  /** A line's alert from its menu: a crossing alert at once (the popover changes the direction), or its removal. */
+  const lineAlertItems = (line: Drawing | null): MenuItem[] => {
+    if (!line) return [];
+    const current = alerts.state.forDrawing(line.id);
+    const run = (fn: () => void) => () => {
+      drawings.state.menuAction(null);
+      fn();
+    };
+    return current
+      ? [{ id: "remove-alert", label: t("drawingMenu.removeAlert"), icon: BellOff, onSelect: run(() => void alerts.state.remove(current.id)) }]
+      : [
+          {
+            id: "add-alert",
+            label: t("drawingMenu.addAlert"),
+            title: t("drawingMenu.addAlert.title"),
+            icon: Bell,
+            onSelect: run(() => void alerts.state.setForDrawing(line, "cross", drawings.state.settled())),
+          },
+        ];
+  };
   const menuItems: MenuItem[] = menuEdit
     ? [
         menuEdit.locked
           ? { id: "unlock", label: t("drawingMenu.unlock"), icon: LockOpen, onSelect: () => drawings.state.menuAction("unlock") }
           : { id: "lock", label: t("drawingMenu.lock"), icon: Lock, onSelect: () => drawings.state.menuAction("lock") },
         { id: "hide", label: t("drawingMenu.hide"), icon: EyeOff, onSelect: () => drawings.state.menuAction("hide") },
+        ...lineAlertItems(menuEdit.line),
         {
           id: "remove",
           label: t("drawingMenu.remove"),

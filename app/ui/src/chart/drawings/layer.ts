@@ -82,6 +82,8 @@ export interface MenuEdit {
   locked: boolean;
   /** Settings… needs exactly one drawing. */
   single: boolean;
+  /** The one drawing when it is a horizontal or trend line, which can have an alert; else null. */
+  line: Drawing | null;
   x: number;
   y: number;
 }
@@ -910,6 +912,7 @@ export class DrawingLayer {
       ids: list.map((d) => d.id),
       locked: list.every((d) => d.locked),
       single: list.length === 1,
+      line: list.length === 1 && (list[0]!.body.kind === "hline" || list[0]!.body.kind === "trend") ? list[0]! : null,
       x: me.at.x,
       y: me.at.y,
     });

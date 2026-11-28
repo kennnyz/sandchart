@@ -60,6 +60,7 @@ Right-click a drawing (or Ctrl-click it on macOS) to open its menu. When it is p
 | --- | --- |
 | Lock / Unlock | Lock them, or unlock them when all are locked. |
 | Hide | Hide them until you show them again (see [Hide and show](#hide-and-show)). |
+| Add alert / Remove alert | Only for one horizontal or trend line. **Add alert** sets an [alert](alerts.md) on the line at once, on a cross either way; change its direction in Settings. **Remove alert** deletes the line's alert and keeps the line. |
 | Remove (Delete) | Delete them (asking first when one has an alert). |
 | Settings… (Enter) | The style popover, or the text editor of a note. Only for one drawing. |
 

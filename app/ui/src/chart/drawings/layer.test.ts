@@ -377,7 +377,7 @@ describe("context menu", () => {
     expect(l.contextMenu(100, 900)).toBe(false);
     l.state.setSelection(["a", "b"]);
     expect(l.contextMenu(100, 500)).toBe(true);
-    expect(rec.menus.at(-1)).toEqual({ ids: ["a", "b"], locked: false, single: false, x: 100, y: 500 });
+    expect(rec.menus.at(-1)).toEqual({ ids: ["a", "b"], locked: false, single: false, line: null, x: 100, y: 500 });
     l.menuAction("lock");
     expect(rec.menus.at(-1)).toBeNull();
     expect(l.state.drawings.filter((d) => d.locked).map((d) => d.id)).toEqual(["a", "b"]);
@@ -391,7 +391,7 @@ describe("context menu", () => {
     expect(l.state.selection).toEqual([]);
     // A right click on a drawing outside the selection selects it alone.
     l.contextMenu(100, 700);
-    expect(rec.menus.at(-1)).toMatchObject({ ids: ["c"], single: true });
+    expect(rec.menus.at(-1)).toMatchObject({ ids: ["c"], single: true, line: { id: "c" } });
     l.menuAction("remove");
     expect(l.state.drawings.map((d) => d.id)).toEqual(["a", "b"]);
     l.showHidden();
