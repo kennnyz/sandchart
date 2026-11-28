@@ -348,7 +348,8 @@ async fn position_outcomes_reject_an_invalid_position() {
 #[tokio::test]
 async fn position_outcomes_in_a_replay_see_only_the_revealed_bars() {
     let f = Fixture::new();
-    let t0 = NOW / H * H;
+    // Closed bars before the engine's clock, the first at a 4h boundary.
+    let t0 = (NOW / (4 * H) - 1) * 4 * H;
     f.store()
         .upsert_candles(
             &id("BTCUSDT"),
@@ -377,9 +378,25 @@ async fn position_outcomes_in_a_replay_see_only_the_revealed_bars() {
         Status::Open,
         "the take bar is not revealed"
     );
-    f.engine.replay_step(1).unwrap();
+    // A 4h chart is built from the revealed hours: the take is not in its bar yet.
+    let four = || async {
+        f.engine
+            .position_outcomes(&id("BTCUSDT"), Timeframe::H4, positions.clone())
+            .await
+    };
+    assert_eq!(four().await.unwrap()[0].1.status, Status::Open);
+    // A 15m chart cannot be built from hours, and is never read from the cache instead.
+    let err = f
+        .engine
+        .position_outcomes(&id("BTCUSDT"), Timeframe::M15, positions.clone())
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("re-base it to 15m first"), "{err}");
+    f.engine.replay_step(1).await.unwrap();
     assert_eq!(outcome().await.status, Status::Take);
     assert_eq!(outcome().await.exit_time, Some(t0 + 2 * H));
+    // On 4h the take is inside the entry's own bar, which a position never counts.
+    assert_eq!(four().await.unwrap()[0].1.status, Status::Open);
 
     f.engine
         .replay_start(&id("BTCUSDT"), Timeframe::H1, t0 + H)

@@ -139,9 +139,9 @@ impl Engine {
         }
         // In a replay only the revealed bars count, so no outcome gives a later bar away.
         // They are resolved off the replay lock and off the async threads.
-        if let Some(r) = self.shared.replay_bars(id, tf) {
+        if let Some(r) = self.shared.replay_bars(id, tf)? {
             return spawn_blocking(move || {
-                let bars = r.revealed();
+                let bars = r.revealed()?;
                 Ok(positions
                     .into_iter()
                     .map(|(drawing_id, p)| {

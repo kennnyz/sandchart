@@ -1,6 +1,6 @@
 # ADR 0005: Replay
 
-Date: 2026-11-28. Status: accepted.
+Date: 2026-11-28. Status: accepted. Decision 1 and the bar-index commands are superseded by [ADR 0008](0008-replay-timeframes.md).
 
 ## Context
 

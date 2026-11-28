@@ -617,13 +617,15 @@ fn replay_file() -> String {
             price_scale: 2,
             qty_scale: 5,
         },
-        timeframe: Timeframe::H1,
+        base: Timeframe::H1,
         candles: (0..BARS).map(candle).collect(),
-        start: 5,
-        current: 15,
+        // Cuts: the close times of bars 5 and 15.
+        start: T0 + 6 * H,
+        cut: T0 + 16 * H,
+        caught_up_at: None,
         // Long at the close of bar 5 (105.00), stop 104.00, take 107.00: bar 7 reaches 107.50.
         commands: vec![Command::Open {
-            bar: 5,
+            time: T0 + 6 * H,
             side: Side::Long,
             stop: 10_400,
             take: 10_700,
@@ -641,12 +643,11 @@ async fn a_replay_file_is_simulated_again_from_its_commands() {
         .call("run_replay", json!({ "path": path.to_str().unwrap() }))
         .await;
     assert_eq!(got["instrument"]["symbol"], "BTCUSDT");
-    assert_eq!(got["timeframe"], "1h");
+    assert_eq!(got["base"], "1h");
     assert_eq!(
-        (got["start"].clone(), got["current"].clone()),
-        (json!(5), json!(15))
+        (got["start"].clone(), got["cut"].clone()),
+        (json!(T0 + 6 * H), json!(T0 + 16 * H))
     );
-    assert_eq!(got["startTime"], T0 + 5 * H);
     let trades = got["trades"].as_array().unwrap();
     assert_eq!(trades.len(), 1);
     let t = &trades[0];
@@ -659,6 +660,17 @@ async fn a_replay_file_is_simulated_again_from_its_commands() {
     assert_eq!(got["stats"]["count"], 1);
     assert_eq!(got["stats"]["wins"], 1);
     assert_eq!(got["stats"]["totalR"], 2.0);
+    assert_eq!(got["caughtUpAt"], json!(null));
+
+    // A session saved after catching up with real time says where its backtest ended.
+    let (mut file, _) = ReplayFile::from_json(replay_file().as_bytes()).unwrap();
+    file.candles.truncate(16);
+    file.caught_up_at = Some(file.cut);
+    std::fs::write(&path, file.to_json()).unwrap();
+    let got = h
+        .call("run_replay", json!({ "path": path.to_str().unwrap() }))
+        .await;
+    assert_eq!(got["caughtUpAt"], json!(T0 + 16 * H));
 }
 
 #[tokio::test]

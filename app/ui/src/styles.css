@@ -91,6 +91,10 @@ select:focus-visible {
   outline: 1px solid var(--muted);
   outline-offset: 1px;
 }
+/* Focus given back to a control that was clicked (see focus.ts): no ring. */
+[data-no-ring]:focus-visible {
+  outline: none;
+}
 .mono {
   font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
@@ -163,7 +167,24 @@ select:focus-visible {
   background: var(--line);
 }
 .tools-bottom {
+  position: relative;
   margin-top: auto;
+}
+/* How many drawings are hidden one by one, on the eye button. */
+.tool-badge {
+  position: absolute;
+  top: 1px;
+  right: 0;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--fg);
+  color: var(--bg);
+  font-size: 9px;
+  line-height: 14px;
+  text-align: center;
+  pointer-events: none;
 }
 
 /* ---- Top bar ---- */
@@ -446,6 +467,8 @@ select:focus-visible {
   padding: 0 12px 0 14px;
 }
 .wl-columns {
+  /* Room for the rows' remove button, so the columns line up. */
+  padding-right: 28px;
   height: 28px;
   flex: none;
   font-size: 11px;
@@ -495,21 +518,22 @@ select:focus-visible {
 .wl-row .wl-last {
   color: var(--fg);
 }
+/* A slot of its own at the row's end, shown on hover: it never covers the 24h change. */
 .wl-remove {
-  position: absolute;
-  right: 6px;
-  top: 8px;
+  flex: none;
   width: 20px;
   height: 20px;
+  margin: 0 -8px 0 4px;
   border-radius: 4px;
-  display: none;
+  display: flex;
+  visibility: hidden;
   align-items: center;
   justify-content: center;
   color: var(--muted);
-  background: var(--panel);
 }
-.wl-row:hover .wl-remove {
-  display: flex;
+.wl-row:hover .wl-remove,
+.wl-remove:focus-visible {
+  visibility: visible;
 }
 .wl-remove:hover {
   color: var(--fg);
@@ -902,6 +926,35 @@ button:disabled {
   color: var(--muted);
 }
 .ind-confirm,
+/* The keyboard shortcut list: two columns of sections. */
+.shortcuts {
+  width: 640px;
+}
+.shortcuts-body {
+  columns: 2;
+  column-gap: 16px;
+  padding: 4px 8px 12px;
+}
+.shortcuts-section {
+  break-inside: avoid;
+}
+.shortcuts-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 24px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+.shortcuts-row kbd {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--fg);
+  font-size: 11px;
+}
 .ind-dialog-error {
   display: flex;
   align-items: center;
@@ -1173,39 +1226,60 @@ button:disabled {
 
 /* ---- Replay ---- */
 
-.chart-row {
-  flex: 1;
-  display: flex;
-  min-height: 0;
-}
 .text-button[aria-pressed="true"] {
   background: var(--fg-8);
   color: var(--fg);
 }
+/* Centred under the chart; X sits at the right end. */
 .replay-bar {
-  height: 36px;
+  position: relative;
+  height: 40px;
   flex: none;
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 0 8px;
+  justify-content: center;
+  padding: 0 44px;
   border-top: 1px solid var(--line);
   background: var(--panel);
   font-size: 12px;
 }
+.replay-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  height: 30px;
+  padding: 0 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+}
 .replay-bar .divider {
   height: 18px;
-  margin: 0 6px;
+  margin: 0 4px;
 }
-.replay-bar .spacer {
-  flex: 1;
+.replay-bar .icon-button {
+  width: 26px;
+  height: 26px;
 }
 .replay-bar .icon-button[aria-pressed="true"] {
   color: var(--fg);
 }
-.replay-bar .icon-button:hover,
-.replay-bar .text-button:hover {
+.replay-bar .icon-button:hover:not(:disabled),
+.replay-bar .text-button:hover:not(:disabled),
+.replay-bar [aria-expanded="true"] {
   color: var(--fg);
+  background: var(--fg-5);
+}
+.replay-bar .text-button.with-icon {
+  gap: 4px;
+  white-space: nowrap;
+}
+.replay-exit {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
 }
 .replay-icon {
   color: var(--muted);
@@ -1218,7 +1292,13 @@ button:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.replay-date-form {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
 .replay-date {
+  width: 17ch;
   height: 24px;
   margin-left: 8px;
   padding: 0 6px;
@@ -1228,68 +1308,200 @@ button:disabled {
   color: var(--fg);
   font-size: 12px;
 }
-.replay-speeds {
-  display: flex;
-  gap: 1px;
-  margin-left: 4px;
-  padding: 2px;
-  border-radius: 6px;
-  background: var(--fg-5);
-}
-.replay-speed {
-  height: 22px;
-  min-width: 28px;
-  padding: 0 5px;
-  border-radius: 4px;
-  font-size: 11px;
-  color: var(--muted);
-}
-.replay-speed:hover {
-  color: var(--fg);
-}
-.replay-speed[aria-pressed="true"] {
-  background: var(--bg);
-  color: var(--fg);
-}
 .replay-end,
 .replay-file-error {
-  margin-left: 8px;
+  margin: 0 6px;
   color: var(--muted);
   white-space: nowrap;
 }
-.replay-stats {
-  width: 184px;
+/* Where the replay stands (UTC), in a fixed width so the bar does not shift as it changes. */
+.replay-time {
   flex: none;
-  padding: 10px 12px;
-  border-left: 1px solid var(--line);
-  background: var(--panel);
-  font-size: 12px;
-  overflow-y: auto;
+  width: 17ch;
+  margin: 0 6px;
+  color: var(--fg);
+  text-align: center;
+  white-space: nowrap;
 }
-.replay-stats-title {
-  margin-bottom: 8px;
+/* The status ("Real time reached", "End of data", a load failure) keeps its room when empty. */
+.replay-status {
+  flex: none;
+  width: 128px;
+  display: flex;
+  min-width: 0;
+}
+.replay-status .replay-end {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ctx-menu-blank {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+.replay-anchor {
+  position: relative;
+}
+.replay-confirm {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 30;
+  width: 320px;
+  padding: 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+/* How many drawings are selected, bottom left of the chart; it never takes a click. */
+.selection-count {
+  position: absolute;
+  left: 8px;
+  bottom: 34px;
+  z-index: 5;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--panel);
   color: var(--muted);
   font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  pointer-events: none;
+}
+.chart-confirm {
+  position: absolute;
+  top: 48px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  width: 320px;
+  padding: 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  font-size: 12px;
+}
+.replay-confirm.at-exit {
+  left: auto;
+  right: 8px;
+  bottom: calc(100% + 4px);
+}
+.replay-confirm-title {
+  color: var(--fg);
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.replay-confirm-text {
+  color: var(--muted);
+  line-height: 1.4;
+}
+.replay-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 10px;
+}
+/* The results under the replay bar: a row of numbers, then the trades, scrolling. */
+.replay-results {
+  flex: none;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 12px;
+}
+.replay-results-head {
+  height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  overflow: hidden;
+}
+.replay-results-toggle {
+  flex: none;
+  color: var(--fg);
+}
+.replay-stats-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 .replay-stat {
   display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  height: 22px;
-  align-items: center;
+  align-items: baseline;
+  gap: 6px;
+  white-space: nowrap;
 }
 .replay-stat .label {
   color: var(--muted);
+}
+/* A fixed height, so the chart does not jump as trades are added. */
+.replay-trades {
+  height: 120px;
+  overflow-y: auto;
+  border-top: 1px solid var(--line);
+}
+.replay-trades:focus-visible {
+  outline: 1px solid var(--muted);
+  outline-offset: -1px;
+}
+.replay-trades table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+.replay-trades .c-n {
+  width: 44px;
+}
+.replay-trades .c-side {
+  width: 64px;
+}
+.replay-trades .c-time {
+  width: 150px;
+}
+.replay-trades .c-price {
+  width: 104px;
+}
+.replay-trades .c-exit {
+  width: 230px;
+}
+.replay-trades .c-r {
+  width: 72px;
+}
+.replay-trades .price {
+  text-align: right;
+}
+.replay-trades th {
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+  color: var(--muted);
+  font-weight: 400;
+  text-align: left;
+}
+.replay-trades th,
+.replay-trades td {
+  height: 24px;
+  padding: 0 12px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.replay-stats-sep {
-  height: 1px;
-  margin: 6px 0;
-  background: var(--line);
+.replay-trades tbody tr + tr td {
+  border-top: 1px solid var(--fg-5);
+}
+.replay-trades .num {
+  text-align: right;
+}
+.replay-trades .muted,
+.replay-trades-none {
+  color: var(--muted);
+}
+.replay-trades-none {
+  padding: 6px 12px;
 }
 
 /* ---- Alerts: the panel under the watchlist, the toast, the popover section ---- */
@@ -1463,6 +1675,9 @@ button:disabled {
   border-radius: 8px;
   box-shadow: var(--shadow);
 }
+.ctx-menu.compact {
+  min-width: 0;
+}
 .ctx-menu-item {
   height: 28px;
   padding: 0 8px;
@@ -1488,6 +1703,7 @@ button:disabled {
 }
 .ctx-menu-label {
   flex: 1;
+  white-space: nowrap;
 }
 .ctx-menu-key {
   font: inherit;

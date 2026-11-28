@@ -112,11 +112,12 @@ export const tauriBackend: Backend = {
   deleteDrawings: (ids) => invoke("delete_drawings", { ids }),
   getPositionOutcomes: (id, tf, positions) =>
     invoke("get_position_outcomes", { source: id.source, symbol: id.symbol, tf, positions }),
-  replayStart: (id, tf, startTime) =>
-    invoke("replay_start", { source: id.source, symbol: id.symbol, tf, startTime }),
+  replayStart: (id, base, startTime) =>
+    invoke("replay_start", { source: id.source, symbol: id.symbol, base, startTime }),
   replayStep: (n) => invoke("replay_step", { n }),
+  replaySetBase: (base) => invoke("replay_set_base", { base }),
   replayCommand: (command) => invoke("replay_command", { command }),
-  replayState: (cursor, tradesFrom) => invoke("replay_state", { cursor, tradesFrom }),
+  replayState: (tf, cursor, tradesFrom) => invoke("replay_state", { tf, cursor, tradesFrom }),
   replaySave: () => invoke("replay_save"),
   // A typed array goes as the raw request body: up to 32 MiB without a JSON array of numbers.
   replayOpen: (bytes) => invoke("replay_open", bytes),

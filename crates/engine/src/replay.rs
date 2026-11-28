@@ -1,45 +1,110 @@
-//! The replay session: one at a time, over cached candles held in memory. Only bars up to
-//! the current one ever leave the engine (ADR 0005).
+//! The replay session (ADR 0005, ADR 0008): one at a time, over base candles held in
+//! memory. The session steps its base timeframe; the cut is the close time of the last
+//! revealed base candle. Charts of any timeframe that builds from the base are aggregated
+//! from the revealed base candles, so nothing after the cut ever leaves the engine.
+//!
+//! A session started from the cache reads newer candles when its steps reach the last
+//! loaded one (the store, else the provider). When none is left it has caught up with real
+//! time and its backtest ends there: it takes no more steps or commands, the trade still
+//! open is unfinished, and it stops holding the pair's live updates back, so the chart shows
+//! live data again while the session stays at its cut.
 
+use std::borrow::Cow;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, MutexGuard, PoisonError};
 
+use crate::chart::fetch_window;
+use crate::{Engine, EngineError, PAGE, Shared, blocking, lock};
+use sandchart_core::aggregate::aggregate;
 use sandchart_core::replay::{
-    Command, ExitReason, MAX_CANDLES, ReplayFile, Simulation, Stats, Trade, check_candles, simulate,
+    Command, ExitReason, MAX_CANDLES, ReplayFile, Simulation, Stats, Trade, check_candles,
+    revealed, simulate,
 };
-use sandchart_core::{Candle, Instrument, InstrumentId, Timeframe};
+use sandchart_core::{Candle, Instrument, InstrumentId, JS_SAFE_MAX, Timeframe};
+use sandchart_data::Provider;
 
-use crate::{Engine, EngineError, blocking, lock};
-
-/// Bars shown before the start, for context.
+/// Base candles shown before the start, for context.
 pub const REPLAY_CONTEXT: usize = 500;
+/// Most base candles of context a re-base to a lower timeframe loads before the start
+/// (ADR 0008): the old context's time span when it fits, else its newest part.
+pub const REBASE_CONTEXT: usize = 5_000;
+/// Base candles a re-base to a lower timeframe loads past the cut; steps load the rest.
+const AHEAD: usize = PAGE as usize;
+/// Most newer base candles one load reads, so a step never waits for a long window.
+const NEWER_BATCH: usize = 3 * PAGE as usize;
+
+const DAY_MS: i64 = 86_400_000;
 
 pub(crate) struct Session {
-    /// Unique per session in this process, so indicator results of two sessions never mix.
+    /// Unique per session and per re-base in this process, so indicator results computed
+    /// over other candles never mix.
     id: u64,
     instrument: Instrument,
-    tf: Timeframe,
-    /// Context, then every bar from the start to the newest cached one. Shared, so readers
-    /// take it out of the lock (`replay_bars`) instead of working under it.
-    candles: Arc<[Candle]>,
-    start: u32,
-    current: u32,
+    /// The step resolution: the timeframe of `candles`.
+    base: Timeframe,
+    /// Closed base candles: context, the revealed ones up to the cut, maybe later ones.
+    /// Shared, so readers take it out of the lock (`replay_bars`) instead of working under it.
+    candles: Arc<Vec<Candle>>,
+    /// The cut when the replay began.
+    start: i64,
+    /// The close time of the last revealed base candle.
+    cut: i64,
     commands: Vec<Command>,
-    /// The simulation of `commands` up to `current`, until a step or a command changes it.
+    /// The simulation of `commands` up to the cut, until a step or a command changes it.
     sim: Option<Simulation>,
+    /// Started from the cache of a pair with a provider: it reads newer candles and can
+    /// catch up. A file's session (or a CSV pair's) ends at its last candle.
+    live: bool,
+    /// The cut at which the session caught up with real time and its backtest ended (for
+    /// a file, the one it was saved with). The cut never moves past it.
+    caught_up_at: Option<i64>,
+    /// Why the last load of newer candles failed; the next step tries again.
+    newer_error: Option<String>,
+    /// Bumped by every change a re-base must not overwrite: a step, a command, newer
+    /// candles, catching up. A re-base swaps its candles in only if it is unchanged.
+    version: u64,
+    /// The revealed candles aggregated to one timeframe above the base, at `version`: a step
+    /// aggregates once for its state, the indicators and the position outcomes.
+    view: Option<View>,
 }
 
-/// What the UI gets: the revealed bars from `from` on, never a bar after `current`, and
+struct View {
+    version: u64,
+    tf: Timeframe,
+    bars: Arc<Vec<Candle>>,
+}
+
+/// What the UI gets for one chart timeframe `tf` (the base or one that builds from it):
+/// the revealed bars of `tf` from index `from` on, never one with data after the cut, and
 /// the trades from `trades_from` on (closed trades never change, so the UI keeps those it
 /// has; the open trade, always the last, always comes).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReplayState {
     pub instrument: Instrument,
+    /// The step resolution.
+    pub base: Timeframe,
+    /// The timeframe of `bars`.
     pub tf: Timeframe,
+    /// Index of the `tf` bar that holds the first replayed base candle.
     pub start: u32,
+    /// Index of the last revealed `tf` bar.
     pub current: u32,
-    /// No bar is left to reveal.
+    /// The close time of the last revealed base candle. Commands carry it as their time.
+    pub cut: i64,
+    /// No base candle is left to reveal, and no newer one can be loaded (a file's end, a
+    /// pair without a provider, the candle limit, or caught up).
     pub at_end: bool,
+    /// The replay reached the newest data in this session: the pair's live data flows
+    /// again (for display), and no step and no command is taken.
+    pub caught_up: bool,
+    /// The cut at which the backtest ended at real time (also for a file saved after
+    /// catching up); the trade still open there is unfinished.
+    pub caught_up_at: Option<i64>,
+    /// The last `tf` bar is still forming: more base candles go into it.
+    pub partial: bool,
+    /// Why newer candles could not be loaded at the last step (a notice: the step itself
+    /// happened, and the next one tries again); `None` once a load worked.
+    pub newer_error: Option<String>,
     /// Index of `bars[0]`.
     pub from: u32,
     pub bars: Vec<Candle>,
@@ -49,20 +114,93 @@ pub struct ReplayState {
     pub stats: Stats,
 }
 
-/// A snapshot of the open replay's bars, taken by [`crate::Shared::replay_bars`].
+/// A snapshot of the open replay's revealed bars of one timeframe, taken by
+/// [`crate::Shared::replay_bars`].
 pub(crate) struct ReplayBars {
     pub instrument: Instrument,
     pub session: u64,
-    /// Index of the current bar: the snapshot's content is fixed by `(session, current)`.
-    pub current: u32,
-    candles: Arc<[Candle]>,
-    /// How many bars are revealed.
+    /// The snapshot's content is fixed by `(session, cut)`.
+    pub cut: i64,
+    base: Timeframe,
+    tf: Timeframe,
+    candles: Arc<Vec<Candle>>,
+    /// How many base candles are revealed.
     len: usize,
+    /// The session's aggregated bars of `tf`, when it had them at this cut.
+    view: Option<Arc<Vec<Candle>>>,
 }
 
 impl ReplayBars {
-    pub fn revealed(&self) -> &[Candle] {
-        &self.candles[..self.len]
+    /// The revealed bars of the snapshot's timeframe; aggregation (when the session had
+    /// none ready) runs here, off the lock.
+    pub fn revealed(&self) -> Result<Cow<'_, [Candle]>, EngineError> {
+        match &self.view {
+            Some(bars) => Ok(Cow::Borrowed(bars.as_slice())),
+            None => bars_of(&self.candles[..self.len], self.base, self.tf),
+        }
+    }
+}
+
+/// `tf` bars from revealed base candles; `tf` was checked with [`check_view`]. Fails only
+/// for a summed volume the UI cannot hold.
+fn bars_of(
+    shown: &[Candle],
+    base: Timeframe,
+    tf: Timeframe,
+) -> Result<Cow<'_, [Candle]>, EngineError> {
+    Ok(if tf == base {
+        Cow::Borrowed(shown)
+    } else {
+        Cow::Owned(aggregate(shown, base, tf).map_err(EngineError::Replay)?)
+    })
+}
+
+/// Whether a replay stepping `base` can show `tf`.
+fn check_view(base: Timeframe, tf: Timeframe) -> Result<(), EngineError> {
+    if tf.builds_from(base) {
+        return Ok(());
+    }
+    let (b, t) = (base.code(), tf.code());
+    Err(EngineError::Replay(if base.builds_from(tf) {
+        format!(
+            "the replay steps {b} candles, so {t} candles cannot be built from them; re-base it to {t} first"
+        )
+    } else {
+        format!("{t} candles cannot be built from {b} candles")
+    }))
+}
+
+/// Every number of `st` fits a JavaScript number exactly (±(2^53 - 1)), as the IPC layer
+/// requires; [`check_candles`] already bounds a file's candles and close times.
+fn js_safe(st: &ReplayState) -> Result<(), EngineError> {
+    let bars = st
+        .bars
+        .iter()
+        .flat_map(|c| [c.open_time, c.open, c.high, c.low, c.close, c.volume]);
+    let trades = st.trades.iter().flat_map(|t| {
+        [
+            t.entry_time,
+            t.entry_fill_time,
+            t.entry_price,
+            t.initial_stop,
+            t.stop,
+            t.take,
+        ]
+        .into_iter()
+        .chain(t.exit_time)
+        .chain(t.exit_fill_time)
+        .chain(t.exit_price)
+    });
+    let mut all = [st.cut]
+        .into_iter()
+        .chain(st.caught_up_at)
+        .chain(bars)
+        .chain(trades);
+    match all.find(|v| v.unsigned_abs() > JS_SAFE_MAX.unsigned_abs()) {
+        Some(v) => Err(EngineError::Replay(format!(
+            "the replay holds {v}, outside ±(2^53 - 1)"
+        ))),
+        None => Ok(()),
     }
 }
 
@@ -75,70 +213,211 @@ fn no_session() -> EngineError {
     EngineError::Replay("no replay is open".into())
 }
 
+fn caught_up_error(what: &str) -> EngineError {
+    EngineError::Replay(format!(
+        "the replay has caught up with real time, so its backtest is finished: it takes no {what}"
+    ))
+}
+
+/// Keeps the leading candles of `candles` that are closed at `now`.
+fn closed_by(candles: &mut Vec<Candle>, tf: Timeframe, now: i64) {
+    let n = candles.partition_point(|c| tf.close_time(c.open_time) <= now);
+    candles.truncate(n);
+}
+
 impl Session {
-    fn simulate(&self, commands: &[Command]) -> Result<Simulation, EngineError> {
-        simulate(&self.candles, self.start, self.current, commands).map_err(EngineError::Replay)
+    fn revealed_len(&self) -> usize {
+        revealed(self.base, &self.candles, self.cut).len()
     }
 
-    fn state(&mut self, cursor: u32, trades_from: u32) -> Result<ReplayState, EngineError> {
+    fn simulate(&self, commands: &[Command]) -> Result<Simulation, EngineError> {
+        let sim = simulate(self.base, &self.candles, self.start, self.cut, commands)
+            .map_err(EngineError::Replay)?;
+        Ok(if self.caught_up_at.is_some() {
+            sim.at_real_time()
+        } else {
+            sim
+        })
+    }
+
+    /// Caught up with real time in this run: the pair's live data is no longer held back.
+    fn caught_up(&self) -> bool {
+        self.live && self.caught_up_at.is_some()
+    }
+
+    /// Every loaded candle is revealed and newer ones may still be loaded.
+    fn wants_more(&self) -> bool {
+        self.live
+            && self.caught_up_at.is_none()
+            && self.candles.len() < MAX_CANDLES
+            && self.revealed_len() == self.candles.len()
+    }
+
+    /// The revealed candles aggregated to `tf` (above the base), once per `version`.
+    fn aggregated(&mut self, tf: Timeframe) -> Result<Arc<Vec<Candle>>, EngineError> {
+        if let Some(v) = self.ready(tf) {
+            return Ok(v);
+        }
+        let shown = revealed(self.base, &self.candles, self.cut);
+        let bars = Arc::new(aggregate(shown, self.base, tf).map_err(EngineError::Replay)?);
+        self.view = Some(View {
+            version: self.version,
+            tf,
+            bars: Arc::clone(&bars),
+        });
+        Ok(bars)
+    }
+
+    /// The aggregated bars of `tf`, if they are ready for this `version`.
+    fn ready(&self, tf: Timeframe) -> Option<Arc<Vec<Candle>>> {
+        self.view
+            .as_ref()
+            .filter(|v| v.version == self.version && v.tf == tf)
+            .map(|v| Arc::clone(&v.bars))
+    }
+
+    fn state(
+        &mut self,
+        tf: Timeframe,
+        cursor: u32,
+        trades_from: u32,
+    ) -> Result<ReplayState, EngineError> {
+        check_view(self.base, tf)?;
+        let view = (tf != self.base).then(|| self.aggregated(tf)).transpose()?;
         let sim = match self.sim.take() {
             Some(sim) => sim,
             None => self.simulate(&self.commands)?,
         };
-        let from = cursor.min(self.current + 1);
+        let shown = revealed(self.base, &self.candles, self.cut);
+        let bars: &[Candle] = view.as_deref().map_or(shown, Vec::as_slice);
+        // The base candle that closes at the start (the session simulated, so it exists).
+        let first = revealed(self.base, &self.candles, self.start)
+            .last()
+            .map_or(i64::MIN, |c| c.open_time);
+        let key = if tf == self.base {
+            first
+        } else {
+            tf.bucket_start(first)
+        };
+        let start = bars
+            .partition_point(|b| b.open_time <= key)
+            .saturating_sub(1);
+        let partial = tf != self.base
+            && bars
+                .last()
+                .is_some_and(|b| tf.bucket_end(b.open_time) > self.cut);
+        let from = (cursor as usize).min(bars.len());
         let open = sim
             .trades
             .last()
             .is_some_and(|t| t.reason == ExitReason::Open);
         let closed = sim.trades.len() - usize::from(open);
-        let tf = (trades_from as usize).min(closed);
+        let tfrom = (trades_from as usize).min(closed);
         let st = ReplayState {
             instrument: self.instrument.clone(),
-            tf: self.tf,
-            start: self.start,
-            current: self.current,
-            at_end: self.current as usize + 1 >= self.candles.len(),
-            from,
-            bars: self.candles[from as usize..=self.current as usize].to_vec(),
-            trades_from: tf as u32,
-            trades: sim.trades[tf..].to_vec(),
+            base: self.base,
+            tf,
+            start: start as u32,
+            current: bars.len().saturating_sub(1) as u32,
+            cut: self.cut,
+            at_end: shown.len() == self.candles.len() && !self.wants_more(),
+            caught_up: self.caught_up(),
+            caught_up_at: self.caught_up_at,
+            partial,
+            newer_error: self.newer_error.clone(),
+            from: from as u32,
+            bars: bars[from..].to_vec(),
+            trades_from: tfrom as u32,
+            trades: sim.trades[tfrom..].to_vec(),
             stats: sim.stats,
         };
         self.sim = Some(sim);
         Ok(st)
     }
+
+    /// Adds base candles newer than the last one (a candle with its open time replaces it)
+    /// up to the limit.
+    fn append(&mut self, candles: &[Candle]) {
+        let mut changed = false;
+        for c in candles {
+            let last = self.candles.last().copied();
+            match last {
+                Some(l) if l.open_time > c.open_time || l == *c => {}
+                Some(l) if l.open_time == c.open_time => {
+                    *Arc::make_mut(&mut self.candles)
+                        .last_mut()
+                        .expect("a last candle") = *c;
+                    changed = true;
+                }
+                _ if self.candles.len() >= MAX_CANDLES => break,
+                _ => {
+                    Arc::make_mut(&mut self.candles).push(*c);
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            self.sim = None;
+            self.version += 1;
+        }
+    }
 }
 
-impl crate::Shared {
+impl Shared {
     fn session(&self) -> MutexGuard<'_, Option<Session>> {
         self.replay.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// The instrument and the revealed bars (up to the current one) of the open replay, if
-    /// it replays `(id, tf)`. Indicators and position outcomes read these instead of the
-    /// cache, so they never see a bar the UI has not been shown (ADR 0005, decision 5).
-    /// Only an `Arc` is cloned under the lock; the work on the bars runs without it, so a
-    /// step never waits for it.
-    pub(crate) fn replay_bars(&self, id: &InstrumentId, tf: Timeframe) -> Option<ReplayBars> {
+    /// The revealed bars of `tf` of the open replay, if it replays `id` and holds its live
+    /// data back (not caught up). Indicators and position outcomes read these instead of
+    /// the cache, so they never see data after the cut (ADR 0005, decision 5). A `tf` that
+    /// cannot be built from the base is an error, never the cache. Only an `Arc` is cloned
+    /// under the lock; the work on the bars runs without it, so a step never waits for it.
+    pub(crate) fn replay_bars(
+        &self,
+        id: &InstrumentId,
+        tf: Timeframe,
+    ) -> Result<Option<ReplayBars>, EngineError> {
         let guard = self.session();
-        let s = guard
+        let Some(s) = guard
             .as_ref()
-            .filter(|s| s.instrument.id == *id && s.tf == tf)?;
-        Some(ReplayBars {
+            .filter(|s| s.instrument.id == *id && !s.caught_up())
+        else {
+            return Ok(None);
+        };
+        check_view(s.base, tf)?;
+        Ok(Some(ReplayBars {
             instrument: s.instrument.clone(),
             session: s.id,
-            current: s.current,
+            cut: s.cut,
+            base: s.base,
+            tf,
             candles: Arc::clone(&s.candles),
-            len: s.current as usize + 1,
-        })
+            len: s.revealed_len(),
+            view: (tf != s.base).then(|| s.ready(tf)).flatten(),
+        }))
     }
 
-    /// Live events of this instrument are held back while it is replayed.
+    /// Live events of this instrument are held back while it is replayed, until the replay
+    /// has caught up with them.
     pub(crate) fn replaying(&self, id: &InstrumentId) -> bool {
         self.session()
             .as_ref()
-            .is_some_and(|s| s.instrument.id == *id)
+            .is_some_and(|s| s.instrument.id == *id && !s.caught_up())
     }
+}
+
+/// What a re-base works from, copied out of the lock.
+struct Snapshot {
+    id: u64,
+    version: u64,
+    instrument: Instrument,
+    base: Timeframe,
+    candles: Arc<Vec<Candle>>,
+    start: i64,
+    cut: i64,
+    commands: Vec<Command>,
+    live: bool,
 }
 
 impl Engine {
@@ -149,107 +428,442 @@ impl Engine {
         f(self.shared.session().as_mut().ok_or_else(no_session)?)
     }
 
-    /// Starts a replay at the cached bar that opens at `start_time`, with up to
-    /// [`REPLAY_CONTEXT`] bars before it and every cached bar after it (within the file
-    /// limit). Replaces any open replay. Returns the state with every revealed bar.
+    /// Starts a replay stepping `base` at the cached candle that opens at `start_time`,
+    /// with up to [`REPLAY_CONTEXT`] candles before it and every closed cached candle after
+    /// it (within the file limit). Replaces any open replay. Returns the state of `base`
+    /// with every revealed bar; a start at the newest candle has caught up at once.
     pub async fn replay_start(
         &self,
         id: &InstrumentId,
-        tf: Timeframe,
+        base: Timeframe,
         start_time: i64,
     ) -> Result<ReplayState, EngineError> {
         let key = id.clone();
-        let (instrument, context, rest) = blocking(&self.shared.store, move |s| {
+        let (instrument, context, mut rest) = blocking(&self.shared.store, move |s| {
             let instrument = s.instrument(&key)?;
-            let context = s.candles_before(&key, tf, Some(start_time), REPLAY_CONTEXT)?;
+            let context = s.candles_before(&key, base, Some(start_time), REPLAY_CONTEXT)?;
             let room = MAX_CANDLES - context.len();
             let rest =
-                s.scan_candles_between(&key, tf, start_time.saturating_sub(1), i64::MAX, |it| {
+                s.scan_candles_between(&key, base, start_time.saturating_sub(1), i64::MAX, |it| {
                     it.take(room).collect::<Vec<_>>()
                 })?;
             Ok((instrument, context, rest))
         })
         .await?;
         let instrument = instrument.ok_or_else(|| EngineError::UnknownInstrument(id.clone()))?;
-        if rest.first().is_none_or(|c| c.open_time != start_time) {
+        // The newest cached candle may have been stored while it was still forming.
+        closed_by(&mut rest, base, self.now_ms());
+        let Some(first) = rest.first().filter(|c| c.open_time == start_time) else {
             return Err(EngineError::Replay(format!(
                 "no cached {} bar opens at {start_time}",
-                tf.code()
+                base.code()
             )));
-        }
-        let start = context.len() as u32;
+        };
+        let start = base.close_time(first.open_time);
         let mut candles = context;
         candles.extend(rest);
-        let mut session = Session {
+        let session = Session {
             id: next_session_id(),
+            live: self.provider(&id.source).is_some(),
             instrument,
-            tf,
-            candles: candles.into(),
+            base,
+            candles: Arc::new(candles),
             start,
-            current: start,
+            cut: start,
             commands: Vec::new(),
             sim: None,
+            caught_up_at: None,
+            newer_error: None,
+            version: 0,
+            view: None,
         };
-        let state = session.state(0, 0)?;
         *self.shared.session() = Some(session);
-        Ok(state)
+        let _ = self.load_newer().await;
+        self.replay_state(base, 0, 0)
     }
 
-    /// Reveals up to `n` more bars; returns the index of the current bar.
-    pub fn replay_step(&self, n: u32) -> Result<u32, EngineError> {
-        self.with_session(|s| {
-            let last = s.candles.len() as u32 - 1;
-            let next = s.current.saturating_add(n).min(last);
-            if next != s.current {
-                s.current = next;
-                s.sim = None;
+    /// Reveals up to `n` more base candles; returns the cut. Once every loaded candle is
+    /// revealed it loads newer ones; with none left the replay has caught up. Refused once
+    /// caught up (or for a file saved after catching up). The step stands when newer
+    /// candles cannot be loaded: the state reports why (`newer_error`) and the next step
+    /// tries again.
+    pub async fn replay_step(&self, n: u32) -> Result<i64, EngineError> {
+        self.with_session(|s| match s.caught_up_at {
+            Some(_) => Err(caught_up_error("steps")),
+            None => Ok(()),
+        })?;
+        // A load that failed at the last step is tried again first, so this step can reveal;
+        // failing again, it is not asked twice in one step.
+        let failed = self.load_newer().await;
+        let cut = self.with_session(|s| {
+            if s.caught_up_at.is_some() {
+                return Ok(s.cut); // that load found nothing newer: caught up
             }
-            Ok(s.current)
-        })
+            let shown = s.revealed_len();
+            let next = shown.saturating_add(n as usize).min(s.candles.len());
+            if next > shown {
+                s.cut = s.base.close_time(s.candles[next - 1].open_time);
+                s.sim = None;
+                s.version += 1;
+            }
+            Ok(s.cut)
+        })?;
+        if !failed {
+            self.load_newer().await;
+        }
+        Ok(cut)
     }
 
-    /// Appends a trade command if the session stays valid with it (bar order, revealed
-    /// bars only, one trade at a time, levels around the close).
+    /// When a session from the cache has revealed every loaded candle: loads the newer
+    /// closed base candles, or, when there are none, marks it caught up at its cut. A
+    /// failure is kept in the session (`newer_error`) for the UI to show; returns whether
+    /// one happened.
+    async fn load_newer(&self) -> bool {
+        let Some((sid, inst, base, last, room)) = self.shared.session().as_ref().and_then(|s| {
+            s.wants_more().then(|| {
+                let last = s.candles.last().map_or(i64::MIN, |c| c.open_time);
+                (
+                    s.id,
+                    s.instrument.clone(),
+                    s.base,
+                    last,
+                    MAX_CANDLES - s.candles.len(),
+                )
+            })
+        }) else {
+            return false;
+        };
+        let newer = self
+            .newer_candles(&inst, base, last, room.min(NEWER_BATCH))
+            .await;
+        let mut guard = self.shared.session();
+        let Some(s) = guard.as_mut().filter(|s| s.id == sid && s.wants_more()) else {
+            return false; // replaced or changed meanwhile
+        };
+        match newer {
+            Ok(newer) if newer.is_empty() => {
+                s.caught_up_at = Some(s.cut);
+                s.sim = None;
+                s.version += 1;
+                s.newer_error = None;
+            }
+            Ok(newer) => {
+                s.append(&newer);
+                s.newer_error = None;
+            }
+            Err(e) => {
+                s.newer_error = Some(e.to_string());
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Closed base candles after the one opening at `last`, at most `room`: the cached
+    /// ones when they follow it without a gap, else the provider's (kept in memory only).
+    /// Empty means caught up: the candle after `last` has not closed yet.
+    async fn newer_candles(
+        &self,
+        inst: &Instrument,
+        base: Timeframe,
+        last: i64,
+        room: usize,
+    ) -> Result<Vec<Candle>, EngineError> {
+        let now = self.now_ms();
+        let from = base.close_time(last);
+        if base.close_time(from) > now {
+            return Ok(Vec::new()); // the next candle has not closed: nothing to ask for
+        }
+        let key = inst.id.clone();
+        let mut cached = blocking(&self.shared.store, move |s| {
+            s.scan_candles_between(&key, base, last, i64::MAX, |it| {
+                it.take(room).collect::<Vec<_>>()
+            })
+        })
+        .await?;
+        closed_by(&mut cached, base, now);
+        let Some(provider) = self.provider(&inst.id.source) else {
+            return Ok(cached);
+        };
+        if cached.first().is_some_and(|c| c.open_time == from) {
+            return Ok(cached);
+        }
+        match fetch_window(provider.as_ref(), inst, base, from, now, room).await {
+            // Caught up only when no newer candle can have closed yet; nothing while one
+            // has is a gap in the exchange's data or a bad answer, not real time.
+            Ok(fetched) if fetched.is_empty() && base.close_time(from) <= now => {
+                self.shared.note_ok();
+                Err(EngineError::Replay(format!(
+                    "no {} candle came from {from} on, though one has closed since; the next step asks again",
+                    base.code()
+                )))
+            }
+            Ok(fetched) => {
+                self.shared.note_ok();
+                Ok(fetched)
+            }
+            Err(e) => {
+                self.shared.note_error(&e);
+                Err(EngineError::Replay(format!(
+                    "the newest {} candles could not be loaded: {e}",
+                    base.code()
+                )))
+            }
+        }
+    }
+
+    /// Changes the step resolution to `base`, keeping the cut, the start and the commands
+    /// (they are times). A lower base loads its candles (the cache, else the provider) from
+    /// before the start to the newest closed one (to the last candle for a file); a higher
+    /// one is built from the current candles and needs the cut on its boundary. The
+    /// commands play again on the new candles; a session they do not fit is refused and
+    /// stays as it was. Returns the state of `base` with every revealed bar.
+    pub async fn replay_set_base(&self, base: Timeframe) -> Result<ReplayState, EngineError> {
+        let snap = self.with_session(|s| {
+            Ok(Snapshot {
+                id: s.id,
+                version: s.version,
+                instrument: s.instrument.clone(),
+                base: s.base,
+                candles: Arc::clone(&s.candles),
+                start: s.start,
+                cut: s.cut,
+                commands: s.commands.clone(),
+                // A finished backtest loads nothing past its cut, as a file does not.
+                live: s.live && s.caught_up_at.is_none(),
+            })
+        })?;
+        let (old, new) = (snap.base.code(), base.code());
+        if base == snap.base {
+            return self.replay_state(base, 0, 0);
+        }
+        let candles = if snap.base.builds_from(base) {
+            self.lower_candles(&snap, base).await?
+        } else if base.builds_from(snap.base) {
+            // On the new base's boundary only: a snap down would hide candles already seen,
+            // a snap up would show unseen ones.
+            if base.bucket_start(snap.cut) != snap.cut {
+                return Err(EngineError::Replay(format!(
+                    "the replay is at {}, inside a {new} candle; step to {} first, where it closes",
+                    snap.cut,
+                    base.bucket_end(snap.cut)
+                )));
+            }
+            higher_candles(&snap.candles, snap.base, base).map_err(EngineError::Replay)?
+        } else {
+            return Err(EngineError::Replay(format!(
+                "a replay of {old} candles cannot step {new} candles: their boundaries do not line up"
+            )));
+        };
+        let close = |c: &Candle| base.close_time(c.open_time);
+        // A gap in the new candles moves the start up and the cut down to candles it has.
+        let start = candles
+            .iter()
+            .map(close)
+            .find(|&t| t >= snap.start)
+            .unwrap_or(snap.start);
+        let cut = revealed(base, &candles, snap.cut)
+            .last()
+            .map_or(snap.cut, close);
+        let sim = simulate(base, &candles, start, cut, &snap.commands).map_err(|e| {
+            EngineError::Replay(format!("the replay cannot step {new} candles: {e}"))
+        })?;
+        {
+            let mut guard = self.shared.session();
+            let s = guard
+                .as_mut()
+                .filter(|s| s.id == snap.id && s.version == snap.version)
+                .ok_or_else(|| {
+                    EngineError::Replay(
+                        "the replay changed while it was re-based; change the update interval again"
+                            .into(),
+                    )
+                })?;
+            s.id = next_session_id();
+            s.view = None;
+            s.base = base;
+            s.candles = Arc::new(candles);
+            s.start = start;
+            s.cut = cut;
+            // A finished backtest stays finished, at the cut on the new candles.
+            s.caught_up_at = s.caught_up_at.map(|_| cut);
+            s.sim = Some(if s.caught_up_at.is_some() {
+                sim.at_real_time()
+            } else {
+                sim
+            });
+        }
+        let _ = self.load_newer().await;
+        self.replay_state(base, 0, 0)
+    }
+
+    /// Candles of the lower `base` for a re-base: from before the start (the old context's
+    /// span, at most [`REBASE_CONTEXT`]) to a page past the cut ([`AHEAD`]; steps load the
+    /// rest as they reach it), or to the old last candle for a session that loads nothing
+    /// newer. The cache gives what it holds of that window and the provider only the parts
+    /// before and after it. Refused when the part from the start to the cut (to the last
+    /// candle for a session that loads nothing newer) does not fit [`MAX_CANDLES`].
+    async fn lower_candles(
+        &self,
+        snap: &Snapshot,
+        base: Timeframe,
+    ) -> Result<Vec<Candle>, EngineError> {
+        let new = base.code();
+        let len = base
+            .fixed_ms()
+            .ok_or_else(|| EngineError::Replay(format!("cannot re-base to {new}")))?;
+        // The new candle that closes at the start opens one length before it.
+        let first = snap.start - len;
+        let (held, end) = match snap.candles.last() {
+            Some(c) if !snap.live => {
+                let last = snap.base.close_time(c.open_time);
+                (last, last)
+            }
+            _ => (snap.cut, (snap.cut + AHEAD as i64 * len).min(self.now_ms())),
+        };
+        if (held - first) / len > MAX_CANDLES as i64 {
+            let most = MAX_CANDLES as i64 * len / DAY_MS;
+            let span = (held - first + DAY_MS - 1) / DAY_MS;
+            let to = if snap.live {
+                "its cut"
+            } else {
+                "its last candle"
+            };
+            return Err(EngineError::Replay(format!(
+                "a replay holds at most {MAX_CANDLES} candles: at {new} that is {most} days from its start to {to}, and this one spans {span} days; replay at a higher step or start later"
+            )));
+        }
+        let end = end.min(first + MAX_CANDLES as i64 * len);
+        let need = usize::try_from((end - first) / len).unwrap_or(MAX_CANDLES);
+        let old_first = snap.candles.first().map_or(first, |c| c.open_time);
+        let span = usize::try_from((first - old_first).max(0) / len).unwrap_or(0);
+        let context = span.min(REBASE_CONTEXT).min(MAX_CANDLES - need);
+        let from = first - context as i64 * len;
+        let want = need + context;
+        let key = snap.instrument.id.clone();
+        let mut cached = blocking(&self.shared.store, move |s| {
+            s.scan_candles_between(&key, base, from - 1, end, |it| {
+                it.take(want).collect::<Vec<_>>()
+            })
+        })
+        .await?;
+        cached.retain(|c| base.close_time(c.open_time) <= end);
+        let Some(provider) = self.provider(&snap.instrument.id.source) else {
+            return Ok(cached);
+        };
+        // The stored series is contiguous, so only the window's ends can be missing.
+        let (head_to, tail_from) = match (cached.first(), cached.last()) {
+            (Some(f), Some(l)) => (f.open_time, base.close_time(l.open_time)),
+            _ => (end, end),
+        };
+        let head = self
+            .window(provider.as_ref(), snap, base, from, head_to)
+            .await?;
+        let tail = self
+            .window(provider.as_ref(), snap, base, tail_from, end)
+            .await?;
+        Ok([head, cached, tail].concat())
+    }
+
+    /// The provider's `base` candles that open at or after `from` and close by `to`, for a
+    /// re-base (kept in memory only).
+    async fn window(
+        &self,
+        provider: &dyn Provider,
+        snap: &Snapshot,
+        base: Timeframe,
+        from: i64,
+        to: i64,
+    ) -> Result<Vec<Candle>, EngineError> {
+        let Some(n) = base
+            .fixed_ms()
+            .map(|len| (to - from) / len)
+            .filter(|&n| n > 0)
+        else {
+            return Ok(Vec::new());
+        };
+        let n = usize::try_from(n).unwrap_or(MAX_CANDLES).min(MAX_CANDLES);
+        match fetch_window(provider, &snap.instrument, base, from, to, n).await {
+            Ok(fetched) => {
+                self.shared.note_ok();
+                Ok(fetched)
+            }
+            Err(e) => {
+                self.shared.note_error(&e);
+                Err(EngineError::Replay(format!(
+                    "the {} candles could not be loaded: {e}",
+                    base.code()
+                )))
+            }
+        }
+    }
+
+    /// Appends a trade command given at the cut (its time must be the cut) if the session
+    /// stays valid with it (one trade at a time, levels around the close).
+    /// Refused once caught up: the backtest is finished, and the live chart shows prices
+    /// after the cut.
     pub fn replay_command(&self, cmd: Command) -> Result<(), EngineError> {
         self.with_session(|s| {
+            if s.caught_up_at.is_some() {
+                return Err(caught_up_error("commands"));
+            }
+            // Only the bar on screen can be traded: a command made before a step has no say
+            // over candles the user has seen since.
+            if cmd.time() != s.cut {
+                return Err(EngineError::Replay(format!(
+                    "a command is given at the cut {}, not at {}",
+                    s.cut,
+                    cmd.time()
+                )));
+            }
             let mut next = s.commands.clone();
             next.push(cmd);
             let sim = s.simulate(&next)?;
             s.commands = next;
             s.sim = Some(sim);
+            s.version += 1;
             Ok(())
         })
     }
 
-    /// The session with the revealed bars from index `cursor` on and the trades from index
-    /// `trades_from` on (the UI passes how many bars and closed trades it already has), and
-    /// the statistics.
-    pub fn replay_state(&self, cursor: u32, trades_from: u32) -> Result<ReplayState, EngineError> {
-        self.with_session(|s| s.state(cursor, trades_from))
+    /// The session as a chart of `tf` shows it: its revealed bars from index `cursor` on
+    /// and the trades from index `trades_from` on (the UI passes how many bars and closed
+    /// trades it already has; the last bar of a higher timeframe may be partial and change),
+    /// and the statistics. `tf` must build from the base.
+    pub fn replay_state(
+        &self,
+        tf: Timeframe,
+        cursor: u32,
+        trades_from: u32,
+    ) -> Result<ReplayState, EngineError> {
+        self.with_session(|s| s.state(tf, cursor, trades_from))
     }
 
-    /// The default name of the session's file, `<symbol>-<timeframe>.replay`, with only
+    /// The default name of the session's file, `<symbol>-<base>.replay`, with only
     /// file-safe characters (a CSV symbol is whatever the user typed).
     pub fn replay_file_name(&self) -> Result<String, EngineError> {
-        self.with_session(|s| Ok(file_name(&s.instrument.id.symbol, s.tf)))
+        self.with_session(|s| Ok(file_name(&s.instrument.id.symbol, s.base)))
     }
 
-    /// The `.replay` file: context and revealed bars only, never a bar after the current one.
+    /// The `.replay` file: context and revealed candles, never a candle after the cut (so
+    /// none after catching up, where the cut stopped), and the catch-up time.
     pub fn replay_export(&self) -> Result<Vec<u8>, EngineError> {
         self.with_session(|s| {
             let file = ReplayFile {
                 instrument: s.instrument.clone(),
-                timeframe: s.tf,
-                candles: s.candles[..=s.current as usize].to_vec(),
+                base: s.base,
+                candles: revealed(s.base, &s.candles, s.cut).to_vec(),
                 start: s.start,
-                current: s.current,
+                cut: s.cut,
                 commands: s.commands.clone(),
+                caught_up_at: s.caught_up_at,
             };
             Ok(file.to_json().into_bytes())
         })
     }
 
-    /// Checks a `.replay` file and opens it as the session, revealed up to its current bar.
+    /// Checks a `.replay` file and opens it as the session, revealed up to its cut; candles
+    /// the file has after the cut can be stepped to. It never loads newer candles.
     /// When the pair is stored, the session takes the stored instrument, and a file at
     /// another tick or lot size is rescaled to it, so drawings and outcomes of the pair
     /// stay at one scale; a file that no longer fits or simulates after rounding is refused.
@@ -263,22 +877,31 @@ impl Engine {
                 file = file
                     .rescaled(ps, qs)
                     .ok_or_else(|| at("a value does not fit".into()))?;
-                check_candles(&file.candles).map_err(at)?;
-                simulate(&file.candles, file.start, file.current, &file.commands).map_err(at)?;
+                check_candles(file.base, &file.candles).map_err(at)?;
+                file.simulate().map_err(at)?;
             }
             file.instrument = inst;
         }
+        let base = file.base;
         let mut session = Session {
             id: next_session_id(),
             instrument: file.instrument,
-            tf: file.timeframe,
-            candles: file.candles.into(),
+            base,
+            candles: Arc::new(file.candles),
             start: file.start,
-            current: file.current,
+            cut: file.cut,
             commands: file.commands,
             sim: None,
+            live: false,
+            caught_up_at: file.caught_up_at,
+            newer_error: None,
+            version: 0,
+            view: None,
         };
-        let state = session.state(0, 0)?;
+        // The whole state is built and checked before the open session is replaced, so a
+        // file the UI could not show leaves the session as it was.
+        let state = session.state(base, 0, 0)?;
+        js_safe(&state)?;
         *self.shared.session() = Some(session);
         Ok(state)
     }
@@ -287,6 +910,23 @@ impl Engine {
     pub fn replay_exit(&self) {
         *self.shared.session() = None;
     }
+}
+
+/// Candles of the higher `base` for a re-base, built from the `old` ones; a bucket they
+/// cover only in part (at either end) is left out.
+fn higher_candles(src: &[Candle], old: Timeframe, base: Timeframe) -> Result<Vec<Candle>, String> {
+    let mut out = aggregate(src, old, base)?;
+    if let (Some(f), Some(c)) = (out.first(), src.first())
+        && c.open_time > f.open_time
+    {
+        out.remove(0);
+    }
+    if let (Some(l), Some(c)) = (out.last(), src.last())
+        && base.bucket_end(l.open_time) > old.close_time(c.open_time)
+    {
+        out.pop();
+    }
+    Ok(out)
 }
 
 /// `<symbol>-<tf>.replay` keeping only A-Z, a-z, 0-9, `.`, `_` and `-` of the symbol, and no
@@ -303,9 +943,105 @@ fn file_name(symbol: &str, tf: Timeframe) -> String {
 
 #[cfg(test)]
 mod tests {
-    use sandchart_core::Timeframe;
+    use sandchart_core::{Candle, Timeframe};
 
-    use super::file_name;
+    use super::{file_name, higher_candles};
+
+    /// The re-base cases of the replay fixture, which the browser mock's `mockHigher` is
+    /// checked against too.
+    #[test]
+    fn higher_candles_match_the_fixture() {
+        #[derive(serde::Deserialize)]
+        struct Case {
+            name: String,
+            base: String,
+            tf: String,
+            candles: Vec<[i64; 6]>,
+            expect: Option<Vec<[i64; 6]>>,
+            error: Option<String>,
+        }
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../core/tests/fixtures/replay.json")).unwrap();
+        let cases: Vec<Case> = serde_json::from_value(fixture["rebase"]["higher"].clone()).unwrap();
+        assert!(cases.len() >= 3);
+        let rows = |r: &[[i64; 6]]| -> Vec<Candle> {
+            r.iter()
+                .map(|&[open_time, open, high, low, close, volume]| Candle {
+                    open_time,
+                    open,
+                    high,
+                    low,
+                    close,
+                    volume,
+                })
+                .collect()
+        };
+        let tf = |c: &str| Timeframe::from_code(c).unwrap();
+        for c in &cases {
+            let got = higher_candles(&rows(&c.candles), tf(&c.base), tf(&c.tf));
+            match (&c.expect, &c.error) {
+                (Some(want), None) => assert_eq!(got.unwrap(), rows(want), "{}", c.name),
+                (None, Some(msg)) => assert_eq!(got.unwrap_err(), *msg, "{}", c.name),
+                _ => panic!("{}: needs exactly one of expect and error", c.name),
+            }
+        }
+    }
+
+    #[test]
+    fn a_higher_view_is_aggregated_once_per_change_of_the_session() {
+        use std::sync::Arc;
+
+        use sandchart_core::{Instrument, InstrumentId};
+
+        use super::Session;
+        let h = 3_600_000;
+        let candles: Vec<Candle> = (0..12)
+            .map(|i| Candle {
+                open_time: i * h,
+                open: 10,
+                high: 11,
+                low: 9,
+                close: 10,
+                volume: 1,
+            })
+            .collect();
+        let mut s = Session {
+            id: 1,
+            instrument: Instrument {
+                id: InstrumentId {
+                    source: "binance".into(),
+                    symbol: "BTCUSDT".into(),
+                },
+                base: "BTC".into(),
+                quote: "USDT".into(),
+                price_scale: 2,
+                qty_scale: 5,
+            },
+            base: Timeframe::H1,
+            candles: Arc::new(candles),
+            start: h,
+            cut: 6 * h,
+            commands: Vec::new(),
+            sim: None,
+            live: false,
+            caught_up_at: None,
+            newer_error: None,
+            version: 0,
+            view: None,
+        };
+        let a = s.aggregated(Timeframe::H4).unwrap();
+        let b = s.state(Timeframe::H4, 0, 0).unwrap();
+        assert!(Arc::ptr_eq(&a, &s.ready(Timeframe::H4).unwrap()), "kept");
+        assert_eq!(b.bars, *a);
+        assert_eq!(a.len(), 2);
+        assert!(s.ready(Timeframe::H2).is_none(), "one timeframe at a time");
+        // A step changes the session: the bars are built again, with the new candle.
+        s.cut += h;
+        s.version += 1;
+        assert!(s.ready(Timeframe::H4).is_none());
+        let c = s.aggregated(Timeframe::H4).unwrap();
+        assert_eq!(c[1].volume, 3);
+    }
 
     #[test]
     fn file_names_keep_only_safe_characters() {

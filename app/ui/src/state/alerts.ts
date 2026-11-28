@@ -101,6 +101,16 @@ export class AlertController {
     });
   }
 
+  /** Moves a price alert to `price` ticks at `priceScale` (a dragged level): the same id and direction, armed again. */
+  movePrice(id: string, priceScale: number, price: number): Promise<void> {
+    const a = this.list.find((x) => x.id === id);
+    if (!a || a.kind.kind !== "price") return Promise.resolve();
+    this.unseen.delete(id);
+    return this.change(() =>
+      this.backend.setAlert({ id, instrument: a.instrument, priceScale, kind: { kind: "price", price }, direction: a.direction }),
+    );
+  }
+
   rearm(id: string): Promise<void> {
     this.unseen.delete(id);
     return this.change(() => this.backend.rearmAlert(id));

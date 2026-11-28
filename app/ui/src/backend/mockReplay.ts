@@ -1,11 +1,13 @@
-// TEST-ONLY CODE. The real replay is `sandchart_core::replay` in Rust (simulate, stats and the
-// `.replay` file); this copy lets the browser mock answer, and mock.test.ts checks it against
-// the same fixture as Rust (crates/core/tests/fixtures/replay.json).
+// TEST-ONLY CODE. The real replay is `sandchart_core::replay` and `sandchart_core::aggregate` in
+// Rust (simulate, stats, aggregation and the `.replay` file); this copy lets the browser mock
+// answer, and mockReplay.test.ts checks it against the same fixture as Rust
+// (crates/core/tests/fixtures/replay.json). See ADR 0008.
 import { mockResolve } from "./mock";
 import type { Instrument, ReplayCommand, ReplayStats, ReplayTrade, Side, TimeframeCode } from "./types";
 import { TIMEFRAME_CODES } from "./types";
+import { bucketStart as mockBucketStart, buildsFrom as mockBuildsFrom, closeTime as mockCloseTime, FIXED_MS } from "../timeframes";
 
-export const MOCK_REPLAY_VERSION = 1;
+export const MOCK_REPLAY_VERSION = 2;
 export const MOCK_MAX_REPLAY_CANDLES = 200_000;
 export const MOCK_MAX_REPLAY_COMMANDS = 10_000;
 export const MOCK_MAX_REPLAY_BYTES = 32 * 1024 * 1024;
@@ -21,9 +23,84 @@ export interface MockCandle {
   volume: number;
 }
 
+/** The bucket rules live in `src/timeframes.ts`; the mock reads them under its own names. */
+export { bucketStart as mockBucketStart, buildsFrom as mockBuildsFrom, closeTime as mockCloseTime } from "../timeframes";
+
+/** `aggregate` from Rust: `tf` candles from ascending `base` candles, the last bucket maybe partial. */
+export function mockAggregate(candles: MockCandle[], base: TimeframeCode, tf: TimeframeCode): MockCandle[] {
+  if (!mockBuildsFrom(tf, base)) throw new Error(`${tf} candles cannot be built from ${base} candles`);
+  if (tf === base) return candles.map((c) => ({ ...c }));
+  const out: MockCandle[] = [];
+  for (const c of candles) {
+    const start = mockBucketStart(tf, c.time);
+    const b = out.at(-1);
+    if (b && b.time === start) {
+      b.high = Math.max(b.high, c.high);
+      b.low = Math.min(b.low, c.low);
+      b.close = c.close;
+      b.volume += c.volume;
+      if (b.volume > SAFE) throw new Error(`the ${tf} candle at ${start} sums a volume above 2^53 - 1; show a lower timeframe`);
+    } else {
+      out.push({ ...c, time: start });
+    }
+  }
+  return out;
+}
+
+/** `check_view` from the engine: why a replay stepping `base` cannot show `tf`, or null. */
+export function mockViewError(base: TimeframeCode, tf: TimeframeCode): string | null {
+  if (mockBuildsFrom(tf, base)) return null;
+  if (mockBuildsFrom(base, tf)) return `the replay steps ${base} candles, so ${tf} candles cannot be built from them; re-base it to ${tf} first`;
+  return `${tf} candles cannot be built from ${base} candles`;
+}
+
+/**
+ * The mock's stand-in for the lower candles the engine loads on a re-base: `c` split into its
+ * `lower` candles, which aggregate back to exactly `c` (the high in the first, the low in the second,
+ * the close in the last). `lower` builds `base` and is shorter; neither is 1M.
+ */
+export function mockSplit(c: MockCandle, base: TimeframeCode, lower: TimeframeCode): MockCandle[] {
+  const step = FIXED_MS[lower]!;
+  const n = Math.round((mockCloseTime(base, c.time) - c.time) / step);
+  if (n <= 1) return [{ ...c }];
+  const share = Math.floor(c.volume / n);
+  return Array.from({ length: n }, (_, k) => ({
+    time: c.time + k * step,
+    open: k === 0 ? c.open : c.close,
+    high: k === 0 ? c.high : c.close,
+    low: k === 0 ? Math.min(c.open, c.close) : k === 1 ? c.low : c.close,
+    close: c.close,
+    volume: k === n - 1 ? c.volume - share * (n - 1) : share,
+  }));
+}
+
+/** `higher_candles` from the engine: `tf` candles built from `candles`, without a bucket they cover only in part at either end. */
+export function mockHigher(candles: MockCandle[], base: TimeframeCode, tf: TimeframeCode): MockCandle[] {
+  const out = mockAggregate(candles, base, tf);
+  const first = candles[0];
+  const last = candles.at(-1);
+  if (first && out[0] && first.time > out[0].time) out.shift();
+  const end = out.at(-1);
+  if (last && end && mockCloseTime(tf, end.time) > mockCloseTime(base, last.time)) out.pop();
+  return out;
+}
+
+/** `revealed` from Rust: the base candles that close at or before `cut`. */
+export function mockRevealed(base: TimeframeCode, candles: MockCandle[], cut: number): MockCandle[] {
+  const n = candles.findIndex((c) => mockCloseTime(base, c.time) > cut);
+  return n < 0 ? candles : candles.slice(0, n);
+}
+
+/** Index of the candle that closes exactly at `t`, or -1. */
+function closingAt(base: TimeframeCode, candles: MockCandle[], t: number): number {
+  return candles.findIndex((c) => mockCloseTime(base, c.time) === t);
+}
+
 interface Running {
+  base: TimeframeCode;
   side: Side;
-  entryBar: number;
+  /** Index of the candle the trade was filled on. */
+  entry: number;
   entryPrice: number;
   initialStop: number;
   stop: number;
@@ -37,14 +114,14 @@ const rAt = (t: Running, exit: number) => (exit - t.entryPrice) / (t.entryPrice 
 function finish(t: Running, candles: MockCandle[], bar: number, price: number, reason: ReplayTrade["reason"], ambiguous: boolean): ReplayTrade {
   return {
     side: t.side,
-    entryBar: t.entryBar,
-    entryTime: candles[t.entryBar]!.time,
+    entryTime: candles[t.entry]!.time,
+    entryFillTime: mockCloseTime(t.base, candles[t.entry]!.time),
     entryPrice: t.entryPrice,
     initialStop: t.initialStop,
     stop: t.stop,
     take: t.take,
-    exitBar: bar,
     exitTime: candles[bar]!.time,
+    exitFillTime: mockCloseTime(t.base, candles[bar]!.time),
     exitPrice: price,
     reason,
     ambiguous,
@@ -84,28 +161,32 @@ function checkLevels(side: Side, price: number, stop: number, take: number): str
   return null;
 }
 
-/** `simulate` from Rust: throws the same message on the first command that breaks a rule. */
+/** `simulate` from Rust over `base` candles from the cut `start` to the cut `cut`: throws the same message on the first rule broken. */
 export function mockSimulate(
+  base: TimeframeCode,
   candles: MockCandle[],
   start: number,
-  current: number,
+  cut: number,
   commands: ReplayCommand[],
 ): { trades: ReplayTrade[]; stats: ReplayStats } {
-  if (start > current || current >= candles.length) {
-    throw new Error(`start ${start} and current ${current} must satisfy start <= current < ${candles.length} candles`);
-  }
+  if (start > cut) throw new Error(`the start ${start} is after the cut ${cut}`);
+  if (closingAt(base, candles, start) < 0) throw new Error(`the start ${start} is not the close time of a candle`);
+  const current = closingAt(base, candles, cut);
+  if (current < 0) throw new Error(`the cut ${cut} is not the close time of a candle`);
   if (commands.length > MOCK_MAX_REPLAY_COMMANDS) {
     throw new Error(`at most ${MOCK_MAX_REPLAY_COMMANDS} commands, not ${commands.length}`);
   }
   const trades: ReplayTrade[] = [];
   let open: Running | null = null;
-  let lastBar = start;
+  let lastTime = start;
   for (const [i, cmd] of commands.entries()) {
     const n = i + 1;
-    const bar = cmd.bar;
-    if (bar < start || bar > current) throw new Error(`command ${n}: bar ${bar} is outside the replay (${start}..=${current})`);
-    if (bar < lastBar) throw new Error(`command ${n}: bar ${bar} comes before bar ${lastBar} of the previous command`);
-    lastBar = bar;
+    const t = cmd.time;
+    if (t < start || t > cut) throw new Error(`command ${n}: time ${t} is outside the replay (${start}..=${cut})`);
+    if (t < lastTime) throw new Error(`command ${n}: time ${t} comes before time ${lastTime} of the previous command`);
+    lastTime = t;
+    const bar = closingAt(base, candles, t);
+    if (bar < 0) throw new Error(`command ${n}: time ${t} is not the close time of a candle`);
     if (open) {
       const done = advance(open, candles, bar);
       if (done) {
@@ -118,7 +199,7 @@ export function mockSimulate(
       if (open) throw new Error(`command ${n}: a trade is already open`);
       const bad = checkLevels(cmd.side, close, cmd.stop, cmd.take);
       if (bad) throw new Error(`command ${n}: ${bad}`);
-      open = { side: cmd.side, entryBar: bar, entryPrice: close, initialStop: cmd.stop, stop: cmd.stop, take: cmd.take, next: bar + 1 };
+      open = { base, side: cmd.side, entry: bar, entryPrice: close, initialStop: cmd.stop, stop: cmd.stop, take: cmd.take, next: bar + 1 };
     } else if (cmd.kind === "edit") {
       const t: Running | null = open;
       if (!t) throw new Error(`command ${n}: no open trade to edit`);
@@ -142,14 +223,14 @@ export function mockSimulate(
     trades.push(
       done ?? {
         side: last.side,
-        entryBar: last.entryBar,
-        entryTime: candles[last.entryBar]!.time,
+        entryTime: candles[last.entry]!.time,
+        entryFillTime: mockCloseTime(base, candles[last.entry]!.time),
         entryPrice: last.entryPrice,
         initialStop: last.initialStop,
         stop: last.stop,
         take: last.take,
-        exitBar: null,
         exitTime: null,
+        exitFillTime: null,
         exitPrice: null,
         reason: "open",
         ambiguous: false,
@@ -158,6 +239,13 @@ export function mockSimulate(
     );
   }
   return { trades, stats: mockStats(trades) };
+}
+
+/** `Simulation::at_real_time` from Rust: the trade still open is unfinished; the stats stay. */
+export function mockAtRealTime<T extends { trades: ReplayTrade[] }>(sim: T): T {
+  const last = sim.trades.at(-1);
+  if (last?.reason === "open") last.reason = "unfinished";
+  return sim;
 }
 
 /** `stats` from Rust, summed in the same order. */
@@ -173,7 +261,7 @@ export function mockStats(trades: ReplayTrade[]): ReplayStats {
   let streak = 0;
   let longest = 0;
   for (const t of trades) {
-    if (t.reason === "open") continue;
+    if (t.reason === "open" || t.reason === "unfinished") continue;
     count++;
     total += t.r;
     if (t.r > 0) {
@@ -217,14 +305,29 @@ export async function mockCandleHash(candles: MockCandle[]): Promise<string> {
 
 export interface MockReplayFile {
   instrument: Instrument;
-  tf: TimeframeCode;
+  /** The step resolution, the timeframe of `candles`. */
+  base: TimeframeCode;
   candles: MockCandle[];
+  /** The cut when the replay began. */
   start: number;
-  current: number;
+  /** The close time of the last revealed candle. */
+  cut: number;
   commands: ReplayCommand[];
+  /** The cut at which the replay caught up with real time, or null. */
+  caughtUpAt: number | null;
 }
 
-/** The file text in Rust's layout: one command and one candle per line. */
+/** `ReplayFile::simulate` from Rust: checks the catch-up time, simulates, ends the backtest there. */
+export function mockSimulateFile(f: MockReplayFile) {
+  if (f.caughtUpAt !== null) {
+    if (f.caughtUpAt !== f.cut) throw new Error(`the replay caught up at ${f.caughtUpAt}, which is not its cut ${f.cut}`);
+    if (mockRevealed(f.base, f.candles, f.cut).length !== f.candles.length) throw new Error("a replay that caught up has no candle after its cut");
+  }
+  const sim = mockSimulate(f.base, f.candles, f.start, f.cut, f.commands);
+  return f.caughtUpAt === null ? sim : mockAtRealTime(sim);
+}
+
+/** The file text in Rust's layout (always version 2): one command and one candle per line. */
 export async function mockWriteReplay(f: MockReplayFile): Promise<string> {
   const i = f.instrument;
   const instrument = { source: i.id.source, symbol: i.id.symbol, base: i.base, quote: i.quote, priceScale: i.priceScale, qtyScale: i.qtyScale };
@@ -232,22 +335,21 @@ export async function mockWriteReplay(f: MockReplayFile): Promise<string> {
   const commands = lines(f.commands.map((c) => JSON.stringify(c)));
   const candles = lines(f.candles.map((c) => `[${c.time}, ${c.open}, ${c.high}, ${c.low}, ${c.close}, ${c.volume}]`));
   return (
-    `{\n  "version": ${MOCK_REPLAY_VERSION},\n  "instrument": ${JSON.stringify(instrument)},\n  "timeframe": ${JSON.stringify(f.tf)},\n` +
-    `  "start": ${f.start},\n  "current": ${f.current},\n  "sha256": "${await mockCandleHash(f.candles)}",\n` +
+    `{\n  "version": ${MOCK_REPLAY_VERSION},\n  "instrument": ${JSON.stringify(instrument)},\n  "base": ${JSON.stringify(f.base)},\n` +
+    `  "start": ${f.start},\n  "cut": ${f.cut},\n${f.caughtUpAt === null ? "" : `  "caughtUpAt": ${f.caughtUpAt},\n`}  "sha256": "${await mockCandleHash(f.candles)}",\n` +
     `  "commands": ${commands},\n  "candles": ${candles}\n}\n`
   );
 }
 
-const FILE_FIELDS = ["version", "instrument", "timeframe", "start", "current", "sha256", "commands", "candles"];
+/** Fields of each file version, and of its commands (`at`: the field that places a command). */
+const SHAPES = {
+  1: { file: ["version", "instrument", "timeframe", "start", "current", "sha256", "commands", "candles"], may: [], at: "bar" },
+  2: { file: ["version", "instrument", "base", "start", "cut", "sha256", "commands", "candles"], may: ["caughtUpAt"], at: "time" },
+} as const;
 const INSTRUMENT_FIELDS = ["source", "symbol", "base", "quote", "priceScale", "qtyScale"];
-const COMMAND_FIELDS: Record<string, { need: string[]; may: string[] }> = {
-  open: { need: ["bar", "side", "stop", "take"], may: [] },
-  edit: { need: ["bar"], may: ["stop", "take"] },
-  close: { need: ["bar"], may: [] },
-};
 
 /** serde's `deny_unknown_fields` and required fields: the first unknown key, then the first missing one. */
-function fields(o: unknown, need: string[], may: string[] = []): Record<string, unknown> {
+function fields(o: unknown, need: readonly string[], may: readonly string[] = []): Record<string, unknown> {
   if (typeof o !== "object" || o === null || Array.isArray(o)) throw new Error("invalid type: expected a map");
   const r = o as Record<string, unknown>;
   for (const k of Object.keys(r)) if (!need.includes(k) && !may.includes(k) && k !== "kind") throw new Error(`unknown field \`${k}\``);
@@ -274,31 +376,39 @@ function str(v: unknown): string {
   return v;
 }
 
-/** The shape serde checks in Rust's `Body`, `FileInstrument` and `Command`. */
-function checkShape(raw: Record<string, unknown>): void {
-  fields(raw, FILE_FIELDS);
+/** The shape serde checks in Rust's `Body` (or `BodyV1`), `FileInstrument` and `Command`. */
+function checkShape(raw: Record<string, unknown>, version: 1 | 2): void {
+  const shape = SHAPES[version];
+  fields(raw, shape.file, shape.may);
+  if (raw.caughtUpAt !== undefined && raw.caughtUpAt !== null) int(raw.caughtUpAt);
   const i = fields(raw.instrument, INSTRUMENT_FIELDS);
   for (const k of ["source", "symbol", "base", "quote"]) str(i[k]);
   uint(i.priceScale, 8);
   uint(i.qtyScale, 8);
-  str(raw.timeframe);
-  uint(raw.start, 32);
-  uint(raw.current, 32);
+  str(version === 1 ? raw.timeframe : raw.base);
+  const place = version === 1 ? (v: unknown) => uint(v, 32) : int;
+  place(raw.start);
+  place(version === 1 ? raw.current : raw.cut);
   str(raw.sha256);
   if (!Array.isArray(raw.commands)) throw new Error("invalid type: expected a sequence");
   if (raw.commands.length > MOCK_MAX_REPLAY_COMMANDS) throw new Error(`at most ${MOCK_MAX_REPLAY_COMMANDS} commands`);
+  const kinds: Record<string, { need: string[]; may: string[] }> = {
+    open: { need: [shape.at, "side", "stop", "take"], may: [] },
+    edit: { need: [shape.at], may: ["stop", "take"] },
+    close: { need: [shape.at], may: [] },
+  };
   for (const c of raw.commands as unknown[]) {
     const kind = (c as { kind?: unknown } | null)?.kind;
     if (kind === undefined) throw new Error("missing field `kind`");
-    const shape = typeof kind === "string" ? COMMAND_FIELDS[kind] : undefined;
-    if (!shape) throw new Error(`unknown variant \`${String(kind)}\`, expected one of \`open\`, \`edit\`, \`close\``);
-    const r = fields(c, shape.need, shape.may);
-    uint(r.bar, 32);
+    const k = typeof kind === "string" ? kinds[kind] : undefined;
+    if (!k) throw new Error(`unknown variant \`${String(kind)}\`, expected one of \`open\`, \`edit\`, \`close\``);
+    const r = fields(c, k.need, k.may);
+    place(r[shape.at]);
     if ("side" in r && r.side !== "long" && r.side !== "short") throw new Error(`unknown variant \`${String(r.side)}\`, expected \`long\` or \`short\``);
-    for (const k of ["stop", "take"]) {
+    for (const f of ["stop", "take"]) {
       // An edit's `Option<i64>` takes null as "not set".
-      if (kind === "edit" && r[k] === null) delete r[k];
-      else if (k in r) int(r[k]);
+      if (kind === "edit" && r[f] === null) delete r[f];
+      else if (f in r) int(r[f]);
     }
   }
   if (!Array.isArray(raw.candles)) throw new Error("invalid type: expected a sequence");
@@ -309,7 +419,23 @@ function checkShape(raw: Record<string, unknown>): void {
   }
 }
 
-/** Reads and checks a file as Rust does (size, version, shape, limits, candles, hash, commands). */
+type V1Command = { kind: "open"; bar: number; side: Side; stop: number; take: number } | { kind: "edit"; bar: number; stop?: number; take?: number } | { kind: "close"; bar: number };
+
+/** `from_v1` from Rust: each bar index becomes that bar's close time on the file's timeframe. */
+function fromV1(tf: TimeframeCode, candles: MockCandle[], start: number, current: number, commands: V1Command[]) {
+  if (start > current || current >= candles.length) {
+    throw new Error(`start ${start} and current ${current} must satisfy start <= current < ${candles.length} candles`);
+  }
+  const close = (bar: number) => mockCloseTime(tf, candles[bar]!.time);
+  const timed = commands.map((c, i): ReplayCommand => {
+    if (c.bar < start || c.bar > current) throw new Error(`command ${i + 1}: bar ${c.bar} is outside the replay (${start}..=${current})`);
+    const { bar, ...rest } = c;
+    return { ...rest, time: close(bar) } as ReplayCommand;
+  });
+  return { start: close(start), cut: close(current), commands: timed };
+}
+
+/** Reads and checks a file of version 1 or 2 as Rust does (size, version, shape, limits, candles, hash, commands). */
 export async function mockReadReplay(bytes: Uint8Array): Promise<MockReplayFile> {
   if (bytes.length > MOCK_MAX_REPLAY_BYTES) {
     throw new Error(`the replay file is ${Math.floor(bytes.length / 2 ** 20)} MiB; the limit is 32 MiB`);
@@ -321,18 +447,22 @@ export async function mockReadReplay(bytes: Uint8Array): Promise<MockReplayFile>
   } catch (e) {
     throw new Error(`not a replay file: ${e instanceof Error ? e.message : String(e)}`);
   }
-  if (raw.version !== MOCK_REPLAY_VERSION) {
-    throw new Error(`replay file version ${String(raw.version)} is not supported (this app reads version ${MOCK_REPLAY_VERSION})`);
+  const version = raw.version;
+  // As serde reads the version first: missing, or not a whole number, it is no replay file at all.
+  if (version === undefined) throw new Error("not a replay file: missing field `version`");
+  if (!Number.isInteger(version) || (version as number) < 0) throw new Error(`not a replay file: invalid type for \`version\`: ${JSON.stringify(version)}`);
+  if (version !== 1 && version !== MOCK_REPLAY_VERSION) {
+    throw new Error(`replay file version ${String(version)} is not supported (this app reads versions 1 and ${MOCK_REPLAY_VERSION})`);
   }
   try {
-    checkShape(raw);
+    checkShape(raw, version);
   } catch (e) {
     throw new Error(`not a replay file: ${e instanceof Error ? e.message : String(e)}`);
   }
   const inst = raw.instrument as Record<string, unknown>;
   const rows = raw.candles as number[][];
-  const tf = raw.timeframe as TimeframeCode;
-  if (!TIMEFRAME_CODES.includes(tf)) throw new Error(`unknown timeframe ${JSON.stringify(raw.timeframe)}`);
+  const tf = (version === 1 ? raw.timeframe : raw.base) as TimeframeCode;
+  if (!TIMEFRAME_CODES.includes(tf)) throw new Error(`unknown timeframe ${JSON.stringify(tf)}`);
   for (const [what, k] of [["price", "priceScale"], ["quantity", "qtyScale"]] as const) {
     const v = inst[k] as number;
     if (v > MOCK_MAX_SCALE) throw new Error(`the instrument's ${what} scale ${v} is above ${MOCK_MAX_SCALE}`);
@@ -354,12 +484,20 @@ export async function mockReadReplay(bytes: Uint8Array): Promise<MockReplayFile>
     for (const v of [c.time, c.open, c.high, c.low, c.close, c.volume]) {
       if (!Number.isInteger(v) || Math.abs(v) > SAFE) throw new Error(`candle ${i}: ${v} is outside ±(2^53 - 1)`);
     }
+    const closes = mockCloseTime(tf, c.time);
+    if (!(closes <= SAFE)) throw new Error(`candle ${i}: its close time ${closes} is outside ±(2^53 - 1)`);
+    if (mockBucketStart(tf, c.time) !== c.time) throw new Error(`candle ${i}: open time ${c.time} is not on the ${tf} grid`);
     if (c.low > Math.min(c.open, c.close)) throw new Error(`candle ${i}: low must be at most the open and the close`);
     if (c.high < Math.max(c.open, c.close)) throw new Error(`candle ${i}: high must be at least the open and the close`);
     if (c.volume < 0) throw new Error(`candle ${i}: volume must not be negative`);
     if (i > 0 && candles[i - 1]!.time >= c.time) throw new Error(`candle ${i}: open times must go up`);
   });
   if ((await mockCandleHash(candles)) !== raw.sha256) throw new Error("the candles do not match the file's sha256");
+  const session =
+    version === 1
+      ? fromV1(tf, candles, raw.start as number, raw.current as number, raw.commands as V1Command[])
+      : { start: raw.start as number, cut: raw.cut as number, commands: raw.commands as ReplayCommand[] };
+  const caughtUpAt = version === 1 ? null : ((raw.caughtUpAt as number | null | undefined) ?? null);
   const file: MockReplayFile = {
     instrument: {
       id: { source: String(inst.source), symbol: String(inst.symbol) },
@@ -368,12 +506,11 @@ export async function mockReadReplay(bytes: Uint8Array): Promise<MockReplayFile>
       priceScale: Number(inst.priceScale),
       qtyScale: Number(inst.qtyScale),
     },
-    tf,
+    base: tf,
     candles,
-    start: raw.start as number,
-    current: raw.current as number,
-    commands: raw.commands as ReplayCommand[],
+    ...session,
+    caughtUpAt,
   };
-  mockSimulate(file.candles, file.start, file.current, file.commands);
+  mockSimulateFile(file);
   return file;
 }

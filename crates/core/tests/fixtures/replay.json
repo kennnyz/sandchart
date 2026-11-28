@@ -1,299 +1,587 @@
 {
-  "about": "Replay cases, written by hand from the rules in ADR 0005. Read by crates/core/tests/replay.rs (the Rust simulate) and app/ui/src/backend/mockReplay.test.ts (the TEST-ONLY copy in the mock). Candle rows of cases are [openTime, open, high, low, close] (volume 0); file candles are [openTime, open, high, low, close, volume], and the file sha256 was computed with Python's hashlib over six little-endian int64 per candle. Fractional numbers compare within 1e-9.",
+  "about": "Replay cases, written by hand from the rules in ADR 0005 and ADR 0008. Read by crates/core/tests/replay.rs and aggregate.rs (Rust) and app/ui/src/backend/mockReplay.test.ts (the TEST-ONLY copy in the mock). Times are Unix ms; a command's time is the cut it was given at, the close time of a base candle (its open time plus the base length). Candle rows of cases are [openTime, open, high, low, close] (volume 0); rows of files, aggregates and views are [openTime, open, high, low, close, volume]. File sha256 values were computed with Python's hashlib over six little-endian int64 per candle. Fractional numbers compare within 1e-9.",
   "cases": [
     {
       "name": "long take: hit on a later bar, filled at the take",
-      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 102, 98, 100], [3000, 100, 105, 95, 100], [4000, 100, 121, 99, 118], [5000, 118, 119, 110, 115]],
-      "start": 1,
-      "current": 4,
-      "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120}],
+      "base": "1m",
+      "candles": [[60000, 100, 101, 99, 100], [120000, 100, 102, 98, 100], [180000, 100, 105, 95, 100], [240000, 100, 121, 99, 118], [300000, 118, 119, 110, 115]],
+      "start": 180000,
+      "cut": 360000,
+      "commands": [{"kind": "open", "time": 180000, "side": "long", "stop": 90, "take": 120}],
       "expect": {
         "trades": [
-          {"side": "long", "entryBar": 1, "entryTime": 2000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitBar": 3, "exitTime": 4000, "exitPrice": 120, "reason": "take", "ambiguous": false, "r": 2}
+          {"side": "long", "entryTime": 120000, "entryFillTime": 180000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitTime": 240000, "exitFillTime": 300000, "exitPrice": 120, "reason": "take", "ambiguous": false, "r": 2}
         ],
         "stats": {"count": 1, "wins": 1, "losses": 0, "winRate": 1, "totalR": 2, "averageR": 2, "profitFactor": null, "maxDrawdownR": 0, "longestLosingStreak": 0}
       }
     },
     {
       "name": "long stop: filled at the stop",
-      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 102, 98, 100], [3000, 100, 105, 89, 92], [4000, 92, 121, 91, 118], [5000, 118, 119, 110, 115]],
-      "start": 1,
-      "current": 4,
-      "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120}],
+      "base": "1m",
+      "candles": [[60000, 100, 101, 99, 100], [120000, 100, 102, 98, 100], [180000, 100, 105, 89, 92], [240000, 92, 121, 91, 118], [300000, 118, 119, 110, 115]],
+      "start": 180000,
+      "cut": 360000,
+      "commands": [{"kind": "open", "time": 180000, "side": "long", "stop": 90, "take": 120}],
       "expect": {
         "trades": [
-          {"side": "long", "entryBar": 1, "entryTime": 2000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitBar": 2, "exitTime": 3000, "exitPrice": 90, "reason": "stop", "ambiguous": false, "r": -1}
+          {"side": "long", "entryTime": 120000, "entryFillTime": 180000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitTime": 180000, "exitFillTime": 240000, "exitPrice": 90, "reason": "stop", "ambiguous": false, "r": -1}
         ],
         "stats": {"count": 1, "wins": 0, "losses": 1, "winRate": 0, "totalR": -1, "averageR": -1, "profitFactor": 0, "maxDrawdownR": 1, "longestLosingStreak": 1}
       }
     },
     {
       "name": "ambiguous bar: touches stop and take exactly, counts as a stop",
-      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 102, 98, 100], [3000, 100, 120, 90, 100], [4000, 100, 101, 99, 100]],
-      "start": 1,
-      "current": 3,
-      "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120}],
+      "base": "1m",
+      "candles": [[60000, 100, 101, 99, 100], [120000, 100, 102, 98, 100], [180000, 100, 120, 90, 100], [240000, 100, 101, 99, 100]],
+      "start": 180000,
+      "cut": 300000,
+      "commands": [{"kind": "open", "time": 180000, "side": "long", "stop": 90, "take": 120}],
       "expect": {
         "trades": [
-          {"side": "long", "entryBar": 1, "entryTime": 2000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitBar": 2, "exitTime": 3000, "exitPrice": 90, "reason": "stop", "ambiguous": true, "r": -1}
+          {"side": "long", "entryTime": 120000, "entryFillTime": 180000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitTime": 180000, "exitFillTime": 240000, "exitPrice": 90, "reason": "stop", "ambiguous": true, "r": -1}
         ],
         "stats": {"count": 1, "wins": 0, "losses": 1, "winRate": 0, "totalR": -1, "averageR": -1, "profitFactor": 0, "maxDrawdownR": 1, "longestLosingStreak": 1}
       }
     },
     {
       "name": "open at the end: the entry bar is not checked, R is marked to the current close",
-      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 125, 85, 100], [3000, 100, 110, 95, 105], [4000, 105, 116, 96, 115]],
-      "start": 1,
-      "current": 3,
-      "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120}],
+      "base": "1m",
+      "candles": [[60000, 100, 101, 99, 100], [120000, 100, 125, 85, 100], [180000, 100, 110, 95, 105], [240000, 105, 116, 96, 115]],
+      "start": 180000,
+      "cut": 300000,
+      "commands": [{"kind": "open", "time": 180000, "side": "long", "stop": 90, "take": 120}],
       "expect": {
         "trades": [
-          {"side": "long", "entryBar": 1, "entryTime": 2000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitBar": null, "exitTime": null, "exitPrice": null, "reason": "open", "ambiguous": false, "r": 1.5}
+          {"side": "long", "entryTime": 120000, "entryFillTime": 180000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitTime": null, "exitFillTime": null, "exitPrice": null, "reason": "open", "ambiguous": false, "r": 1.5}
         ],
         "stats": {"count": 0, "wins": 0, "losses": 0, "winRate": 0, "totalR": 0, "averageR": 0, "profitFactor": null, "maxDrawdownR": 0, "longestLosingStreak": 0}
       }
     },
     {
       "name": "manual close at the close of its bar",
-      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 125, 85, 100], [3000, 100, 110, 95, 105], [4000, 105, 116, 96, 115]],
-      "start": 1,
-      "current": 3,
-      "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120}, {"kind": "close", "bar": 3}],
+      "base": "1m",
+      "candles": [[60000, 100, 101, 99, 100], [120000, 100, 125, 85, 100], [180000, 100, 110, 95, 105], [240000, 105, 116, 96, 115]],
+      "start": 180000,
+      "cut": 300000,
+      "commands": [{"kind": "open", "time": 180000, "side": "long", "stop": 90, "take": 120}, {"kind": "close", "time": 300000}],
       "expect": {
         "trades": [
-          {"side": "long", "entryBar": 1, "entryTime": 2000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitBar": 3, "exitTime": 4000, "exitPrice": 115, "reason": "manual", "ambiguous": false, "r": 1.5}
+          {"side": "long", "entryTime": 120000, "entryFillTime": 180000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitTime": 240000, "exitFillTime": 300000, "exitPrice": 115, "reason": "manual", "ambiguous": false, "r": 1.5}
         ],
         "stats": {"count": 1, "wins": 1, "losses": 0, "winRate": 1, "totalR": 1.5, "averageR": 1.5, "profitFactor": null, "maxDrawdownR": 0, "longestLosingStreak": 0}
       }
     },
     {
       "name": "edit the stop, in force from the next bar, then hit; R against the stop at entry",
-      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 102, 98, 100], [3000, 100, 112, 103, 110], [4000, 110, 111, 100, 105], [5000, 105, 106, 100, 101]],
-      "start": 1,
-      "current": 4,
-      "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 130}, {"kind": "edit", "bar": 2, "stop": 104}],
+      "base": "1m",
+      "candles": [[60000, 100, 101, 99, 100], [120000, 100, 102, 98, 100], [180000, 100, 112, 103, 110], [240000, 110, 111, 100, 105], [300000, 105, 106, 100, 101]],
+      "start": 180000,
+      "cut": 360000,
+      "commands": [{"kind": "open", "time": 180000, "side": "long", "stop": 90, "take": 130}, {"kind": "edit", "time": 240000, "stop": 104}],
       "expect": {
         "trades": [
-          {"side": "long", "entryBar": 1, "entryTime": 2000, "entryPrice": 100, "initialStop": 90, "stop": 104, "take": 130, "exitBar": 3, "exitTime": 4000, "exitPrice": 104, "reason": "stop", "ambiguous": false, "r": 0.4}
+          {"side": "long", "entryTime": 120000, "entryFillTime": 180000, "entryPrice": 100, "initialStop": 90, "stop": 104, "take": 130, "exitTime": 240000, "exitFillTime": 300000, "exitPrice": 104, "reason": "stop", "ambiguous": false, "r": 0.4}
         ],
         "stats": {"count": 1, "wins": 1, "losses": 0, "winRate": 1, "totalR": 0.4, "averageR": 0.4, "profitFactor": null, "maxDrawdownR": 0, "longestLosingStreak": 0}
       }
     },
     {
       "name": "short take, then a short and a long stopped; a new trade opens on the bar that closed the last one",
-      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 101, 99, 100], [3000, 100, 102, 84, 86], [4000, 86, 97, 80, 95], [5000, 95, 96, 89, 90]],
-      "start": 1,
-      "current": 4,
-      "commands": [{"kind": "open", "bar": 1, "side": "short", "stop": 110, "take": 85}, {"kind": "open", "bar": 2, "side": "short", "stop": 96, "take": 70}, {"kind": "open", "bar": 3, "side": "long", "stop": 90, "take": 105}],
+      "base": "1m",
+      "candles": [[60000, 100, 101, 99, 100], [120000, 100, 101, 99, 100], [180000, 100, 102, 84, 86], [240000, 86, 97, 80, 95], [300000, 95, 96, 89, 90]],
+      "start": 180000,
+      "cut": 360000,
+      "commands": [{"kind": "open", "time": 180000, "side": "short", "stop": 110, "take": 85}, {"kind": "open", "time": 240000, "side": "short", "stop": 96, "take": 70}, {"kind": "open", "time": 300000, "side": "long", "stop": 90, "take": 105}],
       "expect": {
         "trades": [
-          {"side": "short", "entryBar": 1, "entryTime": 2000, "entryPrice": 100, "initialStop": 110, "stop": 110, "take": 85, "exitBar": 2, "exitTime": 3000, "exitPrice": 85, "reason": "take", "ambiguous": false, "r": 1.5},
-          {"side": "short", "entryBar": 2, "entryTime": 3000, "entryPrice": 86, "initialStop": 96, "stop": 96, "take": 70, "exitBar": 3, "exitTime": 4000, "exitPrice": 96, "reason": "stop", "ambiguous": false, "r": -1},
-          {"side": "long", "entryBar": 3, "entryTime": 4000, "entryPrice": 95, "initialStop": 90, "stop": 90, "take": 105, "exitBar": 4, "exitTime": 5000, "exitPrice": 90, "reason": "stop", "ambiguous": false, "r": -1}
+          {"side": "short", "entryTime": 120000, "entryFillTime": 180000, "entryPrice": 100, "initialStop": 110, "stop": 110, "take": 85, "exitTime": 180000, "exitFillTime": 240000, "exitPrice": 85, "reason": "take", "ambiguous": false, "r": 1.5},
+          {"side": "short", "entryTime": 180000, "entryFillTime": 240000, "entryPrice": 86, "initialStop": 96, "stop": 96, "take": 70, "exitTime": 240000, "exitFillTime": 300000, "exitPrice": 96, "reason": "stop", "ambiguous": false, "r": -1},
+          {"side": "long", "entryTime": 240000, "entryFillTime": 300000, "entryPrice": 95, "initialStop": 90, "stop": 90, "take": 105, "exitTime": 300000, "exitFillTime": 360000, "exitPrice": 90, "reason": "stop", "ambiguous": false, "r": -1}
         ],
         "stats": {"count": 3, "wins": 1, "losses": 2, "winRate": 0.3333333333333333, "totalR": -0.5, "averageR": -0.16666666666666666, "profitFactor": 0.75, "maxDrawdownR": 2, "longestLosingStreak": 2}
       }
     },
     {
-      "name": "commands out of bar order are rejected",
-      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 125, 85, 100], [3000, 100, 110, 95, 105], [4000, 105, 116, 96, 115]],
-      "start": 1,
-      "current": 3,
-      "commands": [{"kind": "open", "bar": 2, "side": "long", "stop": 90, "take": 120}, {"kind": "close", "bar": 1}],
-      "error": "command 2: bar 1 comes before bar 2 of the previous command"
+      "name": "commands out of time order are rejected",
+      "base": "1m",
+      "candles": [[60000, 100, 101, 99, 100], [120000, 100, 125, 85, 100], [180000, 100, 110, 95, 105], [240000, 105, 116, 96, 115]],
+      "start": 180000,
+      "cut": 300000,
+      "commands": [{"kind": "open", "time": 240000, "side": "long", "stop": 90, "take": 120}, {"kind": "close", "time": 180000}],
+      "error": "command 2: time 180000 comes before time 240000 of the previous command"
     },
     {
       "name": "a command before the start is rejected",
-      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 125, 85, 100], [3000, 100, 110, 95, 105], [4000, 105, 116, 96, 115]],
-      "start": 1,
-      "current": 3,
-      "commands": [{"kind": "open", "bar": 0, "side": "long", "stop": 90, "take": 120}],
-      "error": "command 1: bar 0 is outside the replay (1..=3)"
+      "base": "1m",
+      "candles": [[60000, 100, 101, 99, 100], [120000, 100, 125, 85, 100], [180000, 100, 110, 95, 105], [240000, 105, 116, 96, 115]],
+      "start": 180000,
+      "cut": 300000,
+      "commands": [{"kind": "open", "time": 120000, "side": "long", "stop": 90, "take": 120}],
+      "error": "command 1: time 120000 is outside the replay (180000..=300000)"
     },
     {
-      "name": "a command after the current bar is rejected",
-      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 125, 85, 100], [3000, 100, 110, 95, 105], [4000, 105, 116, 96, 115]],
-      "start": 1,
-      "current": 2,
-      "commands": [{"kind": "open", "bar": 3, "side": "long", "stop": 90, "take": 120}],
-      "error": "command 1: bar 3 is outside the replay (1..=2)"
+      "name": "a command after the cut is rejected",
+      "base": "1m",
+      "candles": [[60000, 100, 101, 99, 100], [120000, 100, 125, 85, 100], [180000, 100, 110, 95, 105], [240000, 105, 116, 96, 115]],
+      "start": 180000,
+      "cut": 240000,
+      "commands": [{"kind": "open", "time": 300000, "side": "long", "stop": 90, "take": 120}],
+      "error": "command 1: time 300000 is outside the replay (180000..=240000)"
     },
     {
       "name": "a long needs stop < price < take",
-      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 125, 85, 100], [3000, 100, 110, 95, 105], [4000, 105, 116, 96, 115]],
-      "start": 1,
-      "current": 3,
-      "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 100, "take": 120}],
+      "base": "1m",
+      "candles": [[60000, 100, 101, 99, 100], [120000, 100, 125, 85, 100], [180000, 100, 110, 95, 105], [240000, 105, 116, 96, 115]],
+      "start": 180000,
+      "cut": 300000,
+      "commands": [{"kind": "open", "time": 180000, "side": "long", "stop": 100, "take": 120}],
       "error": "command 1: a long trade needs stop < price < take (stop 100, price 100, take 120)"
     },
     {
       "name": "a short needs take < price < stop",
-      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 125, 85, 100], [3000, 100, 110, 95, 105], [4000, 105, 116, 96, 115]],
-      "start": 1,
-      "current": 3,
-      "commands": [{"kind": "open", "bar": 1, "side": "short", "stop": 110, "take": 100}],
+      "base": "1m",
+      "candles": [[60000, 100, 101, 99, 100], [120000, 100, 125, 85, 100], [180000, 100, 110, 95, 105], [240000, 105, 116, 96, 115]],
+      "start": 180000,
+      "cut": 300000,
+      "commands": [{"kind": "open", "time": 180000, "side": "short", "stop": 110, "take": 100}],
       "error": "command 1: a short trade needs take < price < stop (take 100, price 100, stop 110)"
     },
     {
       "name": "one trade at a time",
-      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 125, 85, 100], [3000, 100, 110, 95, 105], [4000, 105, 116, 96, 115]],
-      "start": 1,
-      "current": 3,
-      "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120}, {"kind": "open", "bar": 2, "side": "long", "stop": 90, "take": 120}],
+      "base": "1m",
+      "candles": [[60000, 100, 101, 99, 100], [120000, 100, 125, 85, 100], [180000, 100, 110, 95, 105], [240000, 105, 116, 96, 115]],
+      "start": 180000,
+      "cut": 300000,
+      "commands": [{"kind": "open", "time": 180000, "side": "long", "stop": 90, "take": 120}, {"kind": "open", "time": 240000, "side": "long", "stop": 90, "take": 120}],
       "error": "command 2: a trade is already open"
     },
     {
       "name": "nothing to close",
-      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 125, 85, 100], [3000, 100, 110, 95, 105], [4000, 105, 116, 96, 115]],
-      "start": 1,
-      "current": 3,
-      "commands": [{"kind": "close", "bar": 2}],
+      "base": "1m",
+      "candles": [[60000, 100, 101, 99, 100], [120000, 100, 125, 85, 100], [180000, 100, 110, 95, 105], [240000, 105, 116, 96, 115]],
+      "start": 180000,
+      "cut": 300000,
+      "commands": [{"kind": "close", "time": 240000}],
       "error": "command 1: no open trade to close"
     },
     {
       "name": "no edit after the trade was stopped on that bar",
-      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 102, 98, 100], [3000, 100, 105, 89, 92], [4000, 92, 121, 91, 118], [5000, 118, 119, 110, 115]],
-      "start": 1,
-      "current": 4,
-      "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120}, {"kind": "edit", "bar": 2, "stop": 80}],
+      "base": "1m",
+      "candles": [[60000, 100, 101, 99, 100], [120000, 100, 102, 98, 100], [180000, 100, 105, 89, 92], [240000, 92, 121, 91, 118], [300000, 118, 119, 110, 115]],
+      "start": 180000,
+      "cut": 360000,
+      "commands": [{"kind": "open", "time": 180000, "side": "long", "stop": 90, "take": 120}, {"kind": "edit", "time": 240000, "stop": 80}],
       "error": "command 2: no open trade to edit"
     },
     {
       "name": "an edit checks the levels against the close of its bar",
-      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 102, 98, 100], [3000, 100, 112, 103, 110], [4000, 110, 111, 100, 105], [5000, 105, 106, 100, 101]],
-      "start": 1,
-      "current": 4,
-      "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 130}, {"kind": "edit", "bar": 2, "stop": 111}],
+      "base": "1m",
+      "candles": [[60000, 100, 101, 99, 100], [120000, 100, 102, 98, 100], [180000, 100, 112, 103, 110], [240000, 110, 111, 100, 105], [300000, 105, 106, 100, 101]],
+      "start": 180000,
+      "cut": 360000,
+      "commands": [{"kind": "open", "time": 180000, "side": "long", "stop": 90, "take": 130}, {"kind": "edit", "time": 240000, "stop": 111}],
       "error": "command 2: a long trade needs stop < price < take (stop 111, price 110, take 130)"
     },
     {
       "name": "an edit must change something",
-      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 102, 98, 100], [3000, 100, 112, 103, 110], [4000, 110, 111, 100, 105], [5000, 105, 106, 100, 101]],
-      "start": 1,
-      "current": 4,
-      "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 130}, {"kind": "edit", "bar": 2}],
+      "base": "1m",
+      "candles": [[60000, 100, 101, 99, 100], [120000, 100, 102, 98, 100], [180000, 100, 112, 103, 110], [240000, 110, 111, 100, 105], [300000, 105, 106, 100, 101]],
+      "start": 180000,
+      "cut": 360000,
+      "commands": [{"kind": "open", "time": 180000, "side": "long", "stop": 90, "take": 130}, {"kind": "edit", "time": 240000}],
       "error": "command 2: an edit must set the stop or the take"
     },
     {
       "name": "long stop gap: a bar opening under the stop fills at its open",
-      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 102, 98, 100], [3000, 85, 88, 80, 86], [4000, 86, 87, 85, 86]],
-      "start": 1,
-      "current": 3,
-      "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120}],
+      "base": "1m",
+      "candles": [[60000, 100, 101, 99, 100], [120000, 100, 102, 98, 100], [180000, 85, 88, 80, 86], [240000, 86, 87, 85, 86]],
+      "start": 180000,
+      "cut": 300000,
+      "commands": [{"kind": "open", "time": 180000, "side": "long", "stop": 90, "take": 120}],
       "expect": {
         "trades": [
-          {"side": "long", "entryBar": 1, "entryTime": 2000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitBar": 2, "exitTime": 3000, "exitPrice": 85, "reason": "stop", "ambiguous": false, "r": -1.5}
+          {"side": "long", "entryTime": 120000, "entryFillTime": 180000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitTime": 180000, "exitFillTime": 240000, "exitPrice": 85, "reason": "stop", "ambiguous": false, "r": -1.5}
         ],
         "stats": {"count": 1, "wins": 0, "losses": 1, "winRate": 0, "totalR": -1.5, "averageR": -1.5, "profitFactor": 0, "maxDrawdownR": 1.5, "longestLosingStreak": 1}
       }
     },
     {
       "name": "short take gap: a bar opening under the take fills at its open",
-      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 101, 99, 100], [3000, 80, 84, 78, 82], [4000, 82, 83, 81, 82]],
-      "start": 1,
-      "current": 3,
-      "commands": [{"kind": "open", "bar": 1, "side": "short", "stop": 110, "take": 85}],
+      "base": "1m",
+      "candles": [[60000, 100, 101, 99, 100], [120000, 100, 101, 99, 100], [180000, 80, 84, 78, 82], [240000, 82, 83, 81, 82]],
+      "start": 180000,
+      "cut": 300000,
+      "commands": [{"kind": "open", "time": 180000, "side": "short", "stop": 110, "take": 85}],
       "expect": {
         "trades": [
-          {"side": "short", "entryBar": 1, "entryTime": 2000, "entryPrice": 100, "initialStop": 110, "stop": 110, "take": 85, "exitBar": 2, "exitTime": 3000, "exitPrice": 80, "reason": "take", "ambiguous": false, "r": 2}
+          {"side": "short", "entryTime": 120000, "entryFillTime": 180000, "entryPrice": 100, "initialStop": 110, "stop": 110, "take": 85, "exitTime": 180000, "exitFillTime": 240000, "exitPrice": 80, "reason": "take", "ambiguous": false, "r": 2}
         ],
         "stats": {"count": 1, "wins": 1, "losses": 0, "winRate": 1, "totalR": 2, "averageR": 2, "profitFactor": null, "maxDrawdownR": 0, "longestLosingStreak": 0}
       }
     },
     {
       "name": "ambiguous short: a bar reaching the stop and the take counts as a stop",
-      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 101, 99, 100], [3000, 100, 110, 85, 100], [4000, 100, 101, 99, 100]],
-      "start": 1,
-      "current": 3,
-      "commands": [{"kind": "open", "bar": 1, "side": "short", "stop": 110, "take": 85}],
+      "base": "1m",
+      "candles": [[60000, 100, 101, 99, 100], [120000, 100, 101, 99, 100], [180000, 100, 110, 85, 100], [240000, 100, 101, 99, 100]],
+      "start": 180000,
+      "cut": 300000,
+      "commands": [{"kind": "open", "time": 180000, "side": "short", "stop": 110, "take": 85}],
       "expect": {
         "trades": [
-          {"side": "short", "entryBar": 1, "entryTime": 2000, "entryPrice": 100, "initialStop": 110, "stop": 110, "take": 85, "exitBar": 2, "exitTime": 3000, "exitPrice": 110, "reason": "stop", "ambiguous": true, "r": -1}
+          {"side": "short", "entryTime": 120000, "entryFillTime": 180000, "entryPrice": 100, "initialStop": 110, "stop": 110, "take": 85, "exitTime": 180000, "exitFillTime": 240000, "exitPrice": 110, "reason": "stop", "ambiguous": true, "r": -1}
         ],
         "stats": {"count": 1, "wins": 0, "losses": 1, "winRate": 0, "totalR": -1, "averageR": -1, "profitFactor": 0, "maxDrawdownR": 1, "longestLosingStreak": 1}
       }
     },
     {
       "name": "an edit and a hit on the same bar: the old levels decide that bar",
-      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 102, 98, 100], [3000, 100, 103, 92, 100], [4000, 98, 99, 94, 95], [5000, 95, 96, 94, 95]],
-      "start": 1,
-      "current": 4,
-      "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120}, {"kind": "edit", "bar": 2, "stop": 95}],
+      "base": "1m",
+      "candles": [[60000, 100, 101, 99, 100], [120000, 100, 102, 98, 100], [180000, 100, 103, 92, 100], [240000, 98, 99, 94, 95], [300000, 95, 96, 94, 95]],
+      "start": 180000,
+      "cut": 360000,
+      "commands": [{"kind": "open", "time": 180000, "side": "long", "stop": 90, "take": 120}, {"kind": "edit", "time": 240000, "stop": 95}],
       "expect": {
         "trades": [
-          {"side": "long", "entryBar": 1, "entryTime": 2000, "entryPrice": 100, "initialStop": 90, "stop": 95, "take": 120, "exitBar": 3, "exitTime": 4000, "exitPrice": 95, "reason": "stop", "ambiguous": false, "r": -0.5}
+          {"side": "long", "entryTime": 120000, "entryFillTime": 180000, "entryPrice": 100, "initialStop": 90, "stop": 95, "take": 120, "exitTime": 240000, "exitFillTime": 300000, "exitPrice": 95, "reason": "stop", "ambiguous": false, "r": -0.5}
         ],
         "stats": {"count": 1, "wins": 0, "losses": 1, "winRate": 0, "totalR": -0.5, "averageR": -0.5, "profitFactor": 0, "maxDrawdownR": 0.5, "longestLosingStreak": 1}
       }
     },
     {
       "name": "a hit several bars inside one span is found at its bar, before a later open",
-      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 101, 99, 100], [3000, 100, 105, 95, 102], [4000, 102, 110, 100, 108], [5000, 108, 125, 107, 115], [6000, 115, 130, 80, 100], [7000, 100, 101, 99, 100]],
-      "start": 1,
-      "current": 6,
-      "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120}, {"kind": "open", "bar": 6, "side": "short", "stop": 110, "take": 90}],
+      "base": "1m",
+      "candles": [[60000, 100, 101, 99, 100], [120000, 100, 101, 99, 100], [180000, 100, 105, 95, 102], [240000, 102, 110, 100, 108], [300000, 108, 125, 107, 115], [360000, 115, 130, 80, 100], [420000, 100, 101, 99, 100]],
+      "start": 180000,
+      "cut": 480000,
+      "commands": [{"kind": "open", "time": 180000, "side": "long", "stop": 90, "take": 120}, {"kind": "open", "time": 480000, "side": "short", "stop": 110, "take": 90}],
       "expect": {
         "trades": [
-          {"side": "long", "entryBar": 1, "entryTime": 2000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitBar": 4, "exitTime": 5000, "exitPrice": 120, "reason": "take", "ambiguous": false, "r": 2},
-          {"side": "short", "entryBar": 6, "entryTime": 7000, "entryPrice": 100, "initialStop": 110, "stop": 110, "take": 90, "exitBar": null, "exitTime": null, "exitPrice": null, "reason": "open", "ambiguous": false, "r": 0}
+          {"side": "long", "entryTime": 120000, "entryFillTime": 180000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitTime": 300000, "exitFillTime": 360000, "exitPrice": 120, "reason": "take", "ambiguous": false, "r": 2},
+          {"side": "short", "entryTime": 420000, "entryFillTime": 480000, "entryPrice": 100, "initialStop": 110, "stop": 110, "take": 90, "exitTime": null, "exitFillTime": null, "exitPrice": null, "reason": "open", "ambiguous": false, "r": 0}
         ],
         "stats": {"count": 1, "wins": 1, "losses": 0, "winRate": 1, "totalR": 2, "averageR": 2, "profitFactor": null, "maxDrawdownR": 0, "longestLosingStreak": 0}
       }
     },
     {
       "name": "an edit of the take alone keeps the stop",
-      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 102, 98, 100], [3000, 100, 105, 95, 100], [4000, 100, 112, 99, 111], [5000, 111, 112, 110, 111]],
-      "start": 1,
-      "current": 4,
-      "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120}, {"kind": "edit", "bar": 2, "take": 110}],
+      "base": "1m",
+      "candles": [[60000, 100, 101, 99, 100], [120000, 100, 102, 98, 100], [180000, 100, 105, 95, 100], [240000, 100, 112, 99, 111], [300000, 111, 112, 110, 111]],
+      "start": 180000,
+      "cut": 360000,
+      "commands": [{"kind": "open", "time": 180000, "side": "long", "stop": 90, "take": 120}, {"kind": "edit", "time": 240000, "take": 110}],
       "expect": {
         "trades": [
-          {"side": "long", "entryBar": 1, "entryTime": 2000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 110, "exitBar": 3, "exitTime": 4000, "exitPrice": 110, "reason": "take", "ambiguous": false, "r": 1}
+          {"side": "long", "entryTime": 120000, "entryFillTime": 180000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 110, "exitTime": 240000, "exitFillTime": 300000, "exitPrice": 110, "reason": "take", "ambiguous": false, "r": 1}
         ],
         "stats": {"count": 1, "wins": 1, "losses": 0, "winRate": 1, "totalR": 1, "averageR": 1, "profitFactor": null, "maxDrawdownR": 0, "longestLosingStreak": 0}
       }
     },
     {
       "name": "a 0R trade is neither a win nor a loss and breaks a losing streak",
-      "candles": [[1000, 100, 101, 99, 100], [2000, 100, 101, 99, 100], [3000, 100, 101, 89, 95], [4000, 95, 96, 94, 95], [5000, 95, 96, 94, 96], [6000, 96, 97, 89, 92]],
-      "start": 1,
-      "current": 5,
-      "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120}, {"kind": "open", "bar": 2, "side": "long", "stop": 90, "take": 105}, {"kind": "close", "bar": 3}, {"kind": "open", "bar": 4, "side": "long", "stop": 90, "take": 110}],
+      "base": "1m",
+      "candles": [[60000, 100, 101, 99, 100], [120000, 100, 101, 99, 100], [180000, 100, 101, 89, 95], [240000, 95, 96, 94, 95], [300000, 95, 96, 94, 96], [360000, 96, 97, 89, 92]],
+      "start": 180000,
+      "cut": 420000,
+      "commands": [{"kind": "open", "time": 180000, "side": "long", "stop": 90, "take": 120}, {"kind": "open", "time": 240000, "side": "long", "stop": 90, "take": 105}, {"kind": "close", "time": 300000}, {"kind": "open", "time": 360000, "side": "long", "stop": 90, "take": 110}],
       "expect": {
         "trades": [
-          {"side": "long", "entryBar": 1, "entryTime": 2000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitBar": 2, "exitTime": 3000, "exitPrice": 90, "reason": "stop", "ambiguous": false, "r": -1},
-          {"side": "long", "entryBar": 2, "entryTime": 3000, "entryPrice": 95, "initialStop": 90, "stop": 90, "take": 105, "exitBar": 3, "exitTime": 4000, "exitPrice": 95, "reason": "manual", "ambiguous": false, "r": 0},
-          {"side": "long", "entryBar": 4, "entryTime": 5000, "entryPrice": 96, "initialStop": 90, "stop": 90, "take": 110, "exitBar": 5, "exitTime": 6000, "exitPrice": 90, "reason": "stop", "ambiguous": false, "r": -1}
+          {"side": "long", "entryTime": 120000, "entryFillTime": 180000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitTime": 180000, "exitFillTime": 240000, "exitPrice": 90, "reason": "stop", "ambiguous": false, "r": -1},
+          {"side": "long", "entryTime": 180000, "entryFillTime": 240000, "entryPrice": 95, "initialStop": 90, "stop": 90, "take": 105, "exitTime": 240000, "exitFillTime": 300000, "exitPrice": 95, "reason": "manual", "ambiguous": false, "r": 0},
+          {"side": "long", "entryTime": 300000, "entryFillTime": 360000, "entryPrice": 96, "initialStop": 90, "stop": 90, "take": 110, "exitTime": 360000, "exitFillTime": 420000, "exitPrice": 90, "reason": "stop", "ambiguous": false, "r": -1}
         ],
         "stats": {"count": 3, "wins": 0, "losses": 2, "winRate": 0, "totalR": -2, "averageR": -0.6666666666666666, "profitFactor": 0, "maxDrawdownR": 2, "longestLosingStreak": 1}
+      }
+    },
+    {
+      "name": "a command at a time that is no candle's close is rejected",
+      "base": "1m",
+      "candles": [[60000, 100, 101, 99, 100], [120000, 100, 125, 85, 100], [180000, 100, 110, 95, 105], [240000, 105, 116, 96, 115]],
+      "start": 180000,
+      "cut": 300000,
+      "commands": [{"kind": "open", "time": 200000, "side": "long", "stop": 90, "take": 120}],
+      "error": "command 1: time 200000 is not the close time of a candle"
+    },
+    {
+      "name": "the cut must be a candle's close",
+      "base": "1m",
+      "candles": [[60000, 100, 101, 99, 100], [120000, 100, 125, 85, 100], [180000, 100, 110, 95, 105], [240000, 105, 116, 96, 115]],
+      "start": 180000,
+      "cut": 290000,
+      "commands": [],
+      "error": "the cut 290000 is not the close time of a candle"
+    },
+    {
+      "name": "the start must be a candle's close",
+      "base": "1m",
+      "candles": [[60000, 100, 101, 99, 100], [120000, 100, 125, 85, 100], [180000, 100, 110, 95, 105], [240000, 105, 116, 96, 115]],
+      "start": 170000,
+      "cut": 300000,
+      "commands": [],
+      "error": "the start 170000 is not the close time of a candle"
+    },
+    {
+      "name": "the start cannot be after the cut",
+      "base": "1m",
+      "candles": [[60000, 100, 101, 99, 100], [120000, 100, 125, 85, 100], [180000, 100, 110, 95, 105], [240000, 105, 116, 96, 115]],
+      "start": 300000,
+      "cut": 240000,
+      "commands": [],
+      "error": "the start 300000 is after the cut 240000"
+    },
+    {
+      "name": "candles after the cut do not count: the take on the last one is not reached yet",
+      "base": "1m",
+      "candles": [[60000, 100, 101, 99, 100], [120000, 100, 102, 98, 100], [180000, 100, 105, 95, 104], [240000, 104, 125, 103, 121]],
+      "start": 180000,
+      "cut": 240000,
+      "commands": [{"kind": "open", "time": 180000, "side": "long", "stop": 90, "take": 120}],
+      "expect": {
+        "trades": [
+          {"side": "long", "entryTime": 120000, "entryFillTime": 180000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitTime": null, "exitFillTime": null, "exitPrice": null, "reason": "open", "ambiguous": false, "r": 0.4}
+        ],
+        "stats": {"count": 0, "wins": 0, "losses": 0, "winRate": 0, "totalR": 0, "averageR": 0, "profitFactor": null, "maxDrawdownR": 0, "longestLosingStreak": 0}
       }
     }
   ],
   "files": [
     {
-      "name": "a valid file re-simulates from its commands",
+      "name": "a version 1 file opens: bars become their close times on its timeframe",
       "file": {
         "version": 1,
         "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
         "timeframe": "1h",
         "start": 1,
         "current": 4,
-        "sha256": "83f74cc2f1756b1009afd466072aeb10927d37e5d8c0aabf9b1bf098748eea2e",
+        "sha256": "8ca11926730f129ee9f592feb2e69afd9dff9cb912d06b947bbfb020c9ed5aa9",
         "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120}],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 105, 95, 100, 7],
-          [4000, 100, 121, 99, 118, 7],
-          [5000, 118, 119, 110, 115, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 105, 95, 100, 7],
+          [14400000, 100, 121, 99, 118, 7],
+          [18000000, 118, 119, 110, 115, 7]
         ]
       },
       "expect": {
         "trades": [
-          {"side": "long", "entryBar": 1, "entryTime": 2000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitBar": 3, "exitTime": 4000, "exitPrice": 120, "reason": "take", "ambiguous": false, "r": 2}
+          {"side": "long", "entryTime": 7200000, "entryFillTime": 10800000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitTime": 14400000, "exitFillTime": 18000000, "exitPrice": 120, "reason": "take", "ambiguous": false, "r": 2}
         ],
         "stats": {"count": 1, "wins": 1, "losses": 0, "winRate": 1, "totalR": 2, "averageR": 2, "profitFactor": null, "maxDrawdownR": 0, "longestLosingStreak": 0}
       }
+    },
+    {
+      "name": "the same session as a version 2 file gives the same trades",
+      "file": {
+        "version": 2,
+        "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
+        "base": "1h",
+        "start": 10800000,
+        "cut": 21600000,
+        "sha256": "8ca11926730f129ee9f592feb2e69afd9dff9cb912d06b947bbfb020c9ed5aa9",
+        "commands": [{"kind": "open", "time": 10800000, "side": "long", "stop": 90, "take": 120}],
+        "candles": [
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 105, 95, 100, 7],
+          [14400000, 100, 121, 99, 118, 7],
+          [18000000, 118, 119, 110, 115, 7]
+        ]
+      },
+      "expect": {
+        "trades": [
+          {"side": "long", "entryTime": 7200000, "entryFillTime": 10800000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitTime": 14400000, "exitFillTime": 18000000, "exitPrice": 120, "reason": "take", "ambiguous": false, "r": 2}
+        ],
+        "stats": {"count": 1, "wins": 1, "losses": 0, "winRate": 1, "totalR": 2, "averageR": 2, "profitFactor": null, "maxDrawdownR": 0, "longestLosingStreak": 0}
+      }
+    },
+    {
+      "name": "a file saved after catching up with real time: the trade still open there is unfinished and does not count",
+      "file": {
+        "version": 2,
+        "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
+        "base": "1h",
+        "start": 10800000,
+        "cut": 14400000,
+        "caughtUpAt": 14400000,
+        "sha256": "664e5d64dc9d8095bd05653de46860ed79a34f49bf2da9eee34a07fd499ae101",
+        "commands": [{"kind": "open", "time": 10800000, "side": "long", "stop": 90, "take": 120}],
+        "candles": [
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 105, 95, 100, 7]
+        ]
+      },
+      "expect": {
+        "trades": [
+          {"side": "long", "entryTime": 7200000, "entryFillTime": 10800000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitTime": null, "exitFillTime": null, "exitPrice": null, "reason": "unfinished", "ambiguous": false, "r": 0}
+        ],
+        "stats": {"count": 0, "wins": 0, "losses": 0, "winRate": 0, "totalR": 0, "averageR": 0, "profitFactor": null, "maxDrawdownR": 0, "longestLosingStreak": 0}
+      }
+    },
+    {
+      "name": "a file must have caught up at its cut",
+      "file": {
+        "version": 2,
+        "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
+        "base": "1h",
+        "start": 10800000,
+        "cut": 14400000,
+        "caughtUpAt": 10800000,
+        "sha256": "664e5d64dc9d8095bd05653de46860ed79a34f49bf2da9eee34a07fd499ae101",
+        "commands": [{"kind": "open", "time": 10800000, "side": "long", "stop": 90, "take": 120}],
+        "candles": [
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 105, 95, 100, 7]
+        ]
+      },
+      "error": "the replay caught up at 10800000, which is not its cut 14400000"
+    },
+    {
+      "name": "a file that caught up has no candle after its cut",
+      "file": {
+        "version": 2,
+        "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
+        "base": "1h",
+        "start": 10800000,
+        "cut": 14400000,
+        "caughtUpAt": 14400000,
+        "sha256": "8ca11926730f129ee9f592feb2e69afd9dff9cb912d06b947bbfb020c9ed5aa9",
+        "commands": [{"kind": "open", "time": 10800000, "side": "long", "stop": 90, "take": 120}],
+        "candles": [
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 105, 95, 100, 7],
+          [14400000, 100, 121, 99, 118, 7],
+          [18000000, 118, 119, 110, 115, 7]
+        ]
+      },
+      "error": "a replay that caught up has no candle after its cut"
+    },
+    {
+      "name": "a version 2 file may carry candles after its cut; they do not count",
+      "file": {
+        "version": 2,
+        "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
+        "base": "1h",
+        "start": 1795759200000,
+        "cut": 1795762800000,
+        "sha256": "b41c4fbf0f9c883f9aae4befcb72f510df73fc45581712bd2051e4cbc6e3c647",
+        "commands": [{"kind": "open", "time": 1795759200000, "side": "long", "stop": 90, "take": 120}],
+        "candles": [
+          [1795752000000, 100, 101, 99, 100, 7],
+          [1795755600000, 100, 102, 98, 100, 7],
+          [1795759200000, 100, 105, 95, 104, 7],
+          [1795762800000, 104, 125, 103, 121, 7]
+        ]
+      },
+      "expect": {
+        "trades": [
+          {"side": "long", "entryTime": 1795755600000, "entryFillTime": 1795759200000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitTime": null, "exitFillTime": null, "exitPrice": null, "reason": "open", "ambiguous": false, "r": 0.4}
+        ],
+        "stats": {"count": 0, "wins": 0, "losses": 0, "winRate": 0, "totalR": 0, "averageR": 0, "profitFactor": null, "maxDrawdownR": 0, "longestLosingStreak": 0}
+      }
+    },
+    {
+      "name": "a version 2 file with a version 1 field is refused",
+      "file": {
+        "version": 2,
+        "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
+        "base": "1h",
+        "start": 10800000,
+        "cut": 21600000,
+        "sha256": "8ca11926730f129ee9f592feb2e69afd9dff9cb912d06b947bbfb020c9ed5aa9",
+        "commands": [{"kind": "open", "time": 10800000, "side": "long", "stop": 90, "take": 120}],
+        "candles": [
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 105, 95, 100, 7],
+          [14400000, 100, 121, 99, 118, 7],
+          [18000000, 118, 119, 110, 115, 7]
+        ],
+        "current": 4
+      },
+      "error": "not a replay file: unknown field `current`"
+    },
+    {
+      "name": "a version 2 command with a bar is refused",
+      "file": {
+        "version": 2,
+        "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
+        "base": "1h",
+        "start": 10800000,
+        "cut": 21600000,
+        "sha256": "8ca11926730f129ee9f592feb2e69afd9dff9cb912d06b947bbfb020c9ed5aa9",
+        "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120}],
+        "candles": [
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 105, 95, 100, 7],
+          [14400000, 100, 121, 99, 118, 7],
+          [18000000, 118, 119, 110, 115, 7]
+        ]
+      },
+      "error": "not a replay file: unknown field `bar`"
+    },
+    {
+      "name": "a version 2 cut must be a candle's close",
+      "file": {
+        "version": 2,
+        "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
+        "base": "1h",
+        "start": 10800000,
+        "cut": 19800000,
+        "sha256": "8ca11926730f129ee9f592feb2e69afd9dff9cb912d06b947bbfb020c9ed5aa9",
+        "commands": [{"kind": "open", "time": 10800000, "side": "long", "stop": 90, "take": 120}],
+        "candles": [
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 105, 95, 100, 7],
+          [14400000, 100, 121, 99, 118, 7],
+          [18000000, 118, 119, 110, 115, 7]
+        ]
+      },
+      "error": "the cut 19800000 is not the close time of a candle"
+    },
+    {
+      "name": "a version 2 file with a changed candle breaks the hash",
+      "file": {
+        "version": 2,
+        "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
+        "base": "1h",
+        "start": 10800000,
+        "cut": 21600000,
+        "sha256": "8ca11926730f129ee9f592feb2e69afd9dff9cb912d06b947bbfb020c9ed5aa9",
+        "commands": [{"kind": "open", "time": 10800000, "side": "long", "stop": 90, "take": 120}],
+        "candles": [
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 105, 95, 100, 7],
+          [14400000, 100, 122, 99, 118, 7],
+          [18000000, 118, 119, 110, 115, 7]
+        ]
+      },
+      "error": "the candles do not match the file's sha256"
+    },
+    {
+      "name": "a version 2 file with an unknown base is refused",
+      "file": {
+        "version": 2,
+        "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
+        "base": "7h",
+        "start": 10800000,
+        "cut": 21600000,
+        "sha256": "8ca11926730f129ee9f592feb2e69afd9dff9cb912d06b947bbfb020c9ed5aa9",
+        "commands": [{"kind": "open", "time": 10800000, "side": "long", "stop": 90, "take": 120}],
+        "candles": [
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 105, 95, 100, 7],
+          [14400000, 100, 121, 99, 118, 7],
+          [18000000, 118, 119, 110, 115, 7]
+        ]
+      },
+      "error": "unknown timeframe \"7h\""
     },
     {
       "name": "a changed candle breaks the hash",
@@ -303,14 +591,14 @@
         "timeframe": "1h",
         "start": 1,
         "current": 4,
-        "sha256": "83f74cc2f1756b1009afd466072aeb10927d37e5d8c0aabf9b1bf098748eea2e",
+        "sha256": "8ca11926730f129ee9f592feb2e69afd9dff9cb912d06b947bbfb020c9ed5aa9",
         "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120}],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 105, 95, 100, 7],
-          [4000, 100, 122, 99, 118, 7],
-          [5000, 118, 119, 110, 115, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 105, 95, 100, 7],
+          [14400000, 100, 122, 99, 118, 7],
+          [18000000, 118, 119, 110, 115, 7]
         ]
       },
       "error": "the candles do not match the file's sha256"
@@ -318,22 +606,27 @@
     {
       "name": "a newer version is refused",
       "file": {
-        "version": 2,
+        "version": 3,
         "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
         "timeframe": "1h",
         "start": 1,
         "current": 4,
-        "sha256": "83f74cc2f1756b1009afd466072aeb10927d37e5d8c0aabf9b1bf098748eea2e",
+        "sha256": "8ca11926730f129ee9f592feb2e69afd9dff9cb912d06b947bbfb020c9ed5aa9",
         "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120}],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 105, 95, 100, 7],
-          [4000, 100, 121, 99, 118, 7],
-          [5000, 118, 119, 110, 115, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 105, 95, 100, 7],
+          [14400000, 100, 121, 99, 118, 7],
+          [18000000, 118, 119, 110, 115, 7]
         ]
       },
-      "error": "replay file version 2 is not supported (this app reads version 1)"
+      "error": "replay file version 3 is not supported (this app reads versions 1 and 2)"
+    },
+    {
+      "name": "a file without a version is not a replay file",
+      "file": {"instrument": {"source": "binance", "symbol": "BTCUSDT"}, "candles": []},
+      "error": "not a replay file: missing field `version`"
     },
     {
       "name": "commands are checked when the file opens",
@@ -343,14 +636,14 @@
         "timeframe": "1h",
         "start": 1,
         "current": 4,
-        "sha256": "83f74cc2f1756b1009afd466072aeb10927d37e5d8c0aabf9b1bf098748eea2e",
+        "sha256": "8ca11926730f129ee9f592feb2e69afd9dff9cb912d06b947bbfb020c9ed5aa9",
         "commands": [{"kind": "close", "bar": 2}],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 105, 95, 100, 7],
-          [4000, 100, 121, 99, 118, 7],
-          [5000, 118, 119, 110, 115, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 105, 95, 100, 7],
+          [14400000, 100, 121, 99, 118, 7],
+          [18000000, 118, 119, 110, 115, 7]
         ]
       },
       "error": "command 1: no open trade to close"
@@ -363,12 +656,12 @@
         "timeframe": "1h",
         "start": 1,
         "current": 2,
-        "sha256": "6ff705fdcd8ae423bf3e61d53285bff1d6f4e7157db07e60dd85a5ad2f321469",
+        "sha256": "4856b659ab2ac857dee62c80a505cb9a1791ef9714b20e83af82cde592520d44",
         "commands": [],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 101, 101, 7],
-          [3000, 100, 101, 99, 100, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 101, 101, 7],
+          [10800000, 100, 101, 99, 100, 7]
         ]
       },
       "error": "candle 1: low must be at most the open and the close"
@@ -381,12 +674,12 @@
         "timeframe": "1h",
         "start": 1,
         "current": 2,
-        "sha256": "ba0ff08e16eb49624b362be7e3a841f9fe2f703eeea40eea147932f8679bb2ab",
+        "sha256": "4d30fa4709730755c57817d1a8bc2ee79292e3f80863e47830372592e129655f",
         "commands": [],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 101, 99, 102, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 101, 99, 102, 7]
         ]
       },
       "error": "candle 2: high must be at least the open and the close"
@@ -399,12 +692,12 @@
         "timeframe": "1h",
         "start": 1,
         "current": 2,
-        "sha256": "31a45096c7a64a118a4d8e40688e5afd60e40ad2713ef7042efd70259fb1c411",
+        "sha256": "abbc17a0b3a259a7ca04999ca7c1af0837c25ca5816f04ff76ff0d63c1d53cf1",
         "commands": [],
         "candles": [
-          [1000, 100, 101, 99, 100, -1],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 101, 99, 100, 7]
+          [3600000, 100, 101, 99, 100, -1],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 101, 99, 100, 7]
         ]
       },
       "error": "candle 0: volume must not be negative"
@@ -417,13 +710,13 @@
         "timeframe": "1h",
         "start": 1,
         "current": 2,
-        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "sha256": "201b604b6f4700735ff81deff7cde19d4fbf989f10162e664ecd88f4adfff346",
         "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120}],
         "extra": 0,
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 101, 99, 100, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 101, 99, 100, 7]
         ]
       },
       "error": "not a replay file: unknown field `extra`"
@@ -436,12 +729,12 @@
         "timeframe": "1h",
         "start": 1,
         "current": 2,
-        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "sha256": "201b604b6f4700735ff81deff7cde19d4fbf989f10162e664ecd88f4adfff346",
         "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120}],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 101, 99, 100, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 101, 99, 100, 7]
         ]
       },
       "error": "not a replay file: unknown field `exchange`"
@@ -454,12 +747,12 @@
         "timeframe": "1h",
         "start": 1,
         "current": 2,
-        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "sha256": "201b604b6f4700735ff81deff7cde19d4fbf989f10162e664ecd88f4adfff346",
         "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120, "note": "x"}],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 101, 99, 100, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 101, 99, 100, 7]
         ]
       },
       "error": "not a replay file: unknown field `note`"
@@ -472,12 +765,12 @@
         "timeframe": "1h",
         "start": 1,
         "current": 2,
-        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "sha256": "201b604b6f4700735ff81deff7cde19d4fbf989f10162e664ecd88f4adfff346",
         "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90}],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 101, 99, 100, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 101, 99, 100, 7]
         ]
       },
       "error": "not a replay file: missing field `take`"
@@ -490,12 +783,12 @@
         "timeframe": "1h",
         "start": 1,
         "current": 2,
-        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "sha256": "201b604b6f4700735ff81deff7cde19d4fbf989f10162e664ecd88f4adfff346",
         "commands": [{"kind": "buy", "bar": 1}],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 101, 99, 100, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 101, 99, 100, 7]
         ]
       },
       "error": "not a replay file: unknown variant `buy`"
@@ -508,12 +801,12 @@
         "timeframe": "1h",
         "start": -1,
         "current": 2,
-        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "sha256": "201b604b6f4700735ff81deff7cde19d4fbf989f10162e664ecd88f4adfff346",
         "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120}],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 101, 99, 100, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 101, 99, 100, 7]
         ]
       },
       "error": "not a replay file: invalid value: integer `-1`, expected u32"
@@ -526,12 +819,12 @@
         "timeframe": "1h",
         "start": 1,
         "current": 2.5,
-        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "sha256": "201b604b6f4700735ff81deff7cde19d4fbf989f10162e664ecd88f4adfff346",
         "commands": [{"kind": "open", "bar": 1, "side": "long", "stop": 90, "take": 120}],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 101, 99, 100, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 101, 99, 100, 7]
         ]
       },
       "error": "not a replay file: invalid type: floating point `2.5`, expected u32"
@@ -558,12 +851,12 @@
         "timeframe": "1h",
         "start": 1,
         "current": 2,
-        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "sha256": "201b604b6f4700735ff81deff7cde19d4fbf989f10162e664ecd88f4adfff346",
         "commands": [],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 101, 99, 100, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 101, 99, 100, 7]
         ]
       },
       "error": "the instrument's price scale 19 is above 18"
@@ -576,12 +869,12 @@
         "timeframe": "1h",
         "start": 1,
         "current": 2,
-        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "sha256": "201b604b6f4700735ff81deff7cde19d4fbf989f10162e664ecd88f4adfff346",
         "commands": [],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 101, 99, 100, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 101, 99, 100, 7]
         ]
       },
       "error": "the instrument's quantity scale 30 is above 18"
@@ -594,12 +887,12 @@
         "timeframe": "1h",
         "start": 1,
         "current": 2,
-        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "sha256": "201b604b6f4700735ff81deff7cde19d4fbf989f10162e664ecd88f4adfff346",
         "commands": [],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 101, 99, 100, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 101, 99, 100, 7]
         ]
       },
       "error": "the instrument's symbol must be 1 to 64 characters from A-Z, a-z, 0-9, ., _ and -"
@@ -612,12 +905,12 @@
         "timeframe": "1h",
         "start": 1,
         "current": 2,
-        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "sha256": "201b604b6f4700735ff81deff7cde19d4fbf989f10162e664ecd88f4adfff346",
         "commands": [],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 101, 99, 100, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 101, 99, 100, 7]
         ]
       },
       "error": "the instrument's source must be 1 to 64 characters from A-Z, a-z, 0-9, ., _ and -"
@@ -630,15 +923,285 @@
         "timeframe": "1h",
         "start": 1,
         "current": 2,
-        "sha256": "ddeac6c4bd4c5416ece7e5b5d4fdb5c42ea07ba87b5f93a4bba04141f48ff3be",
+        "sha256": "201b604b6f4700735ff81deff7cde19d4fbf989f10162e664ecd88f4adfff346",
         "commands": [],
         "candles": [
-          [1000, 100, 101, 99, 100, 7],
-          [2000, 100, 102, 98, 100, 7],
-          [3000, 100, 101, 99, 100, 7]
+          [3600000, 100, 101, 99, 100, 7],
+          [7200000, 100, 102, 98, 100, 7],
+          [10800000, 100, 101, 99, 100, 7]
         ]
       },
       "error": "the instrument's quote must be 1 to 64 characters from A-Z, a-z, 0-9, ., _ and -"
+    },
+    {
+      "name": "a candle that closes after 2^53 - 1 is refused, so no cut or start can be outside it",
+      "file": {
+        "version": 2,
+        "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
+        "base": "1h",
+        "start": 9007199254800000,
+        "cut": 9007199254800000,
+        "sha256": "3e2909147de2c979f72fa4a0e189cc684096af0bb7d3bf3d37866a4e65d34dcb",
+        "commands": [],
+        "candles": [
+          [9007199247600000, 100, 101, 99, 100, 7],
+          [9007199251200000, 100, 101, 99, 100, 7]
+        ]
+      },
+      "error": "candle 1: its close time 9007199254800000 is outside ±(2^53 - 1)"
+    },
+    {
+      "name": "a version 2 candle off its base's grid is refused",
+      "file": {
+        "version": 2,
+        "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
+        "base": "1h",
+        "start": 7200000,
+        "cut": 10830000,
+        "sha256": "d117da007026617716ea604f3bed75b865ce86df0d1e701c08f4448314eacb2c",
+        "commands": [],
+        "candles": [
+          [3600000, 100, 101, 99, 100, 7],
+          [7230000, 100, 101, 99, 100, 7]
+        ]
+      },
+      "error": "candle 1: open time 7230000 is not on the 1h grid"
+    },
+    {
+      "name": "a version 2 month candle that does not open on the 1st is refused",
+      "file": {
+        "version": 2,
+        "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
+        "base": "1M",
+        "start": 1706745600000,
+        "cut": 1706745600000,
+        "sha256": "152a053cbc402c49b96bdb3681f94ad5b9d06c9f3ec498768296929cea3e6efb",
+        "commands": [],
+        "candles": [
+          [1704067200000, 100, 101, 99, 100, 7],
+          [1706832000000, 100, 101, 99, 100, 7]
+        ]
+      },
+      "error": "candle 1: open time 1706832000000 is not on the 1M grid"
+    },
+    {
+      "name": "a version 1 candle that overlaps the one before (off its timeframe's grid) is refused",
+      "file": {
+        "version": 1,
+        "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
+        "timeframe": "4h",
+        "start": 1,
+        "current": 2,
+        "sha256": "69b47402915d4966cd629a375307b3c7d4998dbbb6dec5b92618d1c676cebc1b",
+        "commands": [],
+        "candles": [
+          [0, 100, 101, 99, 100, 7],
+          [14400000, 100, 101, 99, 100, 7],
+          [18000000, 100, 101, 99, 100, 7]
+        ]
+      },
+      "error": "candle 2: open time 18000000 is not on the 4h grid"
     }
-  ]
+  ],
+  "aggregates": [
+    {
+      "name": "15m to 1h: open of the first, highest high, lowest low, close of the last, summed volume; the last hour is partial",
+      "base": "15m",
+      "tf": "1h",
+      "candles": [[0, 100, 105, 99, 102, 1], [900000, 102, 108, 101, 107, 2], [1800000, 107, 107, 95, 96, 3], [2700000, 96, 100, 94, 99, 4], [3600000, 99, 103, 98, 101, 5], [4500000, 101, 102, 97, 98, 6]],
+      "expect": [[0, 100, 108, 94, 99, 10], [3600000, 99, 103, 97, 98, 11]]
+    },
+    {
+      "name": "a gap: a bucket keeps the base candles it has, and an empty bucket gives no candle",
+      "base": "1h",
+      "tf": "4h",
+      "candles": [[0, 10, 12, 9, 11, 1], [3600000, 11, 13, 10, 12, 1], [10800000, 12, 14, 8, 9, 1], [32400000, 20, 22, 19, 21, 2], [36000000, 21, 21, 18, 19, 3]],
+      "expect": [[0, 10, 14, 8, 9, 3], [28800000, 20, 22, 18, 19, 5]]
+    },
+    {
+      "name": "weeks start on Monday 00:00 UTC (1970-01-01 was a Thursday)",
+      "base": "1d",
+      "tf": "1w",
+      "candles": [[0, 10, 11, 9, 10, 1], [86400000, 10, 12, 10, 11, 1], [259200000, 11, 11, 8, 9, 1], [345600000, 9, 10, 7, 8, 2], [432000000, 8, 15, 8, 14, 2], [950400000, 14, 16, 13, 15, 3]],
+      "expect": [[-259200000, 10, 12, 8, 9, 3], [345600000, 9, 15, 7, 14, 4], [950400000, 14, 16, 13, 15, 3]]
+    },
+    {
+      "name": "months are calendar months in UTC: January 2024, a 29-day February, a 31-day March, April",
+      "base": "1d",
+      "tf": "1M",
+      "candles": [[1706659200000, 50, 52, 49, 51, 1], [1706745600000, 51, 55, 50, 54, 2], [1709164800000, 54, 56, 53, 53, 3], [1709251200000, 53, 53, 40, 41, 4], [1711843200000, 41, 45, 41, 44, 5], [1711929600000, 44, 46, 43, 45, 6]],
+      "expect": [[1704067200000, 50, 52, 49, 51, 1], [1706745600000, 51, 56, 50, 53, 5], [1709251200000, 53, 53, 40, 44, 9], [1711929600000, 44, 46, 43, 45, 6]]
+    },
+    {
+      "name": "3d is not built from 1d: no recorded Binance candles confirm where its buckets start",
+      "base": "1d",
+      "tf": "3d",
+      "candles": [[0, 1, 3, 1, 2, 1], [86400000, 2, 4, 2, 3, 1], [172800000, 3, 5, 1, 4, 1], [259200000, 4, 4, 2, 3, 1]],
+      "error": "3d candles cannot be built from 1d candles"
+    },
+    {
+      "name": "the base timeframe itself returns the candles unchanged, even off the grid",
+      "base": "1h",
+      "tf": "1h",
+      "candles": [[1800000, 1, 2, 1, 2, 1], [5400000, 2, 3, 2, 3, 1]],
+      "expect": [[1800000, 1, 2, 1, 2, 1], [5400000, 2, 3, 2, 3, 1]]
+    },
+    {
+      "name": "no candles give no candles",
+      "base": "1m",
+      "tf": "1d",
+      "candles": [],
+      "expect": []
+    },
+    {
+      "name": "1M cannot be built from 1w: a month does not start on a Monday",
+      "base": "1w",
+      "tf": "1M",
+      "candles": [],
+      "error": "1M candles cannot be built from 1w candles"
+    },
+    {
+      "name": "1w cannot be built from 3d",
+      "base": "3d",
+      "tf": "1w",
+      "candles": [],
+      "error": "1w candles cannot be built from 3d candles"
+    },
+    {
+      "name": "a lower timeframe cannot be built from a higher one",
+      "base": "1h",
+      "tf": "15m",
+      "candles": [],
+      "error": "15m candles cannot be built from 1h candles"
+    },
+    {
+      "name": "a summed volume above 2^53 - 1 is refused with what to do, not cut off",
+      "base": "1m",
+      "tf": "5m",
+      "candles": [
+        [0, 100, 101, 99, 100, 9007199254740991],
+        [60000, 100, 101, 99, 100, 1]
+      ],
+      "error": "the 5m candle at 0 sums a volume above 2^53 - 1; show a lower timeframe"
+    }
+  ],
+  "views": [
+    {
+      "name": "a long given while a 4h chart shows a forming bar fills at the 1h close at its cut; the 4h bar grows as 1h candles come",
+      "base": "1h",
+      "tf": "4h",
+      "candles": [[0, 100, 102, 99, 101, 1], [3600000, 101, 103, 100, 102, 1], [7200000, 102, 104, 101, 103, 1], [10800000, 103, 105, 102, 104, 1], [14400000, 104, 106, 103, 105, 1], [18000000, 105, 112, 104, 111, 1], [21600000, 111, 113, 110, 112, 1]],
+      "start": 7200000,
+      "cut": 25200000,
+      "commands": [{"kind": "open", "time": 18000000, "side": "long", "stop": 100, "take": 110}],
+      "charts": [
+        {"cut": 7200000, "candles": [[0, 100, 103, 99, 102, 2]]},
+        {"cut": 18000000, "candles": [[0, 100, 105, 99, 104, 4], [14400000, 104, 106, 103, 105, 1]]},
+        {"cut": 25200000, "candles": [[0, 100, 105, 99, 104, 4], [14400000, 104, 113, 103, 112, 3]]}
+      ],
+      "expect": {
+        "trades": [
+          {"side": "long", "entryTime": 14400000, "entryFillTime": 18000000, "entryPrice": 105, "initialStop": 100, "stop": 100, "take": 110, "exitTime": 18000000, "exitFillTime": 21600000, "exitPrice": 110, "reason": "take", "ambiguous": false, "r": 1}
+        ],
+        "stats": {"count": 1, "wins": 1, "losses": 0, "winRate": 1, "totalR": 1, "averageR": 1, "profitFactor": null, "maxDrawdownR": 0, "longestLosingStreak": 0}
+      }
+    }
+  ],
+  "rebase": {
+    "about": "higher: what a re-base to a higher timeframe builds from the current candles (engine higher_candles, mock mockHigher). splits: the mock's stand-in for lower candles (mockSplit), which aggregates back to the candle (Rust aggregate). Computed by hand.",
+    "higher": [
+      {
+        "name": "15m to 1h: the hour the candles start inside and the hour they end inside are left out",
+        "base": "15m",
+        "tf": "1h",
+        "candles": [
+          [1795753800000, 100, 105, 99, 104, 1],
+          [1795754700000, 104, 106, 103, 105, 1],
+          [1795755600000, 105, 110, 104, 108, 2],
+          [1795756500000, 108, 109, 101, 102, 3],
+          [1795757400000, 102, 104, 100, 103, 4],
+          [1795758300000, 103, 107, 102, 106, 5],
+          [1795759200000, 106, 108, 105, 107, 1],
+          [1795760100000, 107, 109, 106, 108, 1]
+        ],
+        "expect": [
+          [1795755600000, 105, 110, 100, 106, 14]
+        ]
+      },
+      {
+        "name": "1h to 4h: whole buckets at both ends stay, a missing hour inside one is a gap, not a cut",
+        "base": "1h",
+        "tf": "4h",
+        "candles": [
+          [1795752000000, 100, 102, 99, 101, 1],
+          [1795755600000, 101, 103, 100, 102, 1],
+          [1795759200000, 102, 104, 98, 103, 1],
+          [1795762800000, 103, 105, 102, 104, 1],
+          [1795766400000, 104, 106, 103, 105, 2],
+          [1795773600000, 105, 109, 104, 108, 2],
+          [1795777200000, 108, 110, 107, 109, 2]
+        ],
+        "expect": [
+          [1795752000000, 100, 105, 98, 104, 4],
+          [1795766400000, 104, 110, 103, 109, 6]
+        ]
+      },
+      {
+        "name": "1d to 1w: a Sunday before the first Monday and a lone Monday after the last Sunday are left out",
+        "base": "1d",
+        "tf": "1w",
+        "candles": [
+          [1703980800000, 90, 95, 89, 94, 1],
+          [1704067200000, 100, 101, 99, 100, 1],
+          [1704153600000, 100, 103, 98, 102, 1],
+          [1704240000000, 102, 104, 101, 103, 1],
+          [1704326400000, 103, 105, 97, 104, 1],
+          [1704412800000, 104, 106, 103, 105, 1],
+          [1704499200000, 105, 108, 104, 107, 1],
+          [1704585600000, 107, 109, 106, 108, 1],
+          [1704672000000, 108, 110, 107, 109, 1]
+        ],
+        "expect": [
+          [1704067200000, 100, 109, 97, 108, 7]
+        ]
+      },
+      {
+        "name": "1h to 3d is refused like the aggregation",
+        "base": "1h",
+        "tf": "3d",
+        "candles": [
+          [1795752000000, 100, 102, 99, 101, 1]
+        ],
+        "error": "3d candles cannot be built from 1h candles"
+      }
+    ],
+    "splits": [
+      {
+        "name": "an hour into quarters: the high in the first, the low in the second, the close in the last, the volume's rest in the last",
+        "base": "1h",
+        "lower": "15m",
+        "candle": [1795752000000, 100, 110, 90, 105, 10],
+        "expect": [
+          [1795752000000, 100, 110, 100, 105, 2],
+          [1795752900000, 105, 105, 90, 105, 2],
+          [1795753800000, 105, 105, 105, 105, 2],
+          [1795754700000, 105, 105, 105, 105, 4]
+        ]
+      },
+      {
+        "name": "a day into 4h candles",
+        "base": "1d",
+        "lower": "4h",
+        "candle": [1704067200000, 50, 60, 40, 45, 7],
+        "expect": [
+          [1704067200000, 50, 60, 45, 45, 1],
+          [1704081600000, 45, 45, 40, 45, 1],
+          [1704096000000, 45, 45, 45, 45, 1],
+          [1704110400000, 45, 45, 45, 45, 1],
+          [1704124800000, 45, 45, 45, 45, 1],
+          [1704139200000, 45, 45, 45, 45, 2]
+        ]
+      }
+    ]
+  }
 }

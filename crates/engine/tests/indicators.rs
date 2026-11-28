@@ -748,7 +748,7 @@ async fn a_replay_computes_over_its_revealed_bars_only() {
         &values(result(&full, "sma"))[..5]
     ));
 
-    f.engine.replay_step(2).unwrap();
+    f.engine.replay_step(2).await.unwrap();
     let stepped = f.compute(i64::MIN).await;
     let c = result(&stepped, "echo").result.as_ref().unwrap();
     assert_eq!(
@@ -776,6 +776,42 @@ async fn a_replay_computes_over_its_revealed_bars_only() {
 }
 
 #[tokio::test]
+async fn a_higher_timeframe_in_a_replay_computes_over_bars_built_from_the_revealed_ones() {
+    let f = fixture().await;
+    // Bar i (0..10) closes at 100 + i; 4h buckets start at bars 3 and 7.
+    let candles: Vec<Candle> = (0..10).map(|i| candle(9 - i, 10_000 + 100 * i)).collect();
+    f.cache_candles("BTCUSDT", candles).await;
+    f.install("ok_echo").await;
+    f.engine.set_chart_indicators(vec![echo()]).await.unwrap();
+    f.engine
+        .replay_start(&id("BTCUSDT"), TF, NOW_OPEN - 5 * H)
+        .await
+        .unwrap();
+    let four = || async {
+        f.engine
+            .compute_indicators(&id("BTCUSDT"), Timeframe::H4, i64::MIN)
+            .await
+    };
+    // The forming 4h bar closes at the cut, never at a later hour.
+    assert!(same(
+        &values(result(&four().await.unwrap(), "echo")),
+        &[102.0, 104.0]
+    ));
+    f.engine.replay_step(3).await.unwrap();
+    assert!(same(
+        &values(result(&four().await.unwrap(), "echo")),
+        &[102.0, 106.0, 107.0]
+    ));
+    // A lower timeframe needs a re-base first; the cache is never read instead.
+    let err = f
+        .engine
+        .compute_indicators(&id("BTCUSDT"), Timeframe::M15, i64::MIN)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("re-base it to 15m first"), "{err}");
+}
+
+#[tokio::test]
 async fn a_replay_memoises_results_until_a_step_or_another_session() {
     let f = fixture().await;
     let candles: Vec<Candle> = (0..10).map(|i| candle(9 - i, 10_000 + 100 * i)).collect();
@@ -791,7 +827,7 @@ async fn a_replay_memoises_results_until_a_step_or_another_session() {
     let first = calls();
     f.compute(i64::MIN).await;
     assert_eq!(calls(), first, "the same session and bar hit the memo");
-    f.engine.replay_step(1).unwrap();
+    f.engine.replay_step(1).await.unwrap();
     f.compute(i64::MIN).await;
     assert_eq!(calls(), first + 1, "a step reveals a bar: computed again");
     f.compute(i64::MIN).await;

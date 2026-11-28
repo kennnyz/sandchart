@@ -34,6 +34,14 @@ export interface ChartDebug {
   selectionBox: boolean;
   /** Handles of the selected drawing at the last overlay frame, in CSS px of the chart. */
   selectedHandles: { x: number; y: number }[];
+  /** Lock glyphs painted on locked selected or hovered drawings at the last overlay frame. */
+  lockGlyphs: number;
+  /** The "Locked" hint after a drag of a locked drawing showed at the last overlay frame. */
+  lockedHint: boolean;
+  /** The crosshair at the last overlay frame, in CSS px of the chart; null when not shown. */
+  crosshair: { x: number; y: number } | null;
+  /** The ⌘ snap preview ring at the last overlay frame, in CSS px of the chart; null when not shown. */
+  snapRing: { x: number; y: number } | null;
   /** The ruler's numbers at the last overlay frame ("+1.00 (+0.50%)|12 bars, 12h"), null when it is not shown. */
   ruler: string | null;
   /** Position outcomes the chart was last given, by drawing id: "take", "stop", "open", with "?" when ambiguous. */
@@ -46,8 +54,12 @@ export interface ChartDebug {
   replayHandles: { stop: { x: number; y: number }; take: { x: number; y: number } } | null;
   /** Closed replay trades painted at the last base frame. */
   replayClosed: number;
+  /** Ids of the lines painted with a bell tag (they have an alert) at the last base frame. */
+  lineBells: string[];
   /** Price alert levels painted at the last base frame, with their y in CSS px of the chart. */
   alertLevels: { id: string; y: number }[];
+  /** Centre of the "+" at the crosshair price at the last overlay frame, in CSS px of the chart; null when not shown. */
+  plusButton: { x: number; y: number } | null;
 }
 
 let debug: ChartDebug | null = null;
@@ -72,6 +84,7 @@ export function enableChartDebug(): void {
     selectedDrawings: [],
     selectionBox: false,
     selectedHandles: [],
+    snapRing: null,
     ruler: null,
     outcomes: {},
     lastBarTime: null,
@@ -79,6 +92,11 @@ export function enableChartDebug(): void {
     replayHandles: null,
     replayClosed: 0,
     alertLevels: [],
+    crosshair: null,
+    lockGlyphs: 0,
+    lockedHint: false,
+    lineBells: [],
+    plusButton: null,
   };
   (window as unknown as { __sandchartDebug: ChartDebug }).__sandchartDebug = debug;
 }

@@ -1,15 +1,28 @@
 //! The replay session through the engine: start over cached candles, step, commands,
-//! state since a cursor, export and open, exit.
+//! state since a cursor, views of higher timeframes, re-basing, catching up with live
+//! data, export and open, exit.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
+use async_trait::async_trait;
+use futures::StreamExt;
+use futures::stream::BoxStream;
+use sandchart_core::aggregate::aggregate;
 use sandchart_core::replay::{Command, ExitReason, MAX_FILE_BYTES};
 use sandchart_core::{Candle, Instrument, InstrumentId, Side, Timeframe};
-use sandchart_engine::{Engine, EngineError, REPLAY_CONTEXT};
+use sandchart_data::{LiveCandle, Provider, ProviderError};
+use sandchart_engine::{Engine, EngineError, LiveEvent, REPLAY_CONTEXT};
 use sandchart_store::Store;
+use tokio::sync::mpsc;
 
-const T0: i64 = 1_700_000_000_000 / H * H;
+const DAY: i64 = 86_400_000;
+/// Midnight UTC, so every timeframe up to a day has a boundary here.
+const T0: i64 = 1_700_000_000_000 / DAY * DAY;
 const H: i64 = 3_600_000;
+const Q: i64 = 900_000;
 /// Cached hourly bars `0..BARS`.
 const BARS: i64 = 600;
 
@@ -33,25 +46,56 @@ fn bar(i: i64) -> Candle {
     }
 }
 
-fn engine() -> (Engine, tempfile::TempDir) {
-    let dir = tempfile::tempdir().unwrap();
+/// The four 15m candles of hour `i`, which aggregate to exactly `bar(i)`: the high in the
+/// first quarter, the low in the second.
+fn quarters(i: i64) -> [Candle; 4] {
+    let b = bar(i);
+    let q = |k: i64, high: i64, low: i64, volume: i64| Candle {
+        open_time: b.open_time + k * Q,
+        open: b.close,
+        high,
+        low,
+        close: b.close,
+        volume,
+    };
+    [
+        q(0, b.high, b.close, 1),
+        q(1, b.close, b.low, 2),
+        q(2, b.close, b.close, 2),
+        q(3, b.close, b.close, 2),
+    ]
+}
+
+fn instrument() -> Instrument {
+    Instrument {
+        id: id(),
+        base: "BTC".into(),
+        quote: "USDT".into(),
+        price_scale: 2,
+        qty_scale: 5,
+    }
+}
+
+/// A store with the pair and hourly bars `0..BARS`, all closed at the engine's clock.
+fn store_in(dir: &tempfile::TempDir) -> Store {
     let mut store = Store::open(&dir.path().join("sandchart.db")).unwrap();
-    store
-        .upsert_instruments(&[Instrument {
-            id: id(),
-            base: "BTC".into(),
-            quote: "USDT".into(),
-            price_scale: 2,
-            qty_scale: 5,
-        }])
-        .unwrap();
+    store.upsert_instruments(&[instrument()]).unwrap();
     let candles: Vec<Candle> = (0..BARS).map(bar).collect();
     store
         .upsert_candles(&id(), Timeframe::H1, &candles)
         .unwrap();
-    let engine = Engine::open_with_clock(dir.path(), None, vec![], Arc::new(|| 0)).unwrap();
+    store
+}
+
+fn engine() -> (Engine, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    store_in(&dir);
+    let engine =
+        Engine::open_with_clock(dir.path(), None, vec![], Arc::new(|| T0 + BARS * H)).unwrap();
     (engine, dir)
 }
+
+const TF: Timeframe = Timeframe::H1;
 
 fn replay_err(r: Result<impl std::fmt::Debug, EngineError>) -> String {
     match r {
@@ -94,13 +138,25 @@ async fn start_needs_a_cached_bar_at_that_time() {
             .await,
     );
     assert_eq!(msg, format!("no cached 1h bar opens at {}", T0 + 3 * H + 1));
+    // A cached candle that has not closed yet cannot be replayed either.
+    let dir = tempfile::tempdir().unwrap();
+    store_in(&dir)
+        .upsert_candles(&id(), Timeframe::H1, &[bar(BARS)])
+        .unwrap();
+    let early =
+        Engine::open_with_clock(dir.path(), None, vec![], Arc::new(|| T0 + BARS * H + 1)).unwrap();
+    let msg = replay_err(early.replay_start(&id(), TF, T0 + BARS * H).await);
+    assert_eq!(msg, format!("no cached 1h bar opens at {}", T0 + BARS * H));
+    early.replay_start(&id(), TF, T0).await.unwrap();
+    let cut = early.replay_step(u32::MAX).await.unwrap();
+    assert_eq!(cut, T0 + BARS * H, "the forming candle stays out");
     let msg = replay_err(engine.replay_start(&id(), Timeframe::H4, T0).await);
     assert_eq!(msg, format!("no cached 4h bar opens at {T0}"));
     // The lowest time does not overflow looking for the bar.
     let msg = replay_err(engine.replay_start(&id(), Timeframe::H1, i64::MIN).await);
     assert_eq!(msg, format!("no cached 1h bar opens at {}", i64::MIN));
     assert!(matches!(
-        engine.replay_state(0, 0),
+        engine.replay_state(TF, 0, 0),
         Err(EngineError::Replay(m)) if m == "no replay is open"
     ));
 }
@@ -113,17 +169,24 @@ async fn step_reveals_bars_and_state_sends_only_new_ones() {
         .await
         .unwrap();
     let have = st.bars.len() as u32;
-    assert_eq!(engine.replay_step(3).unwrap(), st.start + 3);
-    let st = engine.replay_state(have, 0).unwrap();
-    assert_eq!(st.from, have);
+    // A step returns the cut: the close time of the last revealed candle.
+    assert_eq!(engine.replay_step(3).await.unwrap(), st.cut + 3 * H);
+    let st = engine.replay_state(TF, have, 0).unwrap();
+    assert_eq!((st.from, st.current), (have, have + 2));
     assert_eq!(st.bars, vec![bar(591), bar(592), bar(593)]);
     // A cursor past the current bar gets nothing, never a future bar.
-    assert!(engine.replay_state(have + 100, 0).unwrap().bars.is_empty());
-    // Steps stop at the newest cached bar.
-    let last = engine.replay_step(1000).unwrap();
-    let st = engine.replay_state(last, 0).unwrap();
-    assert_eq!(st.bars, vec![bar(BARS - 1)]);
-    assert!(st.at_end);
+    assert!(
+        engine
+            .replay_state(TF, have + 100, 0)
+            .unwrap()
+            .bars
+            .is_empty()
+    );
+    // Steps stop at the newest cached bar; without a provider nothing newer can come.
+    assert_eq!(engine.replay_step(1000).await.unwrap(), T0 + BARS * H);
+    let st = engine.replay_state(TF, 0, 0).unwrap();
+    assert_eq!(*st.bars.last().unwrap(), bar(BARS - 1));
+    assert!(st.at_end && !st.caught_up);
 }
 
 #[tokio::test]
@@ -133,16 +196,17 @@ async fn commands_are_checked_against_the_revealed_bars() {
         .replay_start(&id(), Timeframe::H1, T0 + 550 * H)
         .await
         .unwrap();
-    let s = st.start;
-    // The start bar closes at 10 550; the next bars rise by 1 a bar with a ±50 range.
+    // The start bar (550) closes at 10 550; the next bars rise by 1 a bar with a ±50 range.
+    // Commands carry the cut, the close time of the current bar.
+    assert_eq!(st.cut, T0 + 551 * H);
     let open = Command::Open {
-        bar: s,
+        time: st.cut,
         side: Side::Long,
         stop: 10_400,
         take: 10_610,
     };
     let ahead = Command::Open {
-        bar: s + 1,
+        time: st.cut + H,
         side: Side::Long,
         stop: 10_400,
         take: 10_610,
@@ -150,26 +214,51 @@ async fn commands_are_checked_against_the_revealed_bars() {
     let msg = replay_err(engine.replay_command(ahead));
     assert_eq!(
         msg,
-        format!("command 1: bar {} is outside the replay ({s}..={s})", s + 1)
+        format!(
+            "a command is given at the cut {}, not at {}",
+            st.cut,
+            st.cut + H
+        )
     );
     engine.replay_command(open).unwrap();
     let msg = replay_err(engine.replay_command(open));
     assert_eq!(msg, "command 2: a trade is already open");
 
-    engine.replay_step(5).unwrap();
-    let st = engine.replay_state(u32::MAX, 0).unwrap();
+    engine.replay_step(5).await.unwrap();
+    // A command for a bar already passed (a click that was overtaken by steps) is refused
+    // too, though the simulation alone would take it.
+    let late = Command::Edit {
+        time: st.cut,
+        stop: Some(10_450),
+        take: None,
+    };
+    let msg = replay_err(engine.replay_command(late));
+    assert_eq!(
+        msg,
+        format!(
+            "a command is given at the cut {}, not at {}",
+            st.cut + 5 * H,
+            st.cut
+        )
+    );
+    let st = engine.replay_state(TF, u32::MAX, 0).unwrap();
     let t = st.trades[0];
-    // Bar s+5 closes at 10 555 with a high of 10 605: still open, marked to the close.
+    // Bar 555 closes at 10 555 with a high of 10 605: still open, marked to the close.
     assert_eq!((t.reason, t.entry_price), (ExitReason::Open, 10_550));
     assert!((t.r - 5.0 / 150.0).abs() < 1e-12);
 
-    engine.replay_step(5).unwrap();
-    // Bar s+10 reaches 10 610: the take.
-    let t = engine.replay_state(u32::MAX, 0).unwrap().trades[0];
-    assert_eq!((t.reason, t.exit_bar), (ExitReason::Take, Some(s + 10)));
-    let msg = replay_err(engine.replay_command(Command::Close { bar: s + 10 }));
+    engine.replay_step(5).await.unwrap();
+    // Bar 560 reaches 10 610: the take.
+    let t = engine.replay_state(TF, u32::MAX, 0).unwrap().trades[0];
+    assert_eq!(
+        (t.reason, t.exit_time),
+        (ExitReason::Take, Some(bar(560).open_time))
+    );
+    let msg = replay_err(engine.replay_command(Command::Close {
+        time: bar(560).open_time + H,
+    }));
     assert_eq!(msg, "command 2: no open trade to close");
-    assert_eq!(engine.replay_state(0, 0).unwrap().stats.count, 1);
+    assert_eq!(engine.replay_state(TF, 0, 0).unwrap().stats.count, 1);
 }
 
 #[tokio::test]
@@ -181,23 +270,25 @@ async fn export_holds_no_future_bar_and_opens_to_the_same_state() {
         .unwrap();
     engine
         .replay_command(Command::Open {
-            bar: st.start,
+            time: st.cut,
             side: Side::Short,
             stop: 10_700,
             take: 10_300,
         })
         .unwrap();
-    engine.replay_step(7).unwrap();
+    engine.replay_step(7).await.unwrap();
     engine
-        .replay_command(Command::Close { bar: st.start + 7 })
+        .replay_command(Command::Close {
+            time: st.cut + 7 * H,
+        })
         .unwrap();
-    let before = engine.replay_state(0, 0).unwrap();
+    let before = engine.replay_state(TF, 0, 0).unwrap();
     assert_eq!(engine.replay_file_name().unwrap(), "BTCUSDT-1h.replay");
     let bytes = engine.replay_export().unwrap();
     let text = String::from_utf8(bytes.clone()).unwrap();
     // Bar 557 is the current one; 558 and later stay in the engine.
     assert!(text.contains(&format!("[{}, ", bar(557).open_time)));
-    assert!(!text.contains(&bar(558).open_time.to_string()));
+    assert!(!text.contains(&format!("[{}, ", bar(558).open_time)));
 
     engine.replay_exit();
     assert!(engine.replay_export().is_err());
@@ -209,7 +300,7 @@ async fn export_holds_no_future_bar_and_opens_to_the_same_state() {
     };
     assert_eq!(opened, want);
     // The opened file ends at its current bar, so nothing is left to step.
-    assert_eq!(engine.replay_step(1).unwrap(), opened.current);
+    assert_eq!(engine.replay_step(1).await.unwrap(), opened.cut);
 }
 
 #[tokio::test]
@@ -225,7 +316,29 @@ async fn broken_or_oversized_files_leave_the_session_alone() {
     assert_eq!(msg, "the candles do not match the file's sha256");
     let msg = replay_err(engine.replay_open(&vec![b' '; MAX_FILE_BYTES + 1]));
     assert!(msg.starts_with("the replay file is 32 MiB"), "{msg}");
-    assert!(engine.replay_state(0, 0).is_ok());
+    // A cut past what the UI can hold (a candle closing after 2^53 - 1) and a candle off the
+    // hour grid are refused before the open session is replaced.
+    let last = (sandchart_core::JS_SAFE_MAX / H) * H;
+    let mut hostile = file_at(2, 2);
+    hostile.candles.push(Candle {
+        open_time: last,
+        ..hostile.candles[1]
+    });
+    hostile.cut = last + H;
+    let msg = replay_err(engine.replay_open(hostile.to_json().as_bytes()));
+    assert_eq!(
+        msg,
+        format!(
+            "candle 2: its close time {} is outside ±(2^53 - 1)",
+            last + H
+        )
+    );
+    let mut off_grid = file_at(2, 2);
+    off_grid.candles[1].open_time += 1;
+    let msg = replay_err(engine.replay_open(off_grid.to_json().as_bytes()));
+    assert!(msg.ends_with("is not on the 1h grid"), "{msg}");
+    let st = engine.replay_state(TF, 0, 0).unwrap();
+    assert_eq!(st.cut, T0 + 551 * H, "the session started above");
 }
 
 /// A file of `n` bars from bar 550 on, with prices at `price_scale` decimals (`bar` is at 2).
@@ -252,12 +365,13 @@ fn file_at(price_scale: u8, n: i64) -> sandchart_core::replay::ReplayFile {
             price_scale,
             qty_scale: 6,
         },
-        timeframe: Timeframe::H1,
+        base: Timeframe::H1,
         candles,
-        start: 0,
-        current: n as u32 - 1,
+        start: T0 + 551 * H,
+        cut: T0 + (550 + n) * H,
+        caught_up_at: None,
         commands: vec![Command::Open {
-            bar: 0,
+            time: T0 + 551 * H,
             side: Side::Long,
             stop: 10_400 * k,
             take: 10_610 * k,
@@ -292,7 +406,7 @@ async fn a_file_that_does_not_fit_the_stored_tick_size_is_refused() {
         msg.starts_with("at the stored price scale 2: candle 1: "),
         "{msg}"
     );
-    assert!(engine.replay_state(0, 0).is_err());
+    assert!(engine.replay_state(TF, 0, 0).is_err());
 }
 
 #[tokio::test]
@@ -312,27 +426,770 @@ async fn state_sends_closed_trades_from_the_index_given_and_always_the_open_one(
         .replay_start(&id(), Timeframe::H1, T0 + 550 * H)
         .await
         .unwrap();
-    let s = st.start;
-    let open = |bar| Command::Open {
-        bar,
+    let open = |time| Command::Open {
+        time,
         side: Side::Long,
         stop: 10_000,
         take: 11_000,
     };
-    engine.replay_command(open(s)).unwrap();
-    engine.replay_step(1).unwrap();
+    engine.replay_command(open(st.cut)).unwrap();
+    engine.replay_step(1).await.unwrap();
     engine
-        .replay_command(Command::Close { bar: s + 1 })
+        .replay_command(Command::Close { time: st.cut + H })
         .unwrap();
-    engine.replay_command(open(s + 1)).unwrap();
-    let all = engine.replay_state(0, 0).unwrap();
+    engine.replay_command(open(st.cut + H)).unwrap();
+    let all = engine.replay_state(TF, 0, 0).unwrap();
     assert_eq!((all.trades_from, all.trades.len()), (0, 2));
     // The UI has the closed trade: only the open one comes.
-    let st = engine.replay_state(0, 1).unwrap();
+    let st = engine.replay_state(TF, 0, 1).unwrap();
     assert_eq!(st.trades_from, 1);
     assert_eq!(st.trades, all.trades[1..]);
     // An index past the closed trades is clamped to them: the open trade still comes.
-    let st = engine.replay_state(0, 9).unwrap();
+    let st = engine.replay_state(TF, 0, 9).unwrap();
     assert_eq!((st.trades_from, st.trades.len()), (1, 1));
     assert_eq!(st.stats, all.stats);
+}
+
+#[tokio::test]
+async fn a_higher_timeframe_is_built_from_the_revealed_candles_and_a_lower_one_is_refused() {
+    let (engine, _dir) = engine();
+    // T0 is midnight: bar 550 is the third hour of the 4h bucket that starts at bar 548.
+    engine.replay_start(&id(), TF, T0 + 550 * H).await.unwrap();
+    let st = engine.replay_state(Timeframe::H4, 0, 0).unwrap();
+    let shown: Vec<Candle> = (50..=550).map(bar).collect();
+    assert_eq!(
+        st.bars,
+        aggregate(&shown, TF, Timeframe::H4).unwrap(),
+        "4h bars from the revealed 1h ones"
+    );
+    assert_eq!((st.base, st.tf), (TF, Timeframe::H4));
+    // Bars 50 and 51 are the second half of the bucket at 48; bar 550's bucket is the last.
+    assert_eq!((st.start, st.current), (125, 125));
+    assert!(st.partial, "the last 4h bar is still forming");
+    let forming = *st.bars.last().unwrap();
+    assert_eq!(forming.open_time, T0 + 548 * H);
+    assert_eq!((forming.open, forming.close), (10_548, 10_550));
+
+    // It grows with each step and is complete when its last hour is revealed.
+    engine.replay_step(1).await.unwrap();
+    let st = engine.replay_state(Timeframe::H4, 125, 0).unwrap();
+    assert_eq!(st.from, 125);
+    assert_eq!(
+        st.bars,
+        [Candle {
+            high: 10_601,
+            close: 10_551,
+            volume: 28,
+            ..forming
+        }]
+    );
+    assert!(!st.partial);
+    engine.replay_step(1).await.unwrap();
+    let st = engine.replay_state(Timeframe::H4, 126, 0).unwrap();
+    assert_eq!(st.bars[0].open_time, T0 + 552 * H);
+    assert!(st.partial);
+
+    let msg = replay_err(engine.replay_state(Timeframe::M15, 0, 0));
+    assert_eq!(
+        msg,
+        "the replay steps 1h candles, so 15m candles cannot be built from them; re-base it to 15m first"
+    );
+    let msg = replay_err(engine.replay_state(Timeframe::D3, 0, 0));
+    assert_eq!(msg, "3d candles cannot be built from 1h candles");
+}
+
+/// The 15m candles of hours `0..BARS` in a store that has the hours too.
+fn quarters_in(store: &mut Store) {
+    let qs: Vec<Candle> = (0..BARS).flat_map(quarters).collect();
+    store.upsert_candles(&id(), Timeframe::M15, &qs).unwrap();
+}
+
+#[tokio::test]
+async fn re_basing_down_keeps_the_cut_and_the_commands_and_steps_the_lower_candles() {
+    let dir = tempfile::tempdir().unwrap();
+    quarters_in(&mut store_in(&dir));
+    let engine =
+        Engine::open_with_clock(dir.path(), None, vec![], Arc::new(|| T0 + BARS * H)).unwrap();
+    let st = engine.replay_start(&id(), TF, T0 + 550 * H).await.unwrap();
+    let open = Command::Open {
+        time: st.cut,
+        side: Side::Long,
+        stop: 10_400,
+        take: 10_610,
+    };
+    engine.replay_command(open).unwrap();
+    engine.replay_step(5).await.unwrap();
+    let hourly = engine.replay_state(TF, 0, 0).unwrap();
+
+    let st = engine.replay_set_base(Timeframe::M15).await.unwrap();
+    assert_eq!(
+        (st.base, st.tf, st.cut),
+        (Timeframe::M15, Timeframe::M15, hourly.cut)
+    );
+    // The context keeps its time span: from bar 50 on, four quarters an hour.
+    assert_eq!(st.bars.first().unwrap().open_time, bar(50).open_time);
+    assert_eq!(*st.bars.last().unwrap(), quarters(555)[3]);
+    assert_eq!(
+        st.start,
+        500 * 4 + 3,
+        "the start is the last quarter of bar 550"
+    );
+    // An hourly chart of the new base shows the same bars, and the trade is the same.
+    let again = engine.replay_state(TF, 0, 0).unwrap();
+    assert_eq!(again.bars, hourly.bars);
+    // The same fill: the close at the same cut. Its time is the open of the base candle
+    // it filled on, the last quarter of bar 550, in the same hourly bar.
+    let (t, h) = (again.trades[0], hourly.trades[0]);
+    assert_eq!(
+        (t.entry_price, t.r, again.stats),
+        (h.entry_price, h.r, hourly.stats)
+    );
+    assert_eq!(t.entry_time, quarters(550)[3].open_time);
+
+    // Steps are quarters now; back up to 1h only on an hour boundary.
+    assert_eq!(engine.replay_step(1).await.unwrap(), hourly.cut + Q);
+    let msg = replay_err(engine.replay_set_base(TF).await);
+    assert_eq!(
+        msg,
+        format!(
+            "the replay is at {}, inside a 1h candle; step to {} first, where it closes",
+            hourly.cut + Q,
+            hourly.cut + H
+        )
+    );
+    engine.replay_step(3).await.unwrap();
+    let st = engine.replay_set_base(TF).await.unwrap();
+    assert_eq!((st.base, st.cut), (TF, hourly.cut + H));
+    assert_eq!(st.bars.last(), Some(&bar(556)));
+    // The file is written at the base.
+    assert_eq!(engine.replay_file_name().unwrap(), "BTCUSDT-1h.replay");
+    let text = String::from_utf8(engine.replay_export().unwrap()).unwrap();
+    assert!(text.contains("\"base\": \"1h\""), "{text}");
+}
+
+#[tokio::test]
+async fn a_re_base_the_commands_do_not_fit_is_refused_and_changes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    quarters_in(&mut store_in(&dir));
+    let engine =
+        Engine::open_with_clock(dir.path(), None, vec![], Arc::new(|| T0 + BARS * H)).unwrap();
+    let st = engine
+        .replay_start(&id(), Timeframe::M15, quarters(550)[1].open_time)
+        .await
+        .unwrap();
+    // An open at a quarter that is not an hour's close cannot be played on hours.
+    engine
+        .replay_command(Command::Open {
+            time: st.cut,
+            side: Side::Long,
+            stop: 10_400,
+            take: 10_610,
+        })
+        .unwrap();
+    engine.replay_step(2).await.unwrap();
+    let before = engine.replay_state(Timeframe::M15, 0, 0).unwrap();
+    let msg = replay_err(engine.replay_set_base(TF).await);
+    assert_eq!(
+        msg,
+        format!(
+            "the replay cannot step 1h candles: command 1: time {} is outside the replay ({}..={})",
+            st.cut,
+            T0 + 551 * H,
+            T0 + 551 * H
+        )
+    );
+    assert_eq!(engine.replay_state(Timeframe::M15, 0, 0).unwrap(), before);
+    let msg = replay_err(engine.replay_set_base(Timeframe::M3).await);
+    assert!(
+        msg.starts_with("the replay cannot step 3m candles: "),
+        "{msg}"
+    );
+    let msg = replay_err(engine.replay_set_base(Timeframe::M5).await);
+    assert!(
+        msg.starts_with("the replay cannot step 5m candles: "),
+        "{msg}"
+    );
+}
+
+#[tokio::test]
+async fn re_basing_to_1m_over_too_long_a_span_is_refused_with_the_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(&dir.path().join("sandchart.db")).unwrap();
+    store.upsert_instruments(&[instrument()]).unwrap();
+    let days: Vec<Candle> = (0..200)
+        .map(|i| Candle {
+            open_time: T0 + i * DAY,
+            ..bar(i)
+        })
+        .collect();
+    store.upsert_candles(&id(), Timeframe::D1, &days).unwrap();
+    let engine =
+        Engine::open_with_clock(dir.path(), None, vec![], Arc::new(|| T0 + 200 * DAY)).unwrap();
+    engine
+        .replay_start(&id(), Timeframe::D1, T0 + 10 * DAY)
+        .await
+        .unwrap();
+    let msg = replay_err(engine.replay_set_base(Timeframe::M1).await);
+    assert_eq!(
+        msg,
+        "a replay holds at most 200000 candles: at 1m that is 138 days from its start to its last candle, and this one spans 190 days; replay at a higher step or start later"
+    );
+    assert_eq!(
+        engine.replay_state(Timeframe::D1, 0, 0).unwrap().base,
+        Timeframe::D1
+    );
+    // A step that does not line up with the base is refused as such.
+    let msg = replay_err(engine.replay_set_base(Timeframe::W1).await);
+    assert!(msg.contains("inside a 1w candle"), "{msg}");
+}
+
+type LiveItem = Result<LiveCandle, ProviderError>;
+
+/// A provider that serves history from in-memory series and opens any number of live
+/// streams, each fed by `send`.
+#[derive(Default)]
+struct FakeProvider {
+    series: Mutex<HashMap<Timeframe, Vec<Candle>>>,
+    history_calls: Mutex<Vec<(Timeframe, Option<i64>)>>,
+    streams: Mutex<Vec<(Timeframe, mpsc::UnboundedSender<LiveItem>)>>,
+    /// History requests fail while set.
+    down: AtomicBool,
+    /// History requests wait while a test holds this.
+    hold: tokio::sync::Mutex<()>,
+}
+
+impl FakeProvider {
+    fn set(&self, tf: Timeframe, candles: Vec<Candle>) {
+        self.series.lock().unwrap().insert(tf, candles);
+    }
+
+    fn calls(&self, tf: Timeframe) -> usize {
+        let calls = self.history_calls.lock().unwrap();
+        calls.iter().filter(|(t, _)| *t == tf).count()
+    }
+
+    fn open(&self, tf: Timeframe) -> usize {
+        let streams = self.streams.lock().unwrap();
+        streams
+            .iter()
+            .filter(|(t, tx)| *t == tf && !tx.is_closed())
+            .count()
+    }
+
+    fn send(&self, tf: Timeframe, candle: Candle, closed: bool) {
+        for (t, tx) in self.streams.lock().unwrap().iter() {
+            if *t == tf {
+                let _ = tx.send(Ok(LiveCandle { candle, closed }));
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl Provider for FakeProvider {
+    fn source(&self) -> &str {
+        "binance"
+    }
+
+    async fn instruments(&self) -> Result<Vec<Instrument>, ProviderError> {
+        Ok(vec![instrument()])
+    }
+
+    async fn history(
+        &self,
+        _inst: &Instrument,
+        tf: Timeframe,
+        end_before: Option<i64>,
+        limit: u16,
+    ) -> Result<Vec<Candle>, ProviderError> {
+        self.history_calls.lock().unwrap().push((tf, end_before));
+        drop(self.hold.lock().await);
+        if self.down.load(Ordering::Relaxed) {
+            return Err(ProviderError::Network("connection refused".into()));
+        }
+        let series = self.series.lock().unwrap();
+        let all = series.get(&tf).cloned().unwrap_or_default();
+        let end = end_before.unwrap_or(i64::MAX);
+        let before: Vec<Candle> = all.into_iter().filter(|c| c.open_time < end).collect();
+        Ok(before[before.len().saturating_sub(usize::from(limit))..].to_vec())
+    }
+
+    fn live(&self, _inst: &Instrument, tf: Timeframe) -> BoxStream<'static, LiveItem> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        self.streams.lock().unwrap().push((tf, tx));
+        futures::stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|i| (i, rx)) })
+            .boxed()
+    }
+}
+
+struct Live {
+    engine: Engine,
+    provider: Arc<FakeProvider>,
+    clock: Arc<AtomicI64>,
+    dir: tempfile::TempDir,
+}
+
+/// An engine with a provider over the hourly store, its clock at `now`.
+fn live_engine(now: i64) -> Live {
+    let dir = tempfile::tempdir().unwrap();
+    store_in(&dir);
+    let provider = Arc::new(FakeProvider::default());
+    let clock = Arc::new(AtomicI64::new(now));
+    let c = clock.clone();
+    let engine = Engine::open_with_clock(
+        dir.path(),
+        None,
+        vec![provider.clone() as Arc<dyn Provider>],
+        Arc::new(move || c.load(Ordering::Relaxed)),
+    )
+    .unwrap();
+    Live {
+        engine,
+        provider,
+        clock,
+        dir,
+    }
+}
+
+#[tokio::test]
+async fn a_lower_base_missing_from_the_cache_is_fetched_and_not_stored() {
+    let f = live_engine(T0 + BARS * H);
+    f.provider
+        .set(Timeframe::M15, (0..BARS).flat_map(quarters).collect());
+    f.engine
+        .replay_start(&id(), TF, T0 + 550 * H)
+        .await
+        .unwrap();
+    f.engine.replay_step(5).await.unwrap();
+    let st = f.engine.replay_set_base(Timeframe::M15).await.unwrap();
+    assert_eq!(st.cut, T0 + 556 * H);
+    assert_eq!(st.bars.first().unwrap().open_time, bar(50).open_time);
+    assert_eq!(*st.bars.last().unwrap(), quarters(555)[3]);
+    // The window from bar 50 to now is 2200 quarters: three pages, walked back from now.
+    assert_eq!(f.provider.calls(Timeframe::M15), 3);
+    let stored = Store::open(&f.dir.path().join("sandchart.db"))
+        .unwrap()
+        .candles_before(&id(), Timeframe::M15, None, 10)
+        .unwrap();
+    assert!(stored.is_empty(), "a window is never stored");
+    // Every quarter up to now was loaded: they step without asking again.
+    f.engine.replay_step(4).await.unwrap();
+    assert_eq!(f.provider.calls(Timeframe::M15), 3);
+}
+
+#[tokio::test]
+async fn stepping_reads_newer_candles_then_catches_up_and_the_backtest_ends_there() {
+    // Bars up to 597 are cached; 598 and 599 are stored later, as the chart's stream does.
+    let f = live_engine(T0 + BARS * H + 1);
+    Store::open(&f.dir.path().join("sandchart.db"))
+        .unwrap()
+        .delete_series(&id(), TF)
+        .unwrap();
+    let mut store = Store::open(&f.dir.path().join("sandchart.db")).unwrap();
+    store
+        .upsert_candles(&id(), TF, &(0..598).map(bar).collect::<Vec<_>>())
+        .unwrap();
+    let st = f
+        .engine
+        .replay_start(&id(), TF, T0 + 595 * H)
+        .await
+        .unwrap();
+    let open = Command::Open {
+        time: st.cut,
+        side: Side::Long,
+        stop: 10_500,
+        take: 10_655,
+    };
+    f.engine.replay_command(open).unwrap();
+    let mut chart = f.engine.subscribe_live(&id(), TF).unwrap();
+    store
+        .upsert_candles(&id(), TF, &[bar(598), bar(599)])
+        .unwrap();
+    f.engine.replay_step(2).await.unwrap();
+    let st = f.engine.replay_state(TF, 0, 0).unwrap();
+    assert!(
+        !st.at_end && !st.caught_up && st.caught_up_at.is_none(),
+        "598 and 599 came from the store"
+    );
+    assert_eq!(st.trades[0].reason, ExitReason::Open);
+    assert_eq!(f.provider.calls(TF), 0);
+
+    // The provider has nothing newer either (bar 600 is still forming): caught up, and the
+    // backtest ends at this cut with the trade unfinished, outside the statistics.
+    f.provider.set(TF, (0..=BARS).map(bar).collect());
+    let at = T0 + BARS * H;
+    assert_eq!(f.engine.replay_step(2).await.unwrap(), at);
+    let st = f.engine.replay_state(TF, 0, 0).unwrap();
+    assert!(st.at_end && st.caught_up);
+    assert_eq!(st.caught_up_at, Some(at));
+    assert_eq!(
+        (st.trades[0].reason, st.trades[0].exit_time),
+        (ExitReason::Unfinished, None)
+    );
+    assert_eq!(st.stats.count, 0);
+    let msg = replay_err(f.engine.replay_step(1).await);
+    assert_eq!(
+        msg,
+        "the replay has caught up with real time, so its backtest is finished: it takes no steps"
+    );
+    let msg = replay_err(f.engine.replay_command(Command::Close { time: st.cut }));
+    assert_eq!(
+        msg,
+        "the replay has caught up with real time, so its backtest is finished: it takes no commands"
+    );
+
+    // Bar 600 closes reaching the take: the chart gets it, since nothing is held back any
+    // more, but the backtest does not: no own stream, the cut and the trade stay.
+    f.clock.store(T0 + 601 * H, Ordering::Relaxed);
+    let take = Candle {
+        high: 10_660,
+        ..bar(BARS)
+    };
+    f.provider.send(TF, take, true);
+    let event = tokio::time::timeout(Duration::from_secs(5), chart.receiver().recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        event,
+        LiveEvent::Candle(LiveCandle {
+            candle: take,
+            closed: true
+        })
+    );
+    assert_eq!(f.provider.open(TF), 1, "only the chart's stream");
+    let st = f.engine.replay_state(TF, 0, 0).unwrap();
+    assert_eq!(st.cut, at);
+    assert_eq!(st.trades[0].reason, ExitReason::Unfinished);
+
+    // The file ends at the catch-up cut and opens to the same unfinished trade.
+    let text = String::from_utf8(f.engine.replay_export().unwrap()).unwrap();
+    assert!(text.contains(&format!("\"caughtUpAt\": {at},")), "{text}");
+    assert!(!text.contains(&format!("[{}, ", take.open_time)));
+    let opened = f.engine.replay_open(text.as_bytes()).unwrap();
+    assert!(opened.at_end && !opened.caught_up);
+    assert_eq!(opened.caught_up_at, Some(at));
+    assert_eq!(opened.trades[0].reason, ExitReason::Unfinished);
+    let msg = replay_err(f.engine.replay_command(Command::Close { time: at }));
+    assert!(msg.ends_with("it takes no commands"), "{msg}");
+    f.engine.replay_exit();
+    drop(chart);
+}
+
+#[tokio::test]
+async fn a_start_at_the_newest_candle_has_caught_up_and_a_re_base_down_stays_finished() {
+    let f = live_engine(T0 + BARS * H + 30 * 60_000);
+    f.provider.set(TF, (0..=BARS).map(bar).collect());
+    let quarters_now: Vec<Candle> = (0..BARS)
+        .flat_map(quarters)
+        .chain([quarters(BARS)[0], quarters(BARS)[1]])
+        .collect();
+    f.provider.set(Timeframe::M15, quarters_now);
+    let st = f
+        .engine
+        .replay_start(&id(), TF, T0 + (BARS - 1) * H)
+        .await
+        .unwrap();
+    assert!(st.caught_up);
+    assert_eq!(st.caught_up_at, Some(T0 + BARS * H));
+    // Two quarters of bar 600 closed since the cut, but the backtest ended there: a 15m
+    // chart shows the quarters up to the cut and nothing to step.
+    let st = f.engine.replay_set_base(Timeframe::M15).await.unwrap();
+    assert!(st.caught_up && st.at_end);
+    assert_eq!(
+        (st.cut, st.caught_up_at),
+        (T0 + BARS * H, Some(T0 + BARS * H))
+    );
+    assert_eq!(*st.bars.last().unwrap(), quarters(BARS - 1)[3]);
+    assert!(replay_err(f.engine.replay_step(1).await).ends_with("it takes no steps"));
+}
+
+#[tokio::test]
+async fn a_step_stands_when_newer_candles_fail_to_load_and_the_next_step_tries_again() {
+    // Bars up to 597 are cached; the exchange has 598 and 599 but is down at first.
+    let f = live_engine(T0 + BARS * H + 1);
+    let mut store = Store::open(&f.dir.path().join("sandchart.db")).unwrap();
+    store.delete_series(&id(), TF).unwrap();
+    store
+        .upsert_candles(&id(), TF, &(0..598).map(bar).collect::<Vec<_>>())
+        .unwrap();
+    f.provider.set(TF, (0..BARS).map(bar).collect());
+    f.provider.down.store(true, Ordering::Relaxed);
+    let st = f
+        .engine
+        .replay_start(&id(), TF, T0 + 596 * H)
+        .await
+        .unwrap();
+    assert!(st.newer_error.is_none(), "597 is still to come");
+    let cut = f.engine.replay_step(1).await.unwrap();
+    assert_eq!(cut, T0 + 598 * H, "the step happened");
+    let st = f.engine.replay_state(TF, 0, 0).unwrap();
+    assert_eq!(st.cut, cut);
+    assert!(!st.at_end && !st.caught_up);
+    let msg = st.newer_error.expect("the failure is reported");
+    assert!(msg.contains("connection refused"), "{msg}");
+    // Still down: the step reveals nothing more, the notice stays, and it asked once.
+    let asked = f.provider.calls(TF);
+    assert_eq!(f.engine.replay_step(1).await.unwrap(), cut);
+    assert_eq!(f.provider.calls(TF), asked + 1);
+    assert!(
+        f.engine
+            .replay_state(TF, 0, 0)
+            .unwrap()
+            .newer_error
+            .is_some()
+    );
+    // Back up: the next step loads 598 and 599 first and reveals 598; the notice goes.
+    f.provider.down.store(false, Ordering::Relaxed);
+    assert_eq!(f.engine.replay_step(1).await.unwrap(), cut + H);
+    let st = f.engine.replay_state(TF, 0, 0).unwrap();
+    assert!(st.newer_error.is_none());
+    assert_eq!(f.engine.replay_step(1).await.unwrap(), T0 + BARS * H);
+}
+
+#[tokio::test]
+async fn an_empty_answer_while_a_candle_should_have_closed_is_no_catch_up() {
+    // Cached up to 599, the clock two hours later: bar 600 has closed, but the exchange
+    // sends nothing newer (a gap, or a bad answer). That is reported, not a catch-up.
+    let f = live_engine(T0 + (BARS + 2) * H);
+    f.provider.set(TF, (0..BARS).map(bar).collect());
+    f.engine
+        .replay_start(&id(), TF, T0 + (BARS - 2) * H)
+        .await
+        .unwrap();
+    f.engine.replay_step(1).await.unwrap();
+    let st = f.engine.replay_state(TF, 0, 0).unwrap();
+    assert!(!st.caught_up && st.caught_up_at.is_none());
+    let msg = st.newer_error.expect("reported");
+    assert_eq!(
+        msg,
+        format!(
+            "no 1h candle came from {} on, though one has closed since; the next step asks again",
+            T0 + BARS * H
+        )
+    );
+    // Bar 600 comes: it steps, and with 601 still forming the replay has caught up.
+    f.provider.set(TF, (0..=BARS).map(bar).collect());
+    f.clock.store(T0 + (BARS + 1) * H + 1, Ordering::Relaxed);
+    assert_eq!(f.engine.replay_step(1).await.unwrap(), T0 + (BARS + 1) * H);
+    let st = f.engine.replay_state(TF, 0, 0).unwrap();
+    assert_eq!(st.caught_up_at, Some(T0 + (BARS + 1) * H));
+    assert!(st.newer_error.is_none());
+}
+
+const M: i64 = 60_000;
+
+/// Minute `k` (from `T0`), flat at the close of its hour's bar.
+fn minute(k: i64) -> Candle {
+    let p = bar(k / 60).close;
+    Candle {
+        open_time: T0 + k * M,
+        open: p,
+        high: p,
+        low: p,
+        close: p,
+        volume: 1,
+    }
+}
+
+#[tokio::test]
+async fn a_lower_re_base_loads_a_page_past_the_cut_and_steps_load_the_rest_in_batches() {
+    let f = live_engine(T0 + BARS * H);
+    f.provider
+        .set(Timeframe::M1, (0..BARS * 60).map(minute).collect());
+    f.engine
+        .replay_start(&id(), TF, T0 + 500 * H)
+        .await
+        .unwrap();
+    let st = f.engine.replay_set_base(Timeframe::M1).await.unwrap();
+    // 5000 minutes of context, the start minute and 1000 past the cut: seven pages, not
+    // the 99 hours to now.
+    assert_eq!(f.provider.calls(Timeframe::M1), 7);
+    assert_eq!(st.bars.len(), 5001);
+    assert_eq!(*st.bars.last().unwrap(), minute(500 * 60 + 59));
+    assert!(!st.at_end);
+    // Stepping to the last loaded minute loads the next 3000 (three pages), no more.
+    assert_eq!(f.engine.replay_step(1000).await.unwrap(), st.cut + 1000 * M);
+    assert_eq!(f.provider.calls(Timeframe::M1), 10);
+    assert_eq!(f.engine.replay_step(3000).await.unwrap(), st.cut + 4000 * M);
+    // The next 3000 would pass now: the last 1940 minutes, in two pages.
+    assert_eq!(f.provider.calls(Timeframe::M1), 12);
+    let st = f.engine.replay_state(Timeframe::M1, u32::MAX, 0).unwrap();
+    assert!(!st.at_end && st.newer_error.is_none());
+}
+
+#[tokio::test]
+async fn a_lower_re_base_fetches_only_the_part_the_cache_is_missing() {
+    // The cache holds the quarters of hours 400..600, as a 15m chart opened lately keeps them.
+    let f = live_engine(T0 + BARS * H);
+    let qs: Vec<Candle> = (0..BARS).flat_map(quarters).collect();
+    f.provider.set(Timeframe::M15, qs.clone());
+    Store::open(&f.dir.path().join("sandchart.db"))
+        .unwrap()
+        .upsert_candles(&id(), Timeframe::M15, &qs[1600..])
+        .unwrap();
+    f.engine
+        .replay_start(&id(), TF, T0 + 300 * H)
+        .await
+        .unwrap();
+    f.engine.replay_step(5).await.unwrap();
+    let st = f.engine.replay_set_base(Timeframe::M15).await.unwrap();
+    // Context from hour 0, then to a page past the cut (hour 556): hours 0..400 come from
+    // the exchange in two pages, the rest from the cache.
+    assert_eq!(f.provider.calls(Timeframe::M15), 2);
+    assert_eq!(st.bars, qs[..306 * 4]);
+    f.engine.replay_step(250 * 4).await.unwrap();
+    f.engine.replay_step(44 * 4).await.unwrap();
+    let st = f.engine.replay_state(Timeframe::M15, u32::MAX, 0).unwrap();
+    assert!(st.caught_up, "the newer quarters came from the cache");
+    assert_eq!(st.cut, T0 + BARS * H);
+    assert_eq!(f.provider.calls(Timeframe::M15), 2);
+}
+
+#[tokio::test]
+async fn a_lower_re_base_measures_the_limit_from_the_start_to_the_cut() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(&dir.path().join("sandchart.db")).unwrap();
+    store.upsert_instruments(&[instrument()]).unwrap();
+    let days: Vec<Candle> = (0..200)
+        .map(|i| Candle {
+            open_time: T0 + i * DAY,
+            ..bar(i)
+        })
+        .collect();
+    store.upsert_candles(&id(), Timeframe::D1, &days).unwrap();
+    let provider = Arc::new(FakeProvider::default());
+    provider.set(Timeframe::M1, (0..12 * 1440).map(minute).collect());
+    let engine = Engine::open_with_clock(
+        dir.path(),
+        None,
+        vec![provider.clone() as Arc<dyn Provider>],
+        Arc::new(|| T0 + 200 * DAY),
+    )
+    .unwrap();
+    // 190 days to now, but one from the start to the cut: 1m is fine.
+    engine
+        .replay_start(&id(), Timeframe::D1, T0 + 10 * DAY)
+        .await
+        .unwrap();
+    let st = engine.replay_set_base(Timeframe::M1).await.unwrap();
+    assert_eq!((st.base, st.cut), (Timeframe::M1, T0 + 11 * DAY));
+    // From the start to a cut 141 days on is too long at 1m.
+    engine.replay_exit();
+    engine
+        .replay_start(&id(), Timeframe::D1, T0 + 10 * DAY)
+        .await
+        .unwrap();
+    engine.replay_step(140).await.unwrap();
+    let msg = replay_err(engine.replay_set_base(Timeframe::M1).await);
+    assert_eq!(
+        msg,
+        "a replay holds at most 200000 candles: at 1m that is 138 days from its start to its cut, and this one spans 141 days; replay at a higher step or start later"
+    );
+}
+
+#[tokio::test]
+async fn a_step_or_a_command_during_a_re_base_makes_the_re_base_fail_and_both_stay() {
+    let f = live_engine(T0 + BARS * H);
+    f.provider
+        .set(Timeframe::M15, (0..BARS).flat_map(quarters).collect());
+    let st = f
+        .engine
+        .replay_start(&id(), TF, T0 + 550 * H)
+        .await
+        .unwrap();
+    // The quarters are on their way while the user steps.
+    let held = f.provider.hold.lock().await;
+    let (rebased, stepped) = tokio::join!(f.engine.replay_set_base(Timeframe::M15), async {
+        let cut = f.engine.replay_step(1).await;
+        drop(held);
+        cut
+    });
+    assert_eq!(stepped.unwrap(), st.cut + H);
+    assert_eq!(
+        replay_err(rebased),
+        "the replay changed while it was re-based; change the update interval again"
+    );
+    let now = f.engine.replay_state(TF, 0, 0).unwrap();
+    assert_eq!((now.base, now.cut), (TF, st.cut + H));
+
+    // The same for a trade given meanwhile: it stays, on the old base.
+    let held = f.provider.hold.lock().await;
+    let open = Command::Open {
+        time: now.cut,
+        side: Side::Long,
+        stop: 10_400,
+        take: 10_700,
+    };
+    let (rebased, given) = tokio::join!(f.engine.replay_set_base(Timeframe::M15), async {
+        let r = f.engine.replay_command(open);
+        drop(held);
+        r
+    });
+    given.unwrap();
+    assert!(replay_err(rebased).starts_with("the replay changed while it was re-based"));
+    let now = f.engine.replay_state(TF, 0, 0).unwrap();
+    assert_eq!((now.base, now.trades.len()), (TF, 1));
+    // Nothing in between: the re-base goes through and keeps the trade.
+    let st = f.engine.replay_set_base(Timeframe::M15).await.unwrap();
+    assert_eq!((st.base, st.trades.len()), (Timeframe::M15, 1));
+}
+
+#[tokio::test]
+async fn a_lower_re_base_the_provider_cannot_serve_is_refused_and_changes_nothing() {
+    let f = live_engine(T0 + BARS * H);
+    f.provider
+        .set(Timeframe::M15, (0..BARS).flat_map(quarters).collect());
+    f.engine
+        .replay_start(&id(), TF, T0 + 550 * H)
+        .await
+        .unwrap();
+    f.engine.replay_step(2).await.unwrap();
+    let before = f.engine.replay_state(TF, 0, 0).unwrap();
+    f.provider.down.store(true, Ordering::Relaxed);
+    let msg = replay_err(f.engine.replay_set_base(Timeframe::M15).await);
+    assert_eq!(
+        msg,
+        "the 15m candles could not be loaded: network error: connection refused"
+    );
+    assert_eq!(f.engine.replay_state(TF, 0, 0).unwrap(), before);
+    // Once it answers again the same re-base works.
+    f.provider.down.store(false, Ordering::Relaxed);
+    let st = f.engine.replay_set_base(Timeframe::M15).await.unwrap();
+    assert_eq!((st.base, st.cut), (Timeframe::M15, before.cut));
+}
+
+#[tokio::test]
+async fn gaps_in_the_lower_candles_move_the_start_up_and_the_cut_down() {
+    // The exchange has no quarter closing at the start (the last of hour 550) nor at the
+    // cut (the last of hour 555).
+    let f = live_engine(T0 + BARS * H);
+    let missing = [quarters(550)[3].open_time, quarters(555)[3].open_time];
+    let qs: Vec<Candle> = (0..BARS)
+        .flat_map(quarters)
+        .filter(|c| !missing.contains(&c.open_time))
+        .collect();
+    f.provider.set(Timeframe::M15, qs);
+    f.engine
+        .replay_start(&id(), TF, T0 + 550 * H)
+        .await
+        .unwrap();
+    f.engine.replay_step(5).await.unwrap();
+    let st = f.engine.replay_set_base(Timeframe::M15).await.unwrap();
+    assert_eq!(
+        st.cut,
+        T0 + 556 * H - Q,
+        "down to the quarter before the gap"
+    );
+    assert_eq!(*st.bars.last().unwrap(), quarters(555)[2]);
+    assert_eq!(
+        st.bars[st.start as usize],
+        quarters(551)[0],
+        "up to the first quarter after the gap"
+    );
+    // The next step reveals the quarter after the gap.
+    assert_eq!(
+        f.engine.replay_step(1).await.unwrap(),
+        quarters(556)[0].open_time + Q
+    );
 }

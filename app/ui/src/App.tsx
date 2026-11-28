@@ -5,6 +5,9 @@ import { dark, light } from "./chart/theme";
 import { ChartView, Loading } from "./components/ChartView";
 import { DrawingToolbar } from "./components/DrawingToolbar";
 import { IndicatorsDialog } from "./components/IndicatorsDialog";
+import { ShortcutsDialog } from "./components/ShortcutsDialog";
+import { helpKey } from "./shortcuts";
+import { markPointerFocus } from "./focus";
 import { StatusBar } from "./components/StatusBar";
 import { tfLabel } from "./components/TimeframePicker";
 import { SymbolSearch, type SearchMode } from "./components/SymbolSearch";
@@ -61,6 +64,7 @@ export function App() {
   const [waitingDefault, setWaitingDefault] = useState(true);
   const [indicators] = useState(() => indicatorStore(backend));
   const [indicatorsOpen, setIndicatorsOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [drawings] = useState(() => drawingStore(backend));
   const [updates] = useState(() => updateStore(backend));
   const [replay] = useState(() => replayStore(backend));
@@ -71,9 +75,9 @@ export function App() {
     backend.setLanguage(lang).catch((e: unknown) => console.error("setting the language failed", e));
   }, [lang]);
   const replayPhase = useSyncExternalStore(replay.subscribe, () => replay.state.phase);
-  // The replayed pair as a stable key: the watchlist hides its live quote.
+  // The replayed pair as a stable key: the watchlist hides its live quote until the backtest is over.
   const replayingKey = useSyncExternalStore(replay.subscribe, () => {
-    const v = replay.state.phase === "on" ? replay.state.view : null;
+    const v = replay.state.phase === "on" && !replay.state.finished ? replay.state.view : null;
     return v ? JSON.stringify(v.instrument.id) : null;
   });
   const replaying = useMemo(() => (replayingKey ? (JSON.parse(replayingKey) as InstrumentId) : null), [replayingKey]);
@@ -111,6 +115,9 @@ export function App() {
   useLayoutEffect(() => {
     document.documentElement.dataset.theme = themeName;
   }, [themeName]);
+
+  // A button clicked with the mouse shows no focus ring; one reached with Tab does.
+  useEffect(() => markPointerFocus(), []);
 
   const showWatchlist = (visible: boolean) => {
     setWatchlistVisible(visible);
@@ -203,6 +210,18 @@ export function App() {
     if (!watchlist.some((id) => sameId(id, i.id))) saveWatchlist([...watchlist, i.id]);
   };
 
+  // ? lists the keyboard shortcuts.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!helpKey(e)) return;
+      e.preventDefault();
+      setShortcutsOpen(true);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  const closeShortcuts = useCallback(() => setShortcutsOpen(false), []);
+
   // ⌘K / Ctrl+K opens the search from anywhere.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -214,6 +233,15 @@ export function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  // Another pair ends the replay: with trades it waits for the replay bar's question first.
+  const openPair = useCallback(
+    (id: InstrumentId) => {
+      if (current && sameId(current, id)) return;
+      replay.state.requestSwitch(() => setCurrent(id));
+    },
+    [current, replay],
+  );
 
   const theme = themeName === "dark" ? dark : light;
   return (
@@ -233,7 +261,7 @@ export function App() {
         onReplay={() => {
           const r = replay.state;
           if (r.phase === "off") r.pick();
-          else void r.exit();
+          else void r.requestExit();
         }}
         watchlistHidden={!watchlistVisible}
         onShowWatchlist={() => showWatchlist(true)}
@@ -267,12 +295,12 @@ export function App() {
               savedVersion={savedVersion}
               current={current}
               replaying={replaying}
-              onOpen={setCurrent}
+              onOpen={openPair}
               onChange={saveWatchlist}
               onAdd={() => setSearchMode("add")}
               onHide={() => showWatchlist(false)}
             />
-            <AlertsPanel store={alerts} onOpen={setCurrent} />
+            <AlertsPanel store={alerts} drawings={drawings} replaying={replaying} onOpen={openPair} />
           </div>
         )}
         <AlertToast store={alerts} />
@@ -281,11 +309,12 @@ export function App() {
       {indicatorsOpen && (
         <IndicatorsDialog backend={backend} store={indicators} onClose={() => setIndicatorsOpen(false)} />
       )}
+      {shortcutsOpen && <ShortcutsDialog onClose={closeShortcuts} />}
       {searchMode && (
         <SymbolSearch
           backend={backend}
           mode={searchMode}
-          onOpen={(i) => setCurrent(i.id)}
+          onOpen={(i) => openPair(i.id)}
           onAdd={addToWatchlist}
           onClose={() => setSearchMode(null)}
         />

@@ -385,28 +385,39 @@ pub async fn get_position_outcomes(
         .collect())
 }
 
-/// Starts a replay at the cached bar opening at `start_time`; the state has every
-/// revealed bar.
+/// Starts a replay stepping `base` at the cached candle opening at `start_time`; the
+/// state is of `base`, with every revealed bar.
 #[tauri::command]
 pub async fn replay_start(
     state: State<'_, AppState>,
     source: String,
     symbol: String,
-    tf: String,
+    base: String,
     start_time: i64,
 ) -> CmdResult<ReplayStateDto> {
     let id = InstrumentId { source, symbol };
     let st = state
         .engine
-        .replay_start(&id, timeframe(&tf)?, start_time)
+        .replay_start(&id, timeframe(&base)?, start_time)
         .await?;
     Ok(to_replay_state_dto(st)?)
 }
 
-/// Reveals up to `n` bars; returns the index of the current bar.
+/// Reveals up to `n` base candles; returns the cut.
 #[tauri::command]
-pub async fn replay_step(state: State<'_, AppState>, n: u32) -> CmdResult<u32> {
-    blocking(&state, move |e| e.replay_step(n)).await
+pub async fn replay_step(state: State<'_, AppState>, n: u32) -> CmdResult<i64> {
+    let cut = state.engine.replay_step(n).await?;
+    Ok(crate::dto::safe(cut)?)
+}
+
+/// Changes the step resolution to `base`; the state is of `base`, with every revealed bar.
+#[tauri::command]
+pub async fn replay_set_base(
+    state: State<'_, AppState>,
+    base: String,
+) -> CmdResult<ReplayStateDto> {
+    let st = state.engine.replay_set_base(timeframe(&base)?).await?;
+    Ok(to_replay_state_dto(st)?)
 }
 
 #[tauri::command]
@@ -414,15 +425,17 @@ pub async fn replay_command(state: State<'_, AppState>, command: Command) -> Cmd
     blocking(&state, move |e| e.replay_command(command)).await
 }
 
-/// The session with the revealed bars from index `cursor` on and the trades from index
-/// `trades_from` on.
+/// The session as a chart of `tf` shows it: the revealed bars from index `cursor` on and
+/// the trades from index `trades_from` on.
 #[tauri::command]
 pub async fn replay_state(
     state: State<'_, AppState>,
+    tf: String,
     cursor: u32,
     trades_from: u32,
 ) -> CmdResult<ReplayStateDto> {
-    let st = blocking(&state, move |e| e.replay_state(cursor, trades_from)).await?;
+    let tf = timeframe(&tf)?;
+    let st = blocking(&state, move |e| e.replay_state(tf, cursor, trades_from)).await?;
     Ok(to_replay_state_dto(st)?)
 }
 

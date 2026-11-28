@@ -34,12 +34,15 @@ function fakeSurface() {
   const hidden: boolean[] = [];
   const storedCopies: [Drawing, Drawing][] = [];
   const menus: MenuAction[] = [];
+  const added: DrawingBody[] = [];
   let showHidden = 0;
   let menu: ((e: MenuEdit | null) => void) | null = null;
   let style: ((e: StyleEdit | null) => void) | null = null;
   let commit: ((step: DrawingChange[]) => void) | null = null;
   let tool: ((k: ToolId | null) => void) | null = null;
   let text: ((e: TextEdit | null) => void) | null = null;
+  let confirmDelete: ((ids: readonly string[], go: () => void) => boolean) | null = null;
+  let selection: ((n: number) => void) | null = null;
   const surface: DrawingSurface = {
     setDrawings: (list) => sets.push(list),
     setDrawingMagnet: (on) => magnets.push(on),
@@ -68,6 +71,9 @@ function fakeSurface() {
       showHidden++;
     },
     onDrawingMenu: (cb) => (menu = cb),
+    onDrawingConfirmDelete: (cb) => (confirmDelete = cb),
+    onDrawingSelection: (cb) => (selection = cb),
+    addDrawing: (body) => added.push(body),
   };
   return {
     surface,
@@ -81,12 +87,16 @@ function fakeSurface() {
     hidden,
     storedCopies,
     menus,
+    added,
     showHiddenCalls: () => showHidden,
     openMenu: (e: MenuEdit | null) => menu!(e),
     openStyle: (e: StyleEdit | null) => style!(e),
     /** One undo step: a single change or all of a group's. */
     commit: (c: DrawingChange | DrawingChange[]) => commit!(Array.isArray(c) ? c : [c]),
     openText: (e: TextEdit | null) => text!(e),
+    /** The chart is about to delete `ids`: whether the controller took the question. */
+    askDelete: (ids: string[], go: () => void) => confirmDelete?.(ids, go) ?? false,
+    select: (n: number) => selection!(n),
     hasListeners: () => commit !== null || text !== null,
   };
 }
@@ -134,6 +144,68 @@ function fakeBackend(stored: Drawing[], scale = 2) {
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 afterEach(() => vi.restoreAllMocks());
+
+describe("DrawingController selection", () => {
+  it("keeps the chart's selection count for the view", () => {
+    const b = fakeBackend([]);
+    const s = fakeSurface();
+    let changes = 0;
+    const c = new DrawingController(b.backend, () => changes++);
+    const detach = c.attach(s.surface);
+    s.select(3);
+    expect(c.selectionCount).toBe(3);
+    expect(changes).toBe(1);
+    detach();
+    expect(c.selectionCount).toBe(0);
+  });
+});
+
+describe("DrawingController lines", () => {
+  it("knows the shown pair's lines as the chart has them, for their alerts' levels", async () => {
+    const b = fakeBackend([]);
+    const s = fakeSurface();
+    const c = new DrawingController(b.backend, () => {});
+    c.attach(s.surface);
+    void c.open(BTC);
+    await flush();
+    const h = drawing("h", 100);
+    b.loads[0]!.resolve([h]);
+    await flush();
+    expect(c.line("h")).toEqual(h);
+    const moved = { ...h, body: { kind: "hline" as const, p: 120 } };
+    s.commit({ before: h, after: moved });
+    expect(c.line("h")).toEqual(moved);
+    s.commit({ before: moved, after: null });
+    expect(c.line("h")).toBeUndefined();
+  });
+});
+
+describe("DrawingController delete question", () => {
+  it("asks only when a drawing to delete has an alert, and runs the delete on yes only", async () => {
+    const b = fakeBackend([]);
+    const s = fakeSurface();
+    let changes = 0;
+    const c = new DrawingController(b.backend, () => changes++);
+    c.attach(s.surface);
+    c.setAlertCheck((id) => id === "a");
+    const go = vi.fn();
+    expect(s.askDelete(["b"], go)).toBe(false);
+    expect(c.deleteQuestion).toBeNull();
+    expect(s.askDelete(["a", "b", "c"], go)).toBe(true);
+    expect(c.deleteQuestion).toMatchObject({ count: 3, alerts: 1 });
+    expect(changes).toBeGreaterThan(0);
+    c.answerDelete(false);
+    expect(go).not.toHaveBeenCalled();
+    expect(c.deleteQuestion).toBeNull();
+    s.askDelete(["a"], go);
+    c.answerDelete(true);
+    expect(go).toHaveBeenCalledTimes(1);
+    // Another pair drops a pending question.
+    s.askDelete(["a"], go);
+    void c.open(ETH);
+    expect(c.deleteQuestion).toBeNull();
+  });
+});
 
 describe("DrawingController", () => {
   it("clears the chart, then shows the instrument's drawings", async () => {
@@ -414,7 +486,7 @@ describe("DrawingController", () => {
     const s = fakeSurface();
     const c = new DrawingController(fakeBackend([]).backend, () => {});
     c.attach(s.surface);
-    const edit = { ids: ["a", "b"], locked: false, single: false, x: 5, y: 6 };
+    const edit = { ids: ["a", "b"], locked: false, single: false, line: null, x: 5, y: 6 };
     s.openMenu(edit);
     expect(c.menu).toEqual(edit);
     c.menuAction("lock");
@@ -422,6 +494,18 @@ describe("DrawingController", () => {
     expect(s.menus).toEqual(["lock", null]);
     s.openMenu(null);
     expect(c.menu).toBeNull();
+  });
+
+  it("adds a horizontal line at a price, shown even under hide all", () => {
+    const s = fakeSurface();
+    const c = new DrawingController(fakeBackend([]).backend, () => {});
+    c.attach(s.surface);
+    c.toggleHidden();
+    expect(c.hidden).toBe(true);
+    c.addLevel(1_234_567);
+    expect(s.added).toEqual([{ kind: "hline", p: 1_234_567 }]);
+    expect(c.hidden).toBe(false);
+    expect(s.hidden.at(-1)).toBe(false);
   });
 
   it("counts the drawings hidden one by one, and shows them with hide all turned off", async () => {

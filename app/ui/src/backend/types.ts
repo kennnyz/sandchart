@@ -235,27 +235,35 @@ export interface PositionOutcome {
   r: number;
 }
 
-// Replay (dto.rs, sandchart_core::replay). `bar` indexes the session's candles: context
-// before `start`, then the revealed bars up to `current`.
-/** Open fills at the close of `bar`; an edit is in force from the next bar; close fills at the close of `bar`. */
+// Replay (dto.rs, sandchart_core::replay; ADR 0008). A replay steps its base timeframe; the cut is
+// the close time of the last revealed base candle. A chart of any timeframe that builds from the
+// base shows bars aggregated from the revealed base candles; bar indices count that chart's bars.
+// Commands carry a time: the cut when they were given.
+/** Open fills at the close of the bar ending at `time`; an edit is in force from the next bar; close fills at the close of that bar. */
 export type ReplayCommand =
-  | { kind: "open"; bar: number; side: Side; stop: number; take: number }
-  | { kind: "edit"; bar: number; stop?: number; take?: number }
-  | { kind: "close"; bar: number };
-export type ExitReason = "take" | "stop" | "manual" | "open";
-/** One trade. An open trade has no exit; its `r` is marked to the close of the current bar. */
+  | { kind: "open"; time: number; side: Side; stop: number; take: number }
+  | { kind: "edit"; time: number; stop?: number; take?: number }
+  | { kind: "close"; time: number };
+/** `unfinished`: still open when the replay caught up with real time, where its backtest ended. */
+export type ExitReason = "take" | "stop" | "manual" | "open" | "unfinished";
+/** One trade; its times are the open times of the bars it filled on. An open trade has no exit; its `r` is marked to the close of the current bar. */
+/**
+ * One replay trade. `entryTime` / `exitTime` are the open times of the base candles it filled on
+ * (they place it on a chart of any timeframe); `entryFillTime` / `exitFillTime` are their close
+ * times, when the fill is known (the time an open or close command was given).
+ */
 export interface ReplayTrade {
   side: Side;
-  entryBar: number;
   entryTime: number;
+  entryFillTime: number;
   entryPrice: number;
   /** The stop at entry; R is measured against it. */
   initialStop: number;
   /** The levels in force at the exit (or now, while open). */
   stop: number;
   take: number;
-  exitBar: number | null;
   exitTime: number | null;
+  exitFillTime: number | null;
   exitPrice: number | null;
   reason: ExitReason;
   /** The exit bar touched both stop and take; it counts as a stop. */
@@ -277,16 +285,29 @@ export interface ReplayStats {
   maxDrawdownR: number;
   longestLosingStreak: number;
 }
-/** The session as the engine shows it: bars from index `from` to `current`, never a later one. */
+/** The session as a chart of `tf` shows it: bars of `tf` from index `from` to `current`, never data after the cut. */
 export interface ReplayState {
   instrument: Instrument;
+  /** The step resolution. */
+  base: TimeframeCode;
+  /** The timeframe of `bars`: the base or one that builds from it. */
   tf: TimeframeCode;
-  /** Index of the first replayed bar. */
+  /** Index of the bar that holds the first replayed base candle. */
   start: number;
   /** Index of the last revealed bar. */
   current: number;
-  /** No bar is left to reveal. */
+  /** The close time of the last revealed base candle: the time a command given now carries. */
+  cut: number;
+  /** No base candle is left to reveal and none can come (a file's end, no data source, the limit, or caught up). */
   atEnd: boolean;
+  /** The replay reached the newest data in this session: the pair's live data flows again, for display only. */
+  caughtUp: boolean;
+  /** The cut at which the backtest ended at real time (also for a file saved then): no steps or commands, the open trade is unfinished. */
+  caughtUpAt: number | null;
+  /** The last bar is still forming (a timeframe above the base): ask again from its index. */
+  partial: boolean;
+  /** Why newer candles could not be loaded at the last step (a notice: the step happened, the next one tries again); null once a load worked. */
+  newerError: string | null;
   /** Index of `bars.time[0]`. */
   from: number;
   bars: CandleColumns;
@@ -385,20 +406,26 @@ export interface Backend {
     positions: { id: string; position: PositionBody }[],
   ): Promise<{ id: string; outcome: PositionOutcome }[]>;
   /**
-   * Starts a replay (replacing any open one) at the cached bar opening at `startTime`, with
-   * up to 500 bars of context before it. Live events of the instrument pause until `replayExit`.
-   * Resolves to the state with every revealed bar.
+   * Starts a replay stepping `base` (replacing any open one) at the cached candle opening at
+   * `startTime`, with up to 500 candles of context before it. Live events of the instrument pause
+   * until `replayExit` or until it has caught up. Resolves to the state of `base` with every revealed bar.
    */
-  replayStart(id: InstrumentId, tf: TimeframeCode, startTime: number): Promise<ReplayState>;
-  /** Reveals up to `n` more bars; resolves to the index of the current bar. */
+  replayStart(id: InstrumentId, base: TimeframeCode, startTime: number): Promise<ReplayState>;
+  /** Reveals up to `n` more base candles; resolves to the cut. Refused once caught up. */
   replayStep(n: number): Promise<number>;
+  /**
+   * Changes the step resolution, keeping the cut and the commands: a lower base loads its candles,
+   * a higher one needs the cut on its boundary. Resolves to the state of `base` with every revealed bar.
+   */
+  replaySetBase(base: TimeframeCode): Promise<ReplayState>;
   /** Appends a command; rejects one that breaks a rule (bar order, unrevealed bar, levels, one trade at a time). */
   replayCommand(command: ReplayCommand): Promise<void>;
   /**
-   * The session with the revealed bars from index `cursor` on and the trades from index `tradesFrom` on
-   * (pass how many bars and closed trades the UI has; an index past the closed trades is clamped to them).
+   * The session as a chart of `tf` shows it, with the bars from index `cursor` on and the trades from
+   * index `tradesFrom` on (pass how many bars and closed trades the UI has; an index past the closed
+   * trades is clamped to them). `tf` must build from the base.
    */
-  replayState(cursor: number, tradesFrom: number): Promise<ReplayState>;
+  replayState(tf: TimeframeCode, cursor: number, tradesFrom: number): Promise<ReplayState>;
   /** Saves the session as a `.replay` file; resolves to where, or null when the user cancelled. */
   replaySave(): Promise<string | null>;
   /** Checks a `.replay` file and opens it as the session; resolves to the state with every revealed bar. */

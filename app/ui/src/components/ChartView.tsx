@@ -1,19 +1,21 @@
-import { EyeOff, Lock, LockOpen, Settings2, Trash2 } from "lucide-react";
+import { Bell, BellOff, ChevronsDown, ChevronsUp, EyeOff, Lock, LockOpen, Settings2, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
-import type { Backend, ConnectionState, InstrumentId, TimeframeCode } from "../backend/types";
-import { Chart } from "../chart/chart";
-import { formatDate, formatUtcClock } from "../chart/format";
+import type { Backend, ConnectionState, Drawing, InstrumentId, TimeframeCode } from "../backend/types";
+import { Chart, type AlertMenuAt, type PriceMenuAt } from "../chart/chart";
+import { formatDate, formatPrice, formatUtcClock } from "../chart/format";
+import { priceMenuEntries } from "../chart/plus";
+import { HorizontalLevelIcon } from "../icons";
 import type { PriceScaleMode } from "../chart/scale";
 import type { ChartTheme } from "../chart/theme";
 import { t, useLanguage } from "../i18n";
-import { bannerText, deleteKeyLabel, enterKeyLabel, sourceName } from "../labels";
+import { altShortcutLabel, bannerText, deleteKeyLabel, enterKeyLabel, sourceName } from "../labels";
 import { ChartSession, type SessionState } from "../state/chartSession";
 import { alertKey } from "../chart/drawings/keys";
 import type { DrawingPatch } from "../chart/drawings/state";
 import type { AlertStore } from "../state/alerts";
 import type { DrawingStore } from "../state/drawings";
 import type { IndicatorStore } from "../state/indicators";
-import type { ReplayStore } from "../state/replay";
+import { MAX_REPLAY_FILE_MIB, REPLAY_KEYS, type ReplayStore } from "../state/replay";
 import { Banner } from "./Banner";
 import { DrawingStyle, type LineAlert } from "./DrawingStyle";
 import { IndicatorLegend } from "./IndicatorLegend";
@@ -24,6 +26,7 @@ import { NoteEditor } from "./NoteEditor";
 import { ReplayBar } from "./ReplayBar";
 import { ReplayStats } from "./ReplayStats";
 import { tfLabel } from "./TimeframePicker";
+import { Confirm } from "./Confirm";
 
 export interface ChartViewProps {
   backend: Backend;
@@ -39,6 +42,9 @@ export interface ChartViewProps {
 }
 
 const NO_VALUES = new Map<string, Map<string, number>>();
+
+/** A menu of the chart itself: the "+" at the crosshair price, or a right click on an alert level; `n` counts the openings. */
+type ChartMenu = ({ kind: "price" } & PriceMenuAt) | ({ kind: "alert" } & AlertMenuAt);
 
 /** Five small bars, one lit, and what is being loaded (Design Reference, States). */
 export function Loading({ symbol, tf, source }: { symbol: string; tf: string; source: string }) {
@@ -64,6 +70,7 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
   const [hover, setHover] = useState<number | null>(null);
   const [hostHeight, setHostHeight] = useState(0);
   const [hostWidth, setHostWidth] = useState(0);
+  const [chartMenu, setChartMenu] = useState<(ChartMenu & { n: number }) | null>(null);
   const [settings, setSettings] = useState<{ instance: string; top: number; bottom: number; left: number } | null>(
     null,
   );
@@ -123,16 +130,17 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
 
   useEffect(() => {
     if (!parts) return;
+    // Another timeframe of the replayed pair: the replay shows it (re-basing to a lower one)
+    // and keeps its trades; its bars come through the feed, which drops the old results.
+    if (rp.replays({ source, symbol })) {
+      void rp.setTimeframe(tf);
+      return;
+    }
     // Results of the old chart would align by time on the new one: drop them first.
     ind.clear();
     computedFor.current = null;
     parts.chart.setIndicators(ind.layers(), 0);
-    // Back on the replayed chart (an opened file switched to it): show the replay again.
-    if (rp.matches({ source, symbol }, tf)) {
-      void rp.resync();
-      return;
-    }
-    // Another chart was picked: the replay ends, and this chart loads live.
+    // Another pair was picked: the replay ends, and this chart loads live.
     if (rp.phase !== "off") void rp.exit(false);
     void parts.session.open({ source, symbol }, tf);
   }, [parts, source, symbol, tf, ind, rp]);
@@ -150,9 +158,13 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
       show(st) {
         swapped();
         parts.session.showReplay(st);
+        if (st.caughtUp) void parts.session.followReplay();
       },
       append(bars) {
         parts.session.appendReplay(bars);
+      },
+      follow() {
+        void parts.session.followReplay();
       },
       reload() {
         swapped();
@@ -173,7 +185,16 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
   const replayView = rp.phase === "on" ? rp.view : null;
   useEffect(() => {
     chart?.setReplay(
-      replayView ? { trades: replayView.trades, time: replayView.time, close: replayView.close, label: t("replay.marker") } : null,
+      replayView
+        ? {
+            trades: replayView.trades,
+            time: replayView.time,
+            close: replayView.close,
+            cut: replayView.cut,
+            label: t("replay.marker"),
+            caughtUp: replayView.caughtUp,
+          }
+        : null,
     );
   }, [chart, replayView, lang]);
   useEffect(() => {
@@ -232,6 +253,32 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
     chart.onAlertClick((alertId) => alerts.state.select(alertId));
     return () => chart.onAlertClick(null);
   }, [chart, alerts, alertList, replaying]);
+  // Lines with an active alert carry a bell tag.
+  useEffect(() => {
+    chart?.setDrawingAlerts(new Set(alertList.flatMap((a) => (a.active && a.kind.kind === "drawing" ? [a.kind.drawingId] : []))));
+  }, [chart, alertList]);
+  // A dragged level re-sets its alert at the new price, at the scale the chart shows it in.
+  const scaleNow = state?.instrument?.priceScale ?? null;
+  useEffect(() => {
+    if (!chart || scaleNow === null) return;
+    chart.onAlertMove((alertId, price) => alerts.state.movePrice(alertId, scaleNow, price));
+    return () => chart.onAlertMove(null);
+  }, [chart, alerts, scaleNow]);
+
+  // The "+" at the crosshair price and a right click on an alert level open a menu of the chart.
+  useEffect(() => {
+    if (!chart) return;
+    let n = 0;
+    chart.onPriceMenu((at) => setChartMenu({ kind: "price", ...at, n: ++n }));
+    chart.onAlertMenu((at) => setChartMenu({ kind: "alert", ...at, n: ++n }));
+    return () => {
+      chart.onPriceMenu(null);
+      chart.onAlertMenu(null);
+    };
+  }, [chart]);
+  // Another pair: its menu would act on the old one.
+  useEffect(() => setChartMenu(null), [source, symbol]);
+  const closeChartMenu = useCallback(() => setChartMenu(null), []);
 
   // Alt+A: a price alert at the crosshair price, on the pair the chart shows.
   useEffect(() => {
@@ -247,6 +294,11 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [chart, alerts, replay]);
+
+  // Deleting a line with an alert asks first: the engine deletes the alert with it, and undo cannot bring it back.
+  useEffect(() => drawings.state.setAlertCheck((id) => alerts.state.forDrawing(id) !== undefined), [drawings, alerts]);
+  const deleteQuestion = drawings.state.deleteQuestion;
+  const answerDelete = useCallback((yes: boolean) => drawings.state.answerDelete(yes), [drawings]);
 
   const styled = styleEdit?.drawing;
   const lineAlert: LineAlert | undefined =
@@ -269,15 +321,39 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
   const closeStyle = useCallback(() => drawings.state.closeStyle(), [drawings]);
   const deleteStyled = useCallback(() => drawings.state.deleteStyled(), [drawings]);
   const closeMenu = useCallback(() => drawings.state.menuAction(null), [drawings]);
+  /** A line's alert from its menu: a crossing alert at once (the popover changes the direction), or its removal. */
+  const lineAlertItems = (line: Drawing | null): MenuItem[] => {
+    if (!line) return [];
+    const current = alerts.state.forDrawing(line.id);
+    const run = (fn: () => void) => () => {
+      drawings.state.menuAction(null);
+      fn();
+    };
+    return current
+      ? [{ id: "remove-alert", label: t("drawingMenu.removeAlert"), icon: BellOff, onSelect: run(() => void alerts.state.remove(current.id)) }]
+      : [
+          {
+            id: "add-alert",
+            label: t("drawingMenu.addAlert"),
+            title: t("drawingMenu.addAlert.title"),
+            icon: Bell,
+            onSelect: run(() => void alerts.state.setForDrawing(line, "cross", drawings.state.settled())),
+          },
+        ];
+  };
+  // Over several drawings the menu says how many it acts on.
+  const label = (action: "lock" | "unlock" | "hide" | "remove") =>
+    menuEdit && !menuEdit.single ? t(`drawingMenu.${action}N`, { n: menuEdit.ids.length }) : t(`drawingMenu.${action}`);
   const menuItems: MenuItem[] = menuEdit
     ? [
         menuEdit.locked
-          ? { id: "unlock", label: t("drawingMenu.unlock"), icon: LockOpen, onSelect: () => drawings.state.menuAction("unlock") }
-          : { id: "lock", label: t("drawingMenu.lock"), icon: Lock, onSelect: () => drawings.state.menuAction("lock") },
-        { id: "hide", label: t("drawingMenu.hide"), icon: EyeOff, onSelect: () => drawings.state.menuAction("hide") },
+          ? { id: "unlock", label: label("unlock"), icon: LockOpen, onSelect: () => drawings.state.menuAction("unlock") }
+          : { id: "lock", label: label("lock"), icon: Lock, onSelect: () => drawings.state.menuAction("lock") },
+        { id: "hide", label: label("hide"), icon: EyeOff, onSelect: () => drawings.state.menuAction("hide") },
+        ...lineAlertItems(menuEdit.line),
         {
           id: "remove",
-          label: t("drawingMenu.remove"),
+          label: label("remove"),
           icon: Trash2,
           shortcut: deleteKeyLabel(),
           keys: ["Delete", "Backspace"],
@@ -296,6 +372,58 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
           : []),
       ]
     : [];
+
+  let chartItems: MenuItem[] = [];
+  if (chartMenu?.kind === "alert") {
+    const alertId = chartMenu.id;
+    chartItems = [
+      {
+        id: "remove",
+        label: t("alertMenu.remove"),
+        icon: Trash2,
+        shortcut: deleteKeyLabel(),
+        keys: ["Delete", "Backspace"],
+        onSelect: () => {
+          setChartMenu(null);
+          void alerts.state.remove(alertId);
+        },
+      },
+    ];
+  } else if (chartMenu?.kind === "price") {
+    const { instrument, price: at } = chartMenu;
+    const price = formatPrice(at, instrument.priceScale);
+    const pick = (run: () => void) => () => {
+      setChartMenu(null);
+      run();
+    };
+    // A replay's prices are from the past: no alert there, a paper trade at the current close instead.
+    const entries = priceMenuEntries(rp.phase !== "off" ? { finished: rp.finished, hasOpen: rp.view?.open != null } : null);
+    chartItems = entries.map((e): MenuItem => {
+      const off = { disabled: e.disabled, title: e.realTime ? t("replay.realTime.title") : undefined };
+      switch (e.id) {
+        case "alert":
+          return {
+            id: "alert",
+            label: t("priceMenu.alert", { symbol: instrument.id.symbol, price }),
+            icon: Bell,
+            shortcut: altShortcutLabel("A"),
+            onSelect: pick(() => void alerts.state.createPrice(instrument.id, instrument.priceScale, at)),
+          };
+        case "hline":
+          return {
+            id: "hline",
+            label: t("priceMenu.hline", { price }),
+            icon: HorizontalLevelIcon,
+            shortcut: altShortcutLabel("H"),
+            onSelect: pick(() => drawings.state.addLevel(at)),
+          };
+        case "buy":
+          return { id: "buy", label: t("replay.buy"), icon: ChevronsUp, shortcut: REPLAY_KEYS.buy, ...off, onSelect: pick(() => void rp.buy()) };
+        case "sell":
+          return { id: "sell", label: t("replay.sell"), icon: ChevronsDown, shortcut: REPLAY_KEYS.sell, ...off, onSelect: pick(() => void rp.sell()) };
+      }
+    });
+  }
 
   const openSettings = useCallback((instance: string, row: HTMLElement) => {
     const host = hostRef.current;
@@ -364,6 +492,20 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
           dismiss={{ label: t("alerts.errorClose"), onDismiss: () => alerts.state.dismissError() }}
         />
       )}
+      {rp.fileError !== null && (
+        <Banner
+          testId="replay-file-error"
+          text={
+            rp.fileError.kind === "tooLarge"
+              ? t("replay.tooLarge", { mib: MAX_REPLAY_FILE_MIB })
+              : t(`replay.file.${rp.fileError.kind}`)
+          }
+          retryAt={null}
+          retryLabel={() => ""}
+          detail={rp.fileError.detail}
+          dismiss={{ label: t("replay.file.close"), onDismiss: () => rp.dismissFileError() }}
+        />
+      )}
       {rp.error !== null && (
         <Banner
           testId="replay-error"
@@ -373,7 +515,6 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
           detail={rp.error}
         />
       )}
-      <div className="chart-row">
       <div
         ref={hostRef}
         data-testid="chart"
@@ -448,11 +589,40 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
             onClose={closeMenu}
           />
         )}
+        {chartMenu && chartItems.length > 0 && (
+          <Menu
+            key={chartMenu.n}
+            items={chartItems}
+            label={t(chartMenu.kind === "price" ? "priceMenu.label" : "alertMenu.label")}
+            testId={chartMenu.kind === "price" ? "price-menu" : "alert-menu"}
+            x={chartMenu.x}
+            y={chartMenu.y}
+            width={hostWidth}
+            height={hostHeight}
+            onClose={closeChartMenu}
+          />
+        )}
+        {deleteQuestion && (
+          <Confirm
+            title={deleteQuestion.count === 1 ? t("drawingDelete.one") : t("drawingDelete.many", { n: deleteQuestion.count })}
+            text={
+              deleteQuestion.count === 1 ? t("drawingDelete.alertOne") : t("drawingDelete.alertMany", { n: deleteQuestion.alerts })
+            }
+            ok={t("drawingDelete.ok")}
+            cancel={t("drawingDelete.cancel")}
+            testId="drawing-delete-confirm"
+            onAnswer={answerDelete}
+          />
+        )}
+        {drawings.state.selectionCount > 1 && (
+          <div className="selection-count" data-testid="selection-count">
+            {t("drawings.selected", { n: drawings.state.selectionCount })}
+          </div>
+        )}
         {loading && <Loading symbol={symbol} tf={tfLabel(tf)} source={sourceLabel} />}
       </div>
-      {replayView && <ReplayStats view={replayView} />}
-      </div>
       {rp.phase !== "off" && <ReplayBar replay={rp} range={range} onDate={pickByDate} />}
+      {replayView && <ReplayStats replay={rp} />}
     </>
   );
 }

@@ -46,7 +46,7 @@ export interface SessionState {
   problem: SessionProblem | null;
   /** Bumped on every change of the candles, so the legend re-reads them. */
   version: number;
-  /** The chart shows a replay's revealed bars: no live updates, no older pages. */
+  /** The chart shows a replay's revealed bars: no older pages, and live updates only once it caught up. */
   replay: boolean;
 }
 
@@ -123,6 +123,46 @@ export class ChartSession {
       version: this.state.version + 1,
       replay: true,
     });
+  }
+
+  /**
+   * The replay on the chart caught up (ADR 0008): the pair's live candles update the chart again,
+   * as on the live chart. They are for display only; the backtest ended at the cut. Stops with
+   * the next `showReplay`, `open` or `close`.
+   */
+  async followReplay(): Promise<void> {
+    const { id, tf, replay } = this.state;
+    const gen = this.gen;
+    if (!replay || !id || id.source === CSV_SOURCE || this.liveGen === gen) return;
+    this.liveGen = gen;
+    try {
+      const stop = await this.backend.subscribeLive(id, tf, (e) => {
+        if (gen !== this.gen) return;
+        const candles: LiveCandle[] =
+          e.kind === "candle"
+            ? [e]
+            : e.kind === "backfilled"
+              ? e.candles.time.map((time, i) => ({
+                  time,
+                  open: e.candles.open[i]!,
+                  high: e.candles.high[i]!,
+                  low: e.candles.low[i]!,
+                  close: e.candles.close[i]!,
+                  volume: e.candles.volume[i]!,
+                  closed: true,
+                }))
+              : [];
+        if (candles.length === 0) return;
+        for (const c of candles) this.chart.updateLast(c);
+        this.bump();
+      });
+      if (gen !== this.gen) stop();
+      else this.stopLive = stop;
+    } catch (e) {
+      if (gen !== this.gen) return;
+      this.liveGen = 0;
+      this.fail("latest", toProblem(e));
+    }
   }
 
   /** Appends newly revealed replay bars. */

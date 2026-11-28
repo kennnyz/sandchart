@@ -45,6 +45,27 @@ function stored(id: string, z: number, p = 50, locked = false): Drawing {
   };
 }
 
+describe("add", () => {
+  it("stores a whole drawing at once, on top, selected, as one undo step", () => {
+    const { s, commits, steps } = setup();
+    s.reset([stored("x", 4)]);
+    const d = s.add({ kind: "hline", p: 1_234_567 });
+    expect(d).toMatchObject({ id: "d1", instrument: BTC, priceScale: 2, body: { kind: "hline", p: 1_234_567 }, z: 5, locked: false, hidden: false });
+    expect(commits).toEqual([{ before: null, after: d }]);
+    expect(steps).toHaveLength(1);
+    expect(s.selected).toBe("d1");
+    expect(s.undo()).toBe(true);
+    expect(s.drawings.map((x) => x.id)).toEqual(["x"]);
+  });
+
+  it("adds nothing without an owner", () => {
+    const { s, commits } = setup();
+    s.setOwner(null);
+    expect(s.add({ kind: "hline", p: 10 })).toBeNull();
+    expect(commits).toEqual([]);
+  });
+});
+
 describe("placement", () => {
   it("places a horizontal level with one click, then drops the tool and selects it", () => {
     const { s, commits, tools } = setup();

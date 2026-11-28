@@ -4,7 +4,7 @@ import { PriceScale } from "../scale";
 import { dark } from "../theme";
 import type { Viewport } from "../viewport";
 import { Coords } from "./geometry";
-import { DrawingLayer, type LayerHost, type MenuEdit, type StyleEdit } from "./layer";
+import { bellAt, DrawingLayer, type LayerHost, type MenuEdit, type StyleEdit } from "./layer";
 import type { DrawingChange } from "./state";
 import { toolFor } from "./registry";
 
@@ -194,8 +194,8 @@ describe("geometry cache", () => {
   });
 });
 
-describe("replay cutoff", () => {
-  it("neither paints nor hits a drawing whose earliest anchor is after the cutoff", () => {
+describe("replay cut", () => {
+  it("neither paints nor hits a drawing whose earliest anchor is at or after the cut", () => {
     const l = layer();
     const c = coords();
     const at = (i: number) => i * STEP;
@@ -213,7 +213,9 @@ describe("replay cutoff", () => {
     );
     const position = drawing({ kind: "position", side: "long", entry: { t: at(55), p: 5_000 }, stop: 4_000, take: 7_000, endT: at(70) }, "pos");
     const level = drawing({ kind: "hline", p: 3_000 }, "level");
-    l.setDrawings([past, later, across, ahead, position, level]);
+    // Inside a forming bar of a higher timeframe: half a bar before the cut is revealed.
+    const inside = drawing({ kind: "trend", a: { t: at(49.5), p: 4_000 }, b: { t: at(49.5) + 1, p: 4_100 }, extendLeft: false, extendRight: false }, "inside");
+    l.setDrawings([past, later, across, ahead, position, level, inside]);
     const note = toolFor("note")!;
     const where = (d: Drawing) => note.layout(d.body, c) as { x: number; y: number };
     const painted = () => {
@@ -223,10 +225,11 @@ describe("replay cutoff", () => {
       spies.forEach((s) => s.mockRestore());
       return n;
     };
-    expect(painted()).toBe(6);
+    expect(painted()).toBe(7);
 
-    l.setCutoff(at(50));
-    expect(painted()).toBe(3);
+    // The cut is the close time of the last revealed bar: bar 49 is revealed, bar 50 is not.
+    l.setCut(at(50));
+    expect(painted()).toBe(4);
     const p = where(past);
     expect(l.pointerDown(p.x, p.y, false)).toBe(true);
     l.pointerUp(p.x, p.y, false);
@@ -237,18 +240,21 @@ describe("replay cutoff", () => {
     l.pointerUp(q.x, q.y, false);
     expect(l.state.selected).toBeNull();
 
-    // A step reveals the bar of the later note and the position's entry.
-    l.setCutoff(at(60));
+    // A drawing anchored exactly at the cut is on the first bar not revealed yet.
+    l.setCut(at(60));
     expect(painted()).toBe(5);
-    l.setCutoff(null);
+    // A step reveals the bar of the later note.
+    l.setCut(at(61));
     expect(painted()).toBe(6);
+    l.setCut(null);
+    expect(painted()).toBe(7);
   });
 
-  it("drops the selection of a drawing the cutoff hides", () => {
+  it("drops the selection of a drawing the cut hides", () => {
     const l = layer();
     l.setDrawings([drawing({ kind: "note", t: 60 * STEP, text: "later" }, "later")]);
     l.state.select("later");
-    l.setCutoff(50 * STEP);
+    l.setCut(60 * STEP);
     expect(l.state.selected).toBeNull();
   });
 });
@@ -371,7 +377,7 @@ describe("context menu", () => {
     expect(l.contextMenu(100, 900)).toBe(false);
     l.state.setSelection(["a", "b"]);
     expect(l.contextMenu(100, 500)).toBe(true);
-    expect(rec.menus.at(-1)).toEqual({ ids: ["a", "b"], locked: false, single: false, x: 100, y: 500 });
+    expect(rec.menus.at(-1)).toEqual({ ids: ["a", "b"], locked: false, single: false, line: null, x: 100, y: 500 });
     l.menuAction("lock");
     expect(rec.menus.at(-1)).toBeNull();
     expect(l.state.drawings.filter((d) => d.locked).map((d) => d.id)).toEqual(["a", "b"]);
@@ -385,7 +391,7 @@ describe("context menu", () => {
     expect(l.state.selection).toEqual([]);
     // A right click on a drawing outside the selection selects it alone.
     l.contextMenu(100, 700);
-    expect(rec.menus.at(-1)).toMatchObject({ ids: ["c"], single: true });
+    expect(rec.menus.at(-1)).toMatchObject({ ids: ["c"], single: true, line: { id: "c" } });
     l.menuAction("remove");
     expect(l.state.drawings.map((d) => d.id)).toEqual(["a", "b"]);
     l.showHidden();
@@ -402,6 +408,59 @@ describe("context menu", () => {
     l.contextMenu(120, 400);
     expect(l.command("cancel")).toBe(true);
     expect(rec.menus.at(-1)).toBeNull();
+  });
+});
+
+describe("delete confirmation", () => {
+  /** A recording layer whose host asks before deleting `ask` and keeps the yes to call later. */
+  function asking(ask: string[]) {
+    const r = recording();
+    const asked: { ids: readonly string[]; go: () => void }[] = [];
+    const host = (r.l as unknown as { host: LayerHost }).host;
+    host.confirmDelete = (ids, go) => {
+      if (!ids.some((id) => ask.includes(id))) return false;
+      asked.push({ ids, go });
+      return true;
+    };
+    return { ...r, asked };
+  }
+
+  it("waits for the yes on Delete, the menu and the style popover; one undo step brings them back", () => {
+    const { l, c, rec, paint, asked } = asking(["a"]);
+    l.setDrawings([hl(c.p(400), "a"), hl(c.p(500), "b"), hl(c.p(700), "c")]);
+    paint();
+    l.state.setSelection(["a", "b"]);
+    expect(l.command("delete")).toBe(true);
+    expect(l.state.drawings).toHaveLength(3);
+    expect(asked.at(-1)!.ids).toEqual(["a", "b"]);
+    // The yes deletes them as one step, even when the selection changed meanwhile.
+    l.state.setSelection(["c"]);
+    asked.at(-1)!.go();
+    expect(l.state.drawings.map((d) => d.id)).toEqual(["c"]);
+    expect(rec.commits.filter((ch) => ch.after === null)).toHaveLength(2);
+    expect(l.command("undo")).toBe(true);
+    expect(l.state.drawings).toHaveLength(3);
+
+    // From the menu: asked, and a no (never calling go) deletes nothing.
+    l.contextMenu(100, 400);
+    l.menuAction("remove");
+    expect(asked).toHaveLength(2);
+    expect(l.state.drawings).toHaveLength(3);
+    // A drawing without an alert goes at once.
+    l.contextMenu(100, 700);
+    l.menuAction("remove");
+    expect(l.state.drawings.map((d) => d.id)).toEqual(["a", "b"]);
+  });
+
+  it("deletes only the ones still there on a late yes", () => {
+    const { l, c, paint, asked } = asking(["a"]);
+    l.setDrawings([hl(c.p(400), "a"), hl(c.p(500), "b")]);
+    paint();
+    l.state.setSelection(["a", "b"]);
+    l.command("delete");
+    l.setDrawings([hl(c.p(500), "b")]);
+    asked[0]!.go();
+    expect(l.state.drawings).toHaveLength(0);
   });
 });
 
@@ -509,18 +568,162 @@ describe("⌘ snapping and handles", () => {
 
 describe("many selected drawings", () => {
   it("hit-tests 2000 selected drawings in about linear time", () => {
-    const l = layer();
-    const list = Array.from({ length: 2000 }, (_, i) => drawing({ kind: "hline", p: 1_000 + i * 4 }));
-    l.setDrawings(list);
-    l.state.setSelection(list.map((d) => d.id));
+    /** Time of 200 pointer moves over `n` selected drawings: each move checks every drawing's selection twice. */
+    const moves = (n: number) => {
+      const l = layer();
+      const list = Array.from({ length: n }, (_, i) => drawing({ kind: "hline", p: 1_000 + i * 4 }));
+      l.setDrawings(list);
+      l.state.setSelection(list.map((d) => d.id));
+      l.paintBase(ctx, coords(), 1, dark, () => {});
+      const t0 = performance.now();
+      for (let i = 0; i < 200; i++) l.pointerMove(5 + (i % 100), 5, false);
+      const ms = performance.now() - t0;
+      expect(l.state.selection).toHaveLength(n);
+      return ms;
+    };
+    moves(500); // warm up the JIT
+    const small = moves(500);
+    const big = moves(2000);
+    // Four times the drawings: about four times the time. A scan of the selection per drawing
+    // would take sixteen times as long (seconds here); the floor keeps tiny timings from flaking.
+    expect(big).toBeLessThan(Math.max(8 * small, 150));
+  });
+});
+
+describe("⌘ snap preview", () => {
+  // Bar 50 at x = 510: open and close 5000 (y 500), high 6000 (y 400), low 4000 (y 600).
+  it("shows where a point would snap before the first click, as soon as ⌘ goes down or up", () => {
+    const { l, rec, paint } = recording();
+    paint();
+    l.setTool("trend");
+    l.pointerMove(511, 430, false, false);
+    expect(l.snapPreview()).toBeNull();
+    const base = rec.base;
+    const overlay = rec.overlay;
+    // No mouse movement: the key alone shows the ring on the high of the bar under the mouse.
+    l.modifiers(true);
+    expect(l.snapPreview()).toEqual({ x: 510, y: 400, anchor: { t: 50 * STEP, p: 6_000 } });
+    expect(rec.overlay).toBeGreaterThan(overlay);
+    l.modifiers(true);
+    l.modifiers(false);
+    expect(l.snapPreview()).toBeNull();
+    // Only the overlay is drawn again.
+    expect(rec.base).toBe(base);
+  });
+
+  it("follows the mouse with ⌘ held and places the first point on that price", () => {
+    const { l, rec, paint } = recording();
+    paint();
+    l.setOwner({ instrument: { source: "mock", symbol: "BTCUSDT" }, priceScale: 2 });
+    l.setTool("trend");
+    l.pointerMove(611, 590, false, true);
+    expect(l.snapPreview()?.anchor).toEqual({ t: 60 * STEP, p: 4_000 });
+    l.pointerDown(611, 590, false, true);
+    l.pointerUp(611, 590, false, true);
+    expect(l.state.points).toEqual([{ t: 60 * STEP, p: 4_000 }]);
+    // The second point: ⌘ pressed while the line follows the mouse.
+    l.pointerMove(711, 520, false, false);
+    expect(l.snapPreview()).toBeNull();
+    const base = rec.base;
+    l.modifiers(true);
+    expect(l.snapPreview()?.anchor).toEqual({ t: 70 * STEP, p: 5_000 });
+    expect(rec.base).toBe(base);
+  });
+
+  it("shows nothing without a tool, off the bars, or after the mouse left", () => {
+    const { l, paint } = recording();
+    paint();
+    l.pointerMove(511, 430, false, true);
+    expect(l.snapPreview()).toBeNull();
+    l.setTool("trend");
+    l.pointerMove(511, 100, false, true);
+    expect(l.snapPreview()).toBeNull();
+    l.pointerMove(511, 430, false, true);
+    expect(l.snapPreview()).not.toBeNull();
+    l.leave();
+    l.modifiers(false);
+    l.modifiers(true);
+    expect(l.snapPreview()).toBeNull();
+  });
+});
+
+describe("add from a menu", () => {
+  it("stores the drawing, selects it and puts the armed tool down", () => {
+    const { l, rec } = recording();
+    l.setOwner({ instrument: { source: "mock", symbol: "BTCUSDT" }, priceScale: 2 });
+    l.setTool("trend");
+    const base = rec.base;
+    l.add({ kind: "hline", p: 4_321 });
+    expect(rec.commits).toHaveLength(1);
+    expect(rec.commits[0]!.after).toMatchObject({ body: { kind: "hline", p: 4_321 } });
+    expect(l.state.selected).toBe(rec.commits[0]!.after!.id);
+    expect(l.state.tool).toBeNull();
+    expect(rec.base).toBeGreaterThan(base);
+  });
+});
+
+describe("bell tags of lines with alerts", () => {
+  it("sit on the axis for a level, at the right end of a trend line or where it meets the axis", () => {
     const c = coords();
-    l.paintBase(ctx, c, 1, dark, () => {});
-    const t0 = performance.now();
-    // Pointer moves over the plot: each one checks every drawing's selection twice.
-    for (let i = 0; i < 200; i++) l.pointerMove(5 + (i % 100), 5, false);
-    const ms = performance.now() - t0;
-    expect(l.state.selection).toHaveLength(2000);
-    // A scan of the selection per drawing takes seconds here.
-    expect(ms).toBeLessThan(300);
+    expect(bellAt({ kind: "hline", p: c.p(300) }, c)).toEqual({ x: c.plotW, y: 300 });
+    const trend = { kind: "trend" as const, a: { t: c.t(400), p: c.p(600) }, b: { t: c.t(200), p: c.p(500) }, extendLeft: false, extendRight: false };
+    const end = bellAt(trend, c)!;
+    expect(end.x).toBeCloseTo(400);
+    expect(end.y).toBeCloseTo(600);
+    // Extended right it meets the axis: 600 px further on the same slope (-0.5 px per px).
+    const ext = bellAt({ ...trend, extendRight: true }, c)!;
+    expect(ext.x).toBe(c.plotW);
+    expect(ext.y).toBeCloseTo(600 + 0.5 * (c.plotW - 400));
+    expect(bellAt({ kind: "hline", p: c.p(-10) }, c)).toBeNull();
+    expect(bellAt({ kind: "note", t: 0, text: "x" }, c)).toBeNull();
+  });
+});
+
+describe("locked drawings", () => {
+  /** Overlay text painted by the layer. */
+  function texts(l: DrawingLayer): string[] {
+    const out: string[] = [];
+    const rec = new Proxy({} as CanvasRenderingContext2D, {
+      get: (_t, key) =>
+        key === "measureText" ? () => ({ width: 10 }) : key === "fillText" ? (s: string) => out.push(s) : () => undefined,
+      set: () => true,
+    });
+    l.paintOverlay(rec, 1, dark, () => {});
+    return out;
+  }
+
+  it("say Locked for a moment where a drag of one began, and do not move", () => {
+    vi.useFakeTimers();
+    const { l, c, rec, paint } = recording();
+    l.setDrawings([hl(c.p(400), "a", { locked: true })]);
+    paint();
+    expect(l.pointerDown(100, 400, false)).toBe(true);
+    l.pointerMove(100, 460, false);
+    expect(texts(l)).toContain("Locked");
+    l.pointerUp(100, 460, false);
+    expect(rec.commits).toEqual([]);
+    const overlays = rec.overlay;
+    vi.advanceTimersByTime(1200);
+    expect(rec.overlay).toBeGreaterThan(overlays);
+    expect(texts(l)).not.toContain("Locked");
+    vi.useRealTimers();
+  });
+});
+
+describe("selection count", () => {
+  it("is told to the host when the overlay is painted after it changed", () => {
+    const { l, c, paint } = recording();
+    const told: number[] = [];
+    (l as unknown as { host: LayerHost }).host.selection = (n) => told.push(n);
+    l.setDrawings([hl(c.p(400), "a"), hl(c.p(500), "b")]);
+    paint();
+    const overlay = () => l.paintOverlay(ctx, 1, dark, () => {});
+    overlay();
+    l.state.setSelection(["a", "b"]);
+    overlay();
+    overlay();
+    l.state.setSelection(["a"]);
+    overlay();
+    expect(told).toEqual([2, 1]);
   });
 });

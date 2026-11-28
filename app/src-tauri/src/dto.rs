@@ -95,7 +95,7 @@ impl From<DtoError> for ProblemDto {
 }
 
 /// JavaScript numbers hold integers exactly only up to 2^53 - 1.
-fn safe(v: i64) -> Result<i64, DtoError> {
+pub fn safe(v: i64) -> Result<i64, DtoError> {
     if v.unsigned_abs() > JS_SAFE_MAX.unsigned_abs() {
         Err(DtoError::UnsafeTicks)
     } else {
@@ -626,16 +626,28 @@ pub struct PositionOutcomeDto {
 
 // Replay.
 
-/// The replay session as the UI sees it: the revealed bars from index `from` on (never a
-/// bar after `current`), the trades from index `tradesFrom` on, and the statistics.
+/// The replay session as a chart of `tf` shows it: the revealed bars of `tf` from index
+/// `from` on (never data after the cut), the trades from index `tradesFrom` on, and the
+/// statistics.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReplayStateDto {
     pub instrument: InstrumentDto,
+    /// The step resolution.
+    pub base: &'static str,
     pub tf: &'static str,
     pub start: u32,
     pub current: u32,
+    /// The close time of the last revealed base candle; commands carry it as their time.
+    pub cut: i64,
     pub at_end: bool,
+    pub caught_up: bool,
+    /// The cut at which the backtest ended at real time, null before.
+    pub caught_up_at: Option<i64>,
+    /// The last bar of `tf` is still forming.
+    pub partial: bool,
+    /// Why newer candles could not be loaded at the last step, null once a load worked.
+    pub newer_error: Option<String>,
     pub from: u32,
     pub bars: ColumnsDto,
     pub trades_from: u32,
@@ -644,11 +656,23 @@ pub struct ReplayStateDto {
 }
 
 pub fn to_replay_state_dto(s: ReplayState) -> Result<ReplayStateDto, DtoError> {
+    safe(s.cut)?;
+    if let Some(t) = s.caught_up_at {
+        safe(t)?;
+    }
     for t in &s.trades {
-        for v in [t.entry_time, t.entry_price, t.initial_stop, t.stop, t.take]
-            .into_iter()
-            .chain(t.exit_time)
-            .chain(t.exit_price)
+        for v in [
+            t.entry_time,
+            t.entry_fill_time,
+            t.entry_price,
+            t.initial_stop,
+            t.stop,
+            t.take,
+        ]
+        .into_iter()
+        .chain(t.exit_time)
+        .chain(t.exit_fill_time)
+        .chain(t.exit_price)
         {
             safe(v)?;
         }
@@ -656,10 +680,16 @@ pub fn to_replay_state_dto(s: ReplayState) -> Result<ReplayStateDto, DtoError> {
     Ok(ReplayStateDto {
         bars: ColumnsDto::from_candles(&s.bars)?,
         instrument: s.instrument.into(),
+        base: s.base.code(),
         tf: s.tf.code(),
         start: s.start,
         current: s.current,
+        cut: s.cut,
         at_end: s.at_end,
+        caught_up: s.caught_up,
+        caught_up_at: s.caught_up_at,
+        partial: s.partial,
+        newer_error: s.newer_error,
         from: s.from,
         trades_from: s.trades_from,
         trades: s.trades,
@@ -1095,19 +1125,29 @@ mod tests {
         use sandchart_core::replay::{Command, Simulation, simulate};
         use sandchart_core::{Side, Timeframe};
         let candles: Vec<Candle> = (0..4).map(|i| candle(i, 110 + i)).collect();
+        let close = |i: usize| candles[i].open_time + 60_000;
         let commands = vec![Command::Open {
-            bar: 1,
+            time: close(1),
             side: Side::Long,
             stop: 90,
             take: 140,
         }];
-        let simulation: Simulation = simulate(&candles, 1, 3, &commands).unwrap();
+        let simulation: Simulation =
+            simulate(Timeframe::M1, &candles, close(1), close(3), &commands)
+                .unwrap()
+                .at_real_time();
         let state = ReplayState {
             instrument: page(vec![]).instrument,
-            tf: Timeframe::H1,
+            base: Timeframe::M1,
+            tf: Timeframe::M1,
             start: 1,
             current: 3,
+            cut: close(3),
             at_end: false,
+            caught_up: true,
+            caught_up_at: Some(close(3)),
+            partial: false,
+            newer_error: Some("the newest 1m candles could not be loaded".into()),
             from: 3,
             bars: candles[3..].to_vec(),
             trades_from: 0,
@@ -1122,16 +1162,20 @@ mod tests {
                     "id": { "source": "binance", "symbol": "BTCUSDT" },
                     "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5
                 },
-                "tf": "1h", "start": 1, "current": 3, "atEnd": false, "from": 3,
+                "base": "1m", "tf": "1m", "start": 1, "current": 3, "cut": 1_700_000_240_000i64,
+                "atEnd": false, "caughtUp": true, "caughtUpAt": 1_700_000_240_000i64,
+                "partial": false,
+                "newerError": "the newest 1m candles could not be loaded", "from": 3,
                 "bars": {
                     "time": [1_700_000_180_000i64], "open": [103], "high": [123], "low": [93],
                     "close": [113], "volume": [8]
                 },
                 "tradesFrom": 0,
                 "trades": [{
-                    "side": "long", "entryBar": 1, "entryTime": 1_700_000_060_000i64,
+                    "side": "long", "entryTime": 1_700_000_060_000i64,
+                    "entryFillTime": 1_700_000_120_000i64,
                     "entryPrice": 111, "initialStop": 90, "stop": 90, "take": 140,
-                    "exitBar": null, "exitTime": null, "exitPrice": null, "reason": "open",
+                    "exitTime": null, "exitFillTime": null, "exitPrice": null, "reason": "unfinished",
                     "ambiguous": false, "r": 2.0 / 21.0
                 }],
                 "stats": {

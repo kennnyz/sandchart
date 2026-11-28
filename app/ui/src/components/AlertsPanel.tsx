@@ -1,13 +1,22 @@
 import { Bell, BellRing, RotateCcw, X } from "lucide-react";
 import { useEffect, useRef, useSyncExternalStore } from "react";
+import { levelAt, levelOf } from "../alertLevel";
 import type { Alert, InstrumentId } from "../backend/types";
 import { formatPrice, formatUtcClock } from "../chart/format";
 import { t } from "../i18n";
 import type { AlertStore } from "../state/alerts";
+import type { DrawingStore } from "../state/drawings";
 
-/** What an alert watches, for a label: the price, or "Line" for a line alert. */
-export function alertLevel(a: Alert): string {
-  return a.kind.kind === "price" ? formatPrice(a.kind.price, a.priceScale) : t("alerts.line");
+/**
+ * What an alert watches, for a label: the price; for a line alert the line's price now when
+ * `drawings` has the line (the pair on the chart), else "Line".
+ */
+export function alertLevel(a: Alert, drawings?: DrawingStore, now = Date.now()): string {
+  if (a.kind.kind === "price") return formatPrice(a.kind.price, a.priceScale);
+  const d = drawings?.state.line(a.kind.drawingId);
+  const level = d ? levelOf(d.body) : null;
+  const p = level ? levelAt(level, now) : null;
+  return p === null ? t("alerts.line") : formatPrice(p, d!.priceScale);
 }
 
 interface RowProps {
@@ -15,10 +24,13 @@ interface RowProps {
   unseen: boolean;
   selected: boolean;
   store: AlertStore;
+  drawings?: DrawingStore;
+  /** A replay holds its pair back: the engine does not check this alert until it ends or catches up. */
+  paused: boolean;
   onOpen(id: InstrumentId): void;
 }
 
-function Row({ a, unseen, selected, store, onOpen }: RowProps) {
+function Row({ a, unseen, selected, store, drawings, paused, onOpen }: RowProps) {
   const s = store.state;
   const ref = useRef<HTMLDivElement>(null);
   // Picked on the chart: bring it into view in the list.
@@ -26,7 +38,7 @@ function Row({ a, unseen, selected, store, onOpen }: RowProps) {
     if (selected) ref.current?.scrollIntoView({ block: "nearest" });
   }, [selected]);
   const state = a.active
-    ? t("alerts.state.active")
+    ? t(paused ? "alerts.state.paused" : "alerts.state.active")
     : t("alerts.state.fired", {
         time: a.triggeredAt === null ? "" : formatUtcClock(a.triggeredAt, Date.now()),
         price: a.triggeredPrice === null ? "" : formatPrice(a.triggeredPrice, a.priceScale),
@@ -38,6 +50,7 @@ function Row({ a, unseen, selected, store, onOpen }: RowProps) {
       data-testid="alert-row"
       data-symbol={a.instrument.symbol}
       data-state={a.active ? "active" : "fired"}
+      data-paused={paused && a.active}
       data-unseen={unseen}
       data-selected={selected}
       aria-selected={selected}
@@ -52,7 +65,9 @@ function Row({ a, unseen, selected, store, onOpen }: RowProps) {
         <span className="al-line">
           <span className="al-sym mono">{a.instrument.symbol}</span>
           <span className="al-dir">{t(`alerts.dir.${a.direction}`)}</span>
-          <span className="al-level mono">{alertLevel(a)}</span>
+          <span className="al-level mono" data-testid="alert-level">
+            {alertLevel(a, drawings)}
+          </span>
         </span>
         <span className="al-state mono">{state}</span>
       </span>
@@ -88,9 +103,22 @@ function Row({ a, unseen, selected, store, onOpen }: RowProps) {
   );
 }
 
+const noSubscribe = () => () => {};
+const noVersion = () => 0;
+
 /** The alerts under the watchlist, newest first: pair, direction, level, state; arm again, delete. */
-export function AlertsPanel({ store, onOpen }: { store: AlertStore; onOpen(id: InstrumentId): void }) {
+export interface AlertsPanelProps {
+  store: AlertStore;
+  drawings?: DrawingStore;
+  /** The pair a replay holds back (its alerts are paused), or null. */
+  replaying?: InstrumentId | null;
+  onOpen(id: InstrumentId): void;
+}
+
+export function AlertsPanel({ store, drawings, replaying = null, onOpen }: AlertsPanelProps) {
   useSyncExternalStore(store.subscribe, store.version);
+  // A line moved on the chart moves its alert's level here.
+  useSyncExternalStore(drawings?.subscribe ?? noSubscribe, drawings?.version ?? noVersion);
   const s = store.state;
   const active = s.list.filter((a) => a.active).length;
   return (
@@ -106,7 +134,16 @@ export function AlertsPanel({ store, onOpen }: { store: AlertStore; onOpen(id: I
           </div>
         )}
         {[...s.list].reverse().map((a) => (
-          <Row key={a.id} a={a} unseen={s.unseen.has(a.id)} selected={s.selected === a.id} store={store} onOpen={onOpen} />
+          <Row
+            key={a.id}
+            a={a}
+            unseen={s.unseen.has(a.id)}
+            selected={s.selected === a.id}
+            store={store}
+            drawings={drawings}
+            paused={replaying !== null && replaying.source === a.instrument.source && replaying.symbol === a.instrument.symbol}
+            onOpen={onOpen}
+          />
         ))}
       </div>
     </section>

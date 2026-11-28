@@ -133,6 +133,7 @@ fn main() {
             commands::get_position_outcomes,
             commands::replay_start,
             commands::replay_step,
+            commands::replay_set_base,
             commands::replay_command,
             commands::replay_state,
             commands::replay_save,

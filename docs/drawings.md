@@ -20,7 +20,7 @@ The tools rail is on the left of the chart. Click a tool, or press its shortcut 
 | Tool | Shortcut | How to place it |
 | --- | --- | --- |
 | Trend line | Alt+T | Click the two ends, or press on the first end, drag and release on the second. In the style popover it can extend to the left, to the right, or both. |
-| Horizontal line | Alt+H | One click. It runs across the whole chart and its price is tagged on the price axis. |
+| Horizontal line | Alt+H | One click. It runs across the whole chart and its price is tagged on the price axis. Or click the round + at the crosshair's price label and pick **Draw horizontal line at <price>**: the line lands at exactly that price. |
 | Rectangle | Alt+B | Click two opposite corners, or drag from one to the other. It can extend to the right edge. |
 | Fibonacci retracement | Alt+F | Click where the move starts, then where it ends. Level 0 is at the end of the move, level 1 at its start. The levels are 0, 0.236, 0.382, 0.5, 0.618, 0.786, 1, 1.272 and 1.618, each labelled with its price; turn any of them off in the style popover. |
 | Long position | Alt+L | One click at the entry. The stop starts 1.5 % below the entry, the take at 3 R above it, and the position runs for 20 bars. Drag the stop, take and end handles to change them. |
@@ -29,14 +29,14 @@ The tools rail is on the left of the chart. Click a tool, or press its shortcut 
 | Note | Alt+N | Click a bar. A marker appears above the bar's high and an editor opens; write the text (up to 2000 bytes) and save with ⌘Enter (Ctrl+Enter). Hover the marker to read the first line. An empty text deletes the note. |
 | Ruler | Alt+R | Not stored. See [Shift, magnet and ruler](#shift-magnet-and-ruler). |
 
-A position's zones are grey; only its numbers are coloured: the take and stop distance in percent, the reward to risk (RR), and the outcome in R once there is one.
+A position's zones are gray; only its numbers are colored: the take and stop distance in percent, the reward to risk (RR), and the outcome in R once there is one.
 
 ## Placing and editing
 
 - **Select** a drawing by clicking it. Its handles show. A click on empty space deselects it.
 - **Move** it by dragging its body. **Reshape** it by dragging a handle.
 - **Handles**: a trend line has one on each end and one in the middle, which moves the whole line. A rectangle has one on each corner and one in the middle of each edge; an edge handle moves only that side. A Fibonacci retracement has its two ends, a position its stop, take, entry and end. A brush stroke shows a marker on each end while it is selected, but has no handles: it only moves. A horizontal line has one in the middle.
-- **Delete** the selection with Delete or Backspace.
+- **Delete** the selection with Delete or Backspace. When a line among it has an [alert](alerts.md), a question asks first, since the alert is deleted with the line and undo brings back only the line: **Delete** goes on, **Cancel** or Esc keeps them.
 - **Esc** drops a half-placed drawing and the tool, closes a popover, and deselects.
 - **Undo** with ⌘Z (Ctrl+Z), **redo** with ⇧⌘Z (Ctrl+Shift+Z). Every change counts: placing, moving, reshaping, deleting, and each change in the style popover. The history lasts for the session, up to 200 steps, and starts over when you open another pair.
 
@@ -47,20 +47,21 @@ Every change is saved when you release the mouse, not while you drag.
 - **⌘-drag** (Ctrl-drag on Windows and Linux) on empty chart space draws a selection box. Every drawing the box touches is added to the selection.
 - **⌘-click** (Ctrl-click) a drawing to add it to the selection, or to take it out.
 - **Drag** any of them to move them all together. Locked ones stay where they are.
-- **Delete** or Backspace removes them all, and the [alerts](alerts.md) of the lines among them. Undo brings the drawings back, but not their alerts.
+- **Delete** or Backspace removes them all, and the [alerts](alerts.md) of the lines among them, after a question that says how many drawings and alerts go. Undo brings the drawings back, but not their alerts.
 - A click without a drag on one of them selects only that one; a click on empty space deselects all.
 
 Moving or deleting several is one step for undo, and one write: either all of them are saved or none is.
 
 ## Context menu
 
-Right-click a drawing (or Ctrl-click it on macOS) to open its menu. When it is part of a selection, the menu acts on the whole selection; otherwise the drawing is selected alone first.
+Right-click a drawing (or Ctrl-click it on macOS) to open its menu. When it is part of a selection, the menu acts on the whole selection and says how many ("Remove 3 drawings"); otherwise the drawing is selected alone first. While several are selected, a note at the bottom left of the chart says how many.
 
 | Item | What |
 | --- | --- |
 | Lock / Unlock | Lock them, or unlock them when all are locked. |
 | Hide | Hide them until you show them again (see [Hide and show](#hide-and-show)). |
-| Remove (Delete) | Delete them. |
+| Add alert / Remove alert | Only for one horizontal or trend line. **Add alert** sets an [alert](alerts.md) on the line at once, on a cross either way; change its direction in Settings. **Remove alert** deletes the line's alert and keeps the line. |
+| Remove (Delete) | Delete them (asking first when one has an alert). |
 | Settings… (Enter) | The style popover, or the text editor of a note. Only for one drawing. |
 
 Arrow keys move between the items, Enter picks one, Esc or a click outside closes the menu. Each item is one undo step. The web view's own menu never opens over the app; in a text field you still get the usual edit menu.
@@ -69,13 +70,13 @@ Arrow keys move between the items, Enter picks one, Esc or a click outside close
 
 Double-click a drawing, or select it and press Enter, to open its style popover. (On a note this opens the text editor instead.) Every change applies at once and is one undo step.
 
-- **Colour**: one of eight colours, the same palette the indicators use.
+- **Color**: one of eight colors, the same palette the indicators use.
 - **Width**: 1 to 4 px.
 - **Dashed**: a dashed line instead of a solid one.
 - **Options of the tool**: extend left and right on a trend line, extend right on a rectangle, the levels of a Fibonacci retracement (at least one stays on).
 - **Alert** (horizontal and trend lines): set an alert on the line, crossing it either way, above or below; see [Alerts](alerts.md). The alert is not part of the undo history.
-- **Locked**: a locked drawing can still be selected, styled and deleted, but not moved or reshaped. Use it for levels you do not want to nudge by accident.
-- **Delete** removes the drawing, and its alert with it.
+- **Locked**: a locked drawing can still be selected, styled and deleted, but not moved or reshaped. Use it for levels you do not want to nudge by accident. Selected or hovered, it shows a small lock by its handle, and a drag on it says **Locked** for a moment instead of moving it.
+- **Delete** removes the drawing, and its alert with it (a line with an alert asks first).
 
 Tab moves between the controls and stays inside the popover; Esc or a click outside closes it.
 
@@ -88,13 +89,13 @@ Tab moves between the controls and stays inside the popover; Esc or a click outs
 
 **The magnet** (Alt+M, or the magnet button) snaps every placed or dragged point to the open, high, low or close of the nearest bar, within 8 px. The magnet setting is remembered between sessions.
 
-**⌘ (Ctrl)** held while you place a point or drag a handle snaps it to the bar under the pointer, magnet on or off: to the nearest of its open, high, low and close (a body end or a wick end), from anywhere between its high and low and up to 40 px above or below them. Keep ⌘ held while you drag and the point jumps from bar to bar. ⌘ on a handle snaps it, also on a drawing that is not selected yet. ⌘ on empty space starts a [selection box](#selecting-several) instead; ⌘ on a drawing's body adds it to the selection.
+**⌘ (Ctrl)** held while you place a point or drag a handle snaps it to the bar under the pointer, magnet on or off: to the nearest of its open, high, low and close (a body end or a wick end), from anywhere between its high and low and up to 40 px above or below them. Keep ⌘ held while you drag and the point jumps from bar to bar. With a tool picked, a small ring shows the price the next point snaps to (and the crosshair with its price label moves onto it) as soon as ⌘ goes down, before you click (for the first point too) and while you place the next ones; it goes away when you let go of ⌘. You can press ⌘ before or after moving the mouse. ⌘ on a handle snaps it, also on a drawing that is not selected yet. ⌘ on empty space starts a [selection box](#selecting-several) instead; ⌘ on a drawing's body adds it to the selection.
 
 **The ruler** measures from where you press to where you release: the price change, the change in percent, the number of bars and the time. Start it with Shift+drag on empty space, or press Alt+R or the ruler button on the tools rail and then drag (with any tool picked). It is not saved; the next press or Esc puts it away.
 
 ## Hide and show
 
-The eye button at the bottom of the tools rail opens a menu:
+The eye button at the bottom of the tools rail opens a menu. While drawings are hidden one by one, a small number on it says how many:
 
 - **Hide all drawings** hides every drawing, so you can look at the bare chart. They are not painted and cannot be clicked, dragged, deleted or undone until you pick **Show all drawings**. Picking a tool shows them again, so a new drawing is never placed unseen. This lasts for the session and changes nothing in storage.
 - **Show hidden drawings (n)** shows again every drawing hidden one by one with **Hide** in the [context menu](#context-menu). Such a drawing stays hidden after a restart, until you show it here (or undo). It is not painted and cannot be clicked, but it is still saved, and a line keeps firing its [alert](alerts.md).
@@ -106,10 +107,10 @@ The eye button at the bottom of the tools rail opens a menu:
 | Alt+T, H, B, F, L, S, P, N | Pick the trend line, horizontal line, rectangle, Fibonacci, long, short, brush or note tool (press again to put it down) |
 | Alt+R | Arm the ruler for the next drag |
 | Alt+M | Magnet on or off |
-| ⌘ / Ctrl held | Snap the point to the bar under the pointer while placing or dragging a handle |
+| ⌘ / Ctrl held | Snap the point to the bar under the pointer while placing or dragging a handle; with a tool picked, a ring shows where |
 | ⌘-drag / Ctrl-drag on empty space | Selection box |
 | ⌘-click / Ctrl-click | Add a drawing to the selection or take it out |
-| Right click | Context menu of the drawing or the selection |
+| Right click | Context menu of the drawing or the selection; on a price alert's level, its menu (see [Alerts](alerts.md#on-the-chart)) |
 | Shift held | Horizontal point with a tool or a handle; ruler with no tool |
 | Enter, double-click | Style popover, or the text editor of a note |
 | Delete, Backspace | Delete the selection (every selected drawing) |
@@ -117,6 +118,7 @@ The eye button at the bottom of the tools rail opens a menu:
 | ⇧⌘Z / Ctrl+Shift+Z | Redo |
 | ⌘Enter / Ctrl+Enter | Save a note |
 | Esc | Cancel, close, deselect |
+| ? | The list of every keyboard shortcut of the app |
 
 Shortcuts follow the physical key, so they work on any keyboard layout. They do nothing while you type in a text field.
 

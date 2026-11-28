@@ -290,3 +290,74 @@ test("watchlist_can_be_hidden_and_shown", async ({ page }) => {
   await page.reload();
   await expect(page.getByTestId("watchlist")).toBeVisible();
 });
+
+test("question_mark_lists_the_keyboard_shortcuts_in_the_ui_language", async ({ page }) => {
+  await openApp(page);
+  await page.keyboard.press("Shift+Slash");
+  const sheet = page.getByTestId("shortcuts");
+  await expect(sheet).toBeVisible();
+  await expect(sheet).toContainText("Keyboard shortcuts");
+  await expect(page.getByTestId("shortcuts-tools")).toContainText("Trend line");
+  await expect(page.getByTestId("shortcuts-replay")).toContainText("⇧B");
+  await expect(page.getByTestId("shortcuts-alerts")).toContainText("Price alert at the crosshair price");
+  await page.keyboard.press("Escape");
+  await expect(sheet).toHaveCount(0);
+
+  // Not while typing in a field.
+  await page.getByTestId("symbol-button").click();
+  await page.getByTestId("search").locator("input").press("Shift+Slash");
+  await expect(sheet).toHaveCount(0);
+  await page.keyboard.press("Escape");
+
+  await page.getByTestId("lang-button").click();
+  await page.keyboard.press("Shift+Slash");
+  await expect(sheet).toContainText("Горячие клавиши");
+  await sheet.getByRole("button").click();
+  await expect(sheet).toHaveCount(0);
+});
+
+test("the_watchlist_remove_button_never_covers_the_24h_change", async ({ page }) => {
+  await openApp(page);
+  const row = page.locator('[data-testid="watchlist-row"][data-symbol="ETHUSDT"]');
+  await row.hover();
+  const remove = row.getByTestId("watchlist-remove");
+  await expect(remove).toBeVisible();
+  const x = (await remove.boundingBox())!;
+  const chg = (await row.locator(".wl-chg").boundingBox())!;
+  expect(x.x).toBeGreaterThanOrEqual(chg.x + chg.width);
+  await expect(row.locator(".wl-chg")).toContainText("%");
+  // The column headers line up with the values.
+  const head = (await page.locator(".wl-columns span").last().boundingBox())!;
+  expect(Math.abs(head.x + head.width - (chg.x + chg.width))).toBeLessThan(1.5);
+});
+
+test("a_clicked_control_gets_focus_back_without_a_ring_but_a_keyboard_one_keeps_it", async ({ page }) => {
+  await openApp(page);
+  /** The outline the focused element shows now. */
+  const ring = () => page.evaluate(() => getComputedStyle(document.activeElement as Element).outlineStyle);
+  // Clicked, closed with Esc: focus is back on the button, without a ring.
+  // (WebKit does not focus a clicked button at all: nothing to give back there.)
+  const webkit = test.info().project.name === "webkit";
+  await page.getByTestId("indicators-button").click();
+  await page.keyboard.press("Escape");
+  if (!webkit) await expect(page.getByTestId("indicators-button")).toBeFocused();
+  expect(await ring()).toBe("none");
+  await page.getByTestId("tf-more").click();
+  await page.keyboard.press("Escape");
+  expect(await ring()).toBe("none");
+  // A key pressed after a click does not bring the ring either.
+  await page.getByTestId("tool-trend").click();
+  await page.keyboard.press("Shift");
+  if (await page.getByTestId("tool-trend").evaluate((el) => el === document.activeElement)) expect(await ring()).toBe("none");
+  await page.keyboard.press("Escape");
+  // Reached with Tab, the ring stays after the menu closes (WebKit does not Tab to buttons).
+  if (webkit) return;
+  await page.getByTestId("tf-more").focus();
+  await page.keyboard.press("Shift+Tab");
+  await page.keyboard.press("Tab");
+  await expect(page.getByTestId("tf-more")).toBeFocused();
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("tf-more")).toBeFocused();
+  expect(await ring()).not.toBe("none");
+});

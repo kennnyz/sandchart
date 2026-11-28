@@ -31,7 +31,7 @@
 - Replay: step or play through history bar by bar with no future bar on screen, take paper trades with a draggable stop and take, and see the results in R (win rate, total and average R, profit factor, drawdown). Save the session to a `.replay` file that carries its own candles, so anyone opens it offline and gets the same trades and numbers. See [Replay](docs/replay.md).
 - Alerts: a price alert at the crosshair price (Alt+A) or an alert on a horizontal or trend line, crossing above, below or either way. Wicks and gaps count, each alert fires once with an OS notification and a message in the app, and a panel under the watchlist lists, re-arms and deletes them. They run while the app is open, on your machine only. See [Alerts](docs/alerts.md).
 - An MCP server for AI agents: `sandchart-mcp` gives Claude Code, Claude Desktop, Cursor and other MCP clients your candles, indicators, drawings, position outcomes, replay results and alerts, from the same local database as the app. Prices come as ticks and decimal strings; no tool can trade. See [MCP server](docs/mcp.md).
-- Monochrome candles (colour appears only in numbers and indicator series), dark and light themes, English and Russian interface.
+- Monochrome candles (color appears only in numbers and indicator series), dark and light themes, English and Russian interface.
 - Builds for macOS (Apple silicon and Intel), Windows and Linux.
 
 ## Architecture

@@ -373,10 +373,13 @@ async fn live_events_pause_while_the_instrument_is_replayed() {
         .engine
         .subscribe_live(&id("ETHUSDT"), Timeframe::H1)
         .unwrap();
-    f.live_tx.send(live(2, true)).unwrap();
-    next_event(&mut btc).await;
+    // Two closed candles, so a replay from the first has not caught up with the data.
+    for back in [3, 2] {
+        f.live_tx.send(live(back, true)).unwrap();
+        next_event(&mut btc).await;
+    }
     f.engine
-        .replay_start(&id("BTCUSDT"), Timeframe::H1, candle(2).open_time)
+        .replay_start(&id("BTCUSDT"), Timeframe::H1, candle(3).open_time)
         .await
         .unwrap();
 
@@ -395,12 +398,12 @@ async fn live_events_pause_while_the_instrument_is_replayed() {
             .unwrap()
     };
     for _ in 0..500 {
-        if stored().len() == 2 {
+        if stored().len() == 3 {
             break;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    assert_eq!(stored(), vec![candle(2), candle(1)]);
+    assert_eq!(stored(), vec![candle(3), candle(2), candle(1)]);
 
     f.engine.replay_exit();
     f.live_tx.send(live(0, true)).unwrap();
@@ -413,7 +416,7 @@ async fn live_events_pause_while_the_instrument_is_replayed() {
         }
     }
     let stored = stored();
-    assert_eq!(stored, vec![candle(2), candle(1), candle(0)]);
+    assert_eq!(stored, vec![candle(3), candle(2), candle(1), candle(0)]);
 }
 
 #[tokio::test]

@@ -68,6 +68,16 @@ describe("position tools", () => {
     expect(positionStats({ ...long(), stop: 4985, take: 5022 })).toEqual({ take: "+0.44%", stop: "−0.30%", rr: "1.5" });
   });
 
+  it("measures a replay trade's take and stop in R of the stop at entry, not of the moved stop", () => {
+    // Entry 100, stop at entry 90 (risk 10), take 120; the stop widened to 84.
+    const b = { kind: "position" as const, side: "long" as const, entry: { t: 0, p: 100 }, stop: 84, take: 120, endT: H };
+    expect(positionStats(b)).toMatchObject({ rr: "1.3" });
+    expect(positionStats(b, 90)).toEqual({ take: "+20.00%", stop: "−16.00%", rr: "1.3", takeR: "+2.0R", stopR: "−1.6R" });
+    // A short, its stop moved to the entry: a stop there is 0R.
+    const s = { ...b, side: "short" as const, stop: 100, take: 80 };
+    expect(positionStats(s, 110)).toMatchObject({ takeR: "+2.0R", stopR: "0.0R" });
+  });
+
   it("spans entry to end and is hit inside its zones", () => {
     const tool = toolFor("position")!;
     expect(tool.timeSpan(long())).toEqual([50 * H, 70 * H]);

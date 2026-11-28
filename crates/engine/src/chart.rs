@@ -198,3 +198,41 @@ pub(crate) async fn fetch_catch_up(
         reset: true,
     })
 }
+
+/// The closed `tf` candles with `from <= open_time` that close at or before `to`, at most
+/// `limit` of them from `from` on, ascending: pages walked back from the end of that window
+/// until one reaches `from`. Kept in memory: the cached series stays contiguous only when
+/// pages join it, which a window in the middle of the history does not.
+pub(crate) async fn fetch_window(
+    provider: &dyn Provider,
+    inst: &Instrument,
+    tf: Timeframe,
+    from: i64,
+    to: i64,
+    limit: usize,
+) -> Result<Vec<Candle>, ProviderError> {
+    let end = match tf.fixed_ms() {
+        Some(ms) => to.min(from.saturating_add(ms.saturating_mul(limit as i64))),
+        None => to,
+    };
+    let mut out: Vec<Candle> = Vec::new();
+    let mut before = end;
+    // Never more pages than the window can hold, plus one for a partial first page.
+    for _ in 0..=limit / usize::from(PAGE) + 1 {
+        let mut page = provider.history(inst, tf, Some(before), PAGE).await?;
+        let Some(first) = page.first().map(|c| c.open_time) else {
+            break;
+        };
+        let short = page.len() < usize::from(PAGE);
+        page.append(&mut out);
+        out = page;
+        if first <= from || short || first >= before {
+            break;
+        }
+        before = first;
+    }
+    out.retain(|c| c.open_time >= from && tf.close_time(c.open_time) <= to);
+    out.dedup_by_key(|c| c.open_time);
+    out.truncate(limit);
+    Ok(out)
+}

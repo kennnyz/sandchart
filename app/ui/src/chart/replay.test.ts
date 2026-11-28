@@ -1,25 +1,33 @@
 import { describe, expect, it } from "vitest";
 import type { ReplayTrade } from "../backend/types";
-import { clampLevel, formatR, ReplayLayer, snapStart, type ReplayMarks } from "./replay";
+import { clampLevel, drawingCut, formatR, ReplayLayer, snapStart, type ReplayMarks } from "./replay";
 
 const trade = (entryBar: number, reason: ReplayTrade["reason"] = "open"): ReplayTrade => ({
   side: "long",
-  entryBar,
   entryTime: entryBar * 1000,
+  entryFillTime: (entryBar + 1) * 1000,
   entryPrice: 100,
   initialStop: 90,
   stop: 90,
   take: 120,
-  exitBar: reason === "open" ? null : entryBar + 2,
   exitTime: reason === "open" ? null : (entryBar + 2) * 1000,
+  exitFillTime: reason === "open" ? null : (entryBar + 3) * 1000,
   exitPrice: reason === "open" ? null : 90,
   reason,
   ambiguous: false,
   r: reason === "open" ? 0.1 : -1,
 });
-const marks = (trades: ReplayTrade[], time: number): ReplayMarks => ({ trades, time, close: 101, label: "Replay" });
+const marks = (trades: ReplayTrade[], time: number): ReplayMarks => ({ trades, time, close: 101, cut: time + 1000, label: "Replay" });
 
 describe("replay on the chart", () => {
+  it("hides drawings from the cut on until the replay catches up, then shows them all", () => {
+    const m = marks([], 5000);
+    expect(drawingCut(m)).toBe(6000);
+    // Caught up: the chart shows live data again, so nothing after the cut is a secret.
+    expect(drawingCut({ ...m, caughtUp: true })).toBeNull();
+    expect(drawingCut(null)).toBeNull();
+  });
+
   it("snaps a picked date to the first bar opening at or after it", () => {
     const times = [10, 20, 30, 40];
     expect(snapStart(times, 4, 5)).toBe(10);

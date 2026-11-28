@@ -1,5 +1,9 @@
 import type { Anchor, Drawing, DrawingBody, DrawingStyle, PositionOutcome } from "../../backend/types";
+import { BELL_TAG, paintBellTag } from "../alerts";
 import { chartDebug } from "../debug";
+import { t } from "../../i18n";
+import { MONO_FAMILY } from "../theme";
+import { pill } from "./label";
 import type { ChartTheme } from "../theme";
 import type { Coords } from "./geometry";
 import { snapToBar } from "./magnet";
@@ -10,6 +14,8 @@ import { DEFAULT_STYLE, DrawingState, type DrawingChange, type DrawingPatch, typ
 /** Distance in CSS px within which the pointer hits a drawing or a handle. */
 export const HIT_TOLERANCE = 6;
 const HANDLE_RADIUS = 4.5;
+/** The ⌘ snap preview ring, a little larger than a handle so it reads around one. */
+const SNAP_RING_RADIUS = 6;
 /** A press must move this far (CSS px) to count as a drag. */
 const DRAG_THRESHOLD = 3;
 /** Halo of a hovered drawing: this much wider than its line, at this opacity. */
@@ -80,12 +86,42 @@ export interface MenuEdit {
   locked: boolean;
   /** Settings… needs exactly one drawing. */
   single: boolean;
+  /** The one drawing when it is a horizontal or trend line, which can have an alert; else null. */
+  line: Drawing | null;
   x: number;
   y: number;
 }
 
 /** A context menu item, or close it (null). */
 export type MenuAction = "lock" | "unlock" | "hide" | "remove" | "settings" | null;
+
+/**
+ * Where a line's bell tag goes, CSS px of the price plot: a horizontal line's at the price
+ * axis; a trend line's at its right end, or at the axis when it reaches it. Null off the plot.
+ */
+export function bellAt(body: DrawingBody, c: Coords): { x: number; y: number } | null {
+  let x: number;
+  let y: number;
+  if (body.kind === "hline") {
+    x = c.plotW;
+    y = c.y(body.p);
+  } else if (body.kind === "trend") {
+    const [l, r] = body.a.t <= body.b.t ? [body.a, body.b] : [body.b, body.a];
+    const x0 = c.x(l.t);
+    const y0 = c.y(l.p);
+    x = c.x(r.t);
+    y = c.y(r.p);
+    // Past the plot's right edge (or extended there) it meets the axis.
+    if (x !== x0 && (body.extendRight || x > c.plotW)) {
+      y = y0 + ((y - y0) * (c.plotW - x0)) / (x - x0);
+      x = c.plotW;
+    }
+  } else return null;
+  return x > 0 && x <= c.plotW && y >= 0 && y <= c.priceH ? { x, y } : null;
+}
+
+/** How long the "Locked" hint stays after a drag of a locked drawing. */
+const LOCKED_HINT_MS = 1200;
 
 /** What the layer needs from the chart. */
 export interface LayerHost {
@@ -101,6 +137,13 @@ export interface LayerHost {
   style(edit: StyleEdit | null): void;
   /** Open the context menu of the selection, or close it with null. */
   menu(edit: MenuEdit | null): void;
+  /**
+   * Deleting `ids` (the Delete key, the menu or the style popover) may need a yes first: true
+   * when the host asks and calls `go` on a yes; false (or no hook) deletes them at once.
+   */
+  confirmDelete?(ids: readonly string[], go: () => void): boolean;
+  /** How many drawings are selected, when that changed (told after the overlay is painted). */
+  selection?(count: number): void;
 }
 
 /** Draws a price tag on the axis of the given canvas: price in ticks, background colour. */
@@ -180,8 +223,16 @@ export class DrawingLayer {
   private menuEdit: { ids: string[]; at: Point } | null = null;
   /** Hide all: nothing is painted or hit; the drawings themselves are unchanged. */
   private hiddenAll = false;
-  /** In a replay, the open time of the last revealed bar: a drawing anchored only later is not shown. */
-  private cutoff: number | null = null;
+  /** In a replay, the cut (close time of the last revealed base bar): a drawing anchored only at or after it is not shown. */
+  private cut: number | null = null;
+
+  /** The selection count last told to the host. */
+  private toldSelection = 0;
+  /** A press tried to drag a locked drawing: a "Locked" hint there for a moment. */
+  private lockedHint: { x: number; y: number } | null = null;
+  private lockedTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Drawings with an alert (see `setAlerted`). */
+  private alerted: ReadonlySet<string> = new Set();
 
   constructor(private readonly host: LayerHost) {
     this.state = new DrawingState({
@@ -219,6 +270,16 @@ export class DrawingLayer {
     this.closeMenu();
     this.state.setTool(id);
     this.host.invalidateOverlay();
+  }
+
+  /** Stores a whole drawing at once (from a menu) and selects it; a tool, a drag and open editors are put away. */
+  add(body: DrawingBody): void {
+    this.abort();
+    this.finishText(null);
+    this.closeStyle();
+    this.closeMenu();
+    this.state.setTool(null);
+    if (this.state.add(body)) this.host.invalidate();
   }
 
   /** The engine stored `sent` as `saved` (another price scale): show and keep that copy. */
@@ -312,8 +373,7 @@ export class DrawingLayer {
       return;
     }
     if (action === "remove") {
-      s.setSelection(ids);
-      s.deleteSelected();
+      this.remove(ids);
     } else {
       s.updateMany(ids, action === "hide" ? { hidden: true } : { locked: action === "lock" });
     }
@@ -335,8 +395,7 @@ export class DrawingLayer {
     }
     const s = this.state;
     if ("delete" in action) {
-      s.select(se.id);
-      s.deleteSelected();
+      this.remove([se.id]);
     } else {
       s.update(se.id, action.patch);
     }
@@ -363,15 +422,16 @@ export class DrawingLayer {
   }
 
   /**
-   * While a replay is on: the open time of its last revealed bar. A drawing whose earliest anchor
-   * is after it would give a later bar away, so it is neither painted nor hit until a step reveals
-   * that bar (null: every drawing). Drops the selection of a drawing it hides.
+   * While a replay is on: its cut, the close time of the last revealed bar of the update
+   * interval (inside a forming bar of a higher timeframe, not that bar's open). A drawing whose
+   * earliest anchor is at or after it would give a later bar away, so it is neither painted nor
+   * hit until a step reveals that time (null: every drawing). Drops the selection of a drawing it hides.
    */
-  setCutoff(t: number | null): void {
-    if (t === this.cutoff) return;
-    this.cutoff = t;
+  setCut(t: number | null): void {
+    if (t === this.cut) return;
+    this.cut = t;
     const s = this.state;
-    const kept = t === null ? s.selection : s.selection.filter((id) => earliestTime(s.byId(id)!.body) <= t);
+    const kept = t === null ? s.selection : s.selection.filter((id) => earliestTime(s.byId(id)!.body) < t);
     if (kept.length !== s.selection.length) {
       this.abort();
       this.closeText();
@@ -382,9 +442,43 @@ export class DrawingLayer {
     this.host.invalidate();
   }
 
+  /**
+   * ⌘ (Ctrl) went down or up without the mouse moving: the last position is moved over again,
+   * so the snap preview, a placement, a drag or the ruler follow at once. Overlay only.
+   */
+  modifiers(cmd: boolean): void {
+    const m = this.mouse;
+    if (!m || m.cmd === cmd) return;
+    this.pointerMove(m.x, m.y, m.shift, cmd);
+  }
+
+  /**
+   * With a tool armed and ⌘ held: the bar price the next point snaps to, on screen and as an
+   * anchor (a ring on the overlay shows it before the click). Null otherwise.
+   */
+  snapPreview(): { x: number; y: number; anchor: Anchor } | null {
+    const c = this.coords;
+    const m = this.mouse;
+    const tool = this.state.tool ? toolById(this.state.tool) : undefined;
+    if (!c || !m?.cmd || !tool || tool.placement.stroke === true || this.ruler?.live) return null;
+    const anchor = snapToBar(c, m.x, m.y, true);
+    return anchor ? { x: c.x(anchor.t), y: c.y(anchor.p), anchor } : null;
+  }
+
   /** Snaps placed and dragged points to bar prices (see `snapToBar`). */
   setMagnet(on: boolean): void {
     this.magnet = on;
+  }
+
+  private showLocked(x: number, y: number): void {
+    this.lockedHint = { x, y };
+    if (this.lockedTimer !== null) clearTimeout(this.lockedTimer);
+    this.lockedTimer = setTimeout(() => {
+      this.lockedTimer = null;
+      this.lockedHint = null;
+      this.host.invalidateOverlay();
+    }, LOCKED_HINT_MS);
+    this.host.invalidateOverlay();
   }
 
   /** Runs a keyboard command; false when there was nothing to do. */
@@ -414,9 +508,28 @@ export class DrawingLayer {
     // Not in the middle of a drag, nor on hidden drawings: the history would change unseen.
     if (this.edit || this.press || this.box || this.hiddenAll) return false;
     this.closeMenu();
-    const done = cmd === "undo" ? this.state.undo() : cmd === "redo" ? this.state.redo() : this.state.deleteSelected();
+    if (cmd === "delete") return this.remove(this.state.selection);
+    const done = cmd === "undo" ? this.state.undo() : this.state.redo();
     if (done) this.host.invalidate();
     return done;
+  }
+
+  /**
+   * Deletes `ids` as one undo step, once the host agrees (`confirmDelete`): when it asks, the
+   * ones still there are deleted on its yes. False when there is nothing to delete.
+   */
+  private remove(ids: readonly string[]): boolean {
+    const s = this.state;
+    const wanted = ids.filter((id) => s.byId(id));
+    if (wanted.length === 0) return false;
+    const go = () => {
+      const live = wanted.filter((id) => s.byId(id));
+      if (live.length === 0 || this.hiddenAll) return;
+      s.setSelection(live);
+      if (s.deleteSelected()) this.host.invalidate();
+    };
+    if (!this.host.confirmDelete?.(wanted, go)) go();
+    return true;
   }
 
   /** Drops a drag, stroke, measurement or placement press in progress without storing anything. */
@@ -457,9 +570,34 @@ export class DrawingLayer {
         const tool = this.visibleTool(d);
         if (tool?.axisPrices && !isDragged(d.id)) for (const p of tool.axisPrices(d.body)) tag(p, color(theme, d.style));
       }
+      this.paintBells(ctx, c, dpr, theme, isDragged);
     }
     const debug = chartDebug();
     if (debug) debug.drawingsPainted = painted;
+  }
+
+  /** Lines with an alert get a bell tag where they meet the price axis, or at their right end. */
+  private paintBells(ctx: CanvasRenderingContext2D, c: Coords, dpr: number, theme: ChartTheme, isDragged: (id: string) => boolean): void {
+    const debug = chartDebug();
+    if (debug) debug.lineBells = [];
+    if (this.alerted.size === 0) return;
+    ctx.save();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    for (const id of this.alerted) {
+      const d = this.state.byId(id);
+      if (!d || isDragged(id) || !this.visibleTool(d)) continue;
+      const at = bellAt(d.body, c);
+      if (!at) continue;
+      paintBellTag(ctx, Math.min(at.x, c.plotW) - BELL_TAG, at.y, theme);
+      debug?.lineBells.push(id);
+    }
+    ctx.restore();
+  }
+
+  /** Ids of the drawings that have an alert: they show a bell tag. */
+  setAlerted(ids: ReadonlySet<string>): void {
+    this.alerted = ids;
+    this.host.invalidate();
   }
 
   /** Hover halo, handles, and the drawing being dragged or placed, on the overlay. */
@@ -472,6 +610,12 @@ export class DrawingLayer {
       debug.selectionBox = this.box !== null;
       debug.hoveredDrawing = this.state.hover?.id ?? null;
       debug.ruler = null;
+    }
+    // Every change of the selection paints the overlay: tell the host how many there are now.
+    const count = this.state.selection.length;
+    if (count !== this.toldSelection) {
+      this.toldSelection = count;
+      this.host.selection?.(count);
     }
     if (!c || c.count === 0 || c.plotW <= 0 || c.priceH <= 0) return;
     const s = this.state;
@@ -499,7 +643,10 @@ export class DrawingLayer {
       if (tool.markers) paintHandles(ctx, tool.markers(g), color(theme, d.style), theme);
       for (const p of tool.axisPrices?.(item.body) ?? []) tags.push([p, color(theme, d.style)]);
     }
-    if (debug) debug.selectedHandles = [];
+    if (debug) {
+      debug.selectedHandles = [];
+      debug.lockGlyphs = 0;
+    }
     for (const id of new Set([...s.selection, hovered?.id])) {
       const d = id && !dragging(id) ? s.byId(id) : undefined;
       const tool = d && this.visibleTool(d);
@@ -509,7 +656,16 @@ export class DrawingLayer {
       paintHandles(ctx, handles, color(theme, d.style), theme);
       paintHandles(ctx, markers, color(theme, d.style), theme);
       if (debug && id === s.selected) debug.selectedHandles = [...handles, ...markers];
+      // A locked one shows a lock by its last handle: it will not move.
+      const last = handles.at(-1) ?? markers.at(-1);
+      if (d.locked && last) {
+        paintLock(ctx, last, theme);
+        if (debug) debug.lockGlyphs++;
+      }
     }
+    const hint = this.lockedHint;
+    if (hint) paintLockedHint(ctx, hint, theme);
+    if (debug) debug.lockedHint = hint !== null;
     if (this.box) paintBox(ctx, boxOf(this.box), theme);
 
     // The shape being placed: the points so far and the mouse as the next one. A stroke
@@ -526,6 +682,9 @@ export class DrawingLayer {
       if (s.points.length > 0 && !stroke) paintHandles(ctx, points.map((a) => ({ x: c.x(a.t), y: c.y(a.p) })), col, theme);
       for (const p of placing.axisPrices?.(body) ?? []) tags.push([p, col]);
     }
+    const snap = this.snapPreview();
+    if (snap) paintSnap(ctx, snap, theme);
+    if (debug) debug.snapRing = snap && { x: snap.x, y: snap.y };
     if (this.ruler) {
       const text = paintRuler(ctx, c, this.ruler.a, this.ruler.b, theme);
       if (debug) debug.ruler = text;
@@ -648,6 +807,8 @@ export class DrawingLayer {
       if (!e.moved) {
         if (Math.hypot(x - e.x0, y - e.y0) < DRAG_THRESHOLD) return;
         e.moved = true;
+        // The pressed drawing is locked: say so where the drag began.
+        if (this.state.byId(e.id)?.locked) this.showLocked(e.x0, e.y0);
         // Only locked drawings were pressed: a drag, but nothing moves.
         if (e.items.length === 0) return;
         // The base is drawn once without them; from now on they move on the overlay only.
@@ -849,6 +1010,7 @@ export class DrawingLayer {
       ids: list.map((d) => d.id),
       locked: list.every((d) => d.locked),
       single: list.length === 1,
+      line: list.length === 1 && (list[0]!.body.kind === "hline" || list[0]!.body.kind === "trend") ? list[0]! : null,
       x: me.at.x,
       y: me.at.y,
     });
@@ -863,7 +1025,7 @@ export class DrawingLayer {
   /** The tool of a drawing that is shown and inside the visible times. */
   private visibleTool(d: Drawing): ToolDef | undefined {
     if (this.hiddenAll || d.hidden) return undefined;
-    if (this.cutoff !== null && earliestTime(d.body) > this.cutoff) return undefined;
+    if (this.cut !== null && earliestTime(d.body) >= this.cut) return undefined;
     const tool = toolFor(d.body.kind);
     if (!tool) return undefined;
     const [lo, hi] = tool.timeSpan(d.body);
@@ -1017,6 +1179,57 @@ function paintOne(
   tool.paint(ctx, g, lk);
   ctx.globalAlpha = 1;
   ctx.setLineDash(NO_DASH);
+}
+
+/** The ⌘ snap target: a ring around the bar price the next point takes. */
+function paintSnap(ctx: CanvasRenderingContext2D, p: Point, theme: ChartTheme): void {
+  ctx.globalAlpha = 1;
+  ctx.setLineDash(NO_DASH);
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = theme.fg;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, SNAP_RING_RADIUS, 0, Math.PI * 2);
+  ctx.stroke();
+}
+
+/** Lucide `lock` (ISC), on its 24 px grid. */
+const LOCK = "M5 11h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2z M7 11V7a5 5 0 0 1 10 0v4";
+let lockPath: Path2D | null = null;
+const LOCK_SIZE = 12;
+
+/** A small lock up and right of `p`, on a pill so it reads over the chart. */
+function paintLock(ctx: CanvasRenderingContext2D, p: Point, theme: ChartTheme): void {
+  lockPath ??= new Path2D(LOCK);
+  const x = p.x + HANDLE_RADIUS + 4;
+  const y = p.y - HANDLE_RADIUS - 4 - LOCK_SIZE;
+  pill(ctx, x - 2, y - 2, LOCK_SIZE + 4, LOCK_SIZE + 4, theme);
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(LOCK_SIZE / 24, LOCK_SIZE / 24);
+  ctx.globalAlpha = 1;
+  ctx.setLineDash(NO_DASH);
+  ctx.lineWidth = 2;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = theme.fg;
+  ctx.stroke(lockPath);
+  ctx.restore();
+}
+
+/** "Locked" on a pill above where a drag of a locked drawing began. */
+function paintLockedHint(ctx: CanvasRenderingContext2D, p: Point, theme: ChartTheme): void {
+  const text = t("drawings.locked");
+  ctx.save();
+  ctx.globalAlpha = 1;
+  ctx.font = `11px ${MONO_FAMILY}`;
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "left";
+  const w = ctx.measureText(text).width + 10;
+  const top = p.y - 30;
+  pill(ctx, p.x - w / 2, top, w, 18, theme);
+  ctx.fillStyle = theme.fg;
+  ctx.fillText(text, p.x - w / 2 + 5, top + 9);
+  ctx.restore();
 }
 
 function paintHandles(ctx: CanvasRenderingContext2D, points: Point[], stroke: string, theme: ChartTheme): void {

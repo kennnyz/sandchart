@@ -460,7 +460,7 @@ describe("ChartSession in a replay", () => {
     const v = last().version;
 
     await mock.replayStep(2);
-    session.appendReplay((await mock.replayState(501, 0)).bars);
+    session.appendReplay((await mock.replayState("1h", 501, 0)).bars);
     expect(chart.count).toBe(503);
     expect(last().version).toBe(v + 1);
 
@@ -473,8 +473,46 @@ describe("ChartSession in a replay", () => {
     expect(chart.count).toBe(1000);
     expect(listeners).toHaveLength(2);
     expect(listeners[1]!.stopped).toBe(false);
-    session.appendReplay((await mock.replayState(0, 0)).bars);
+    session.appendReplay((await mock.replayState("1h", 0, 0)).bars);
     expect(chart.count).toBe(1000);
+    session.close();
+  });
+});
+
+describe("ChartSession following a caught-up replay", () => {
+  it("updates the chart from the live stream until the next show", async () => {
+    const mock = createMockBackend({ candles: 3000 });
+    const { chart, session, last } = setup(mock);
+    const page = await mock.getCandles(BTC, "1h");
+    const st = await mock.replayStart(BTC, "1h", page.time.at(-1)!);
+    expect(st.caughtUp).toBe(true);
+    session.showReplay(st);
+    await session.followReplay();
+    // A second call keeps the one stream.
+    const subscribe = vi.spyOn(mock, "subscribeLive");
+    await session.followReplay();
+    expect(subscribe).not.toHaveBeenCalled();
+    const t = page.time.at(-1)! + 3_600_000;
+    const v = last().version;
+    mock.emitLive({ kind: "candle", time: t, open: 1, high: 2, low: 1, close: 2, volume: 1, closed: false });
+    expect(chart.time.at(-1)).toBe(t);
+    expect(last()).toMatchObject({ replay: true, version: v + 1 });
+    mock.emitLive({ kind: "disconnected" });
+    expect(last().version).toBe(v + 1);
+    // A new show (another timeframe, a re-base) stops the stream.
+    session.showReplay(await mock.replayState("1h", 0, 0));
+    mock.emitLive({ kind: "candle", time: t + 3_600_000, open: 1, high: 2, low: 1, close: 2, volume: 1, closed: false });
+    expect(chart.time.at(-1)).not.toBe(t + 3_600_000);
+    session.close();
+  });
+
+  it("does nothing outside a replay", async () => {
+    const mock = createMockBackend({ candles: 3000 });
+    const { session } = setup(mock);
+    await session.open(BTC, "1h");
+    const subscribe = vi.spyOn(mock, "subscribeLive");
+    await session.followReplay();
+    expect(subscribe).not.toHaveBeenCalled();
     session.close();
   });
 });

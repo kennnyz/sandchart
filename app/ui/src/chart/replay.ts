@@ -3,6 +3,7 @@ import { chartDebug } from "./debug";
 import type { Coords } from "./drawings/geometry";
 import { pill } from "./drawings/label";
 import { toolFor } from "./drawings/registry";
+import { measureFromInitialStop } from "./drawings/tools/position";
 import { MONO_FAMILY, type ChartTheme } from "./theme";
 
 type Position = Extract<DrawingBody, { kind: "position" }>;
@@ -13,8 +14,17 @@ export interface ReplayMarks {
   /** Open time and close of the last revealed bar. */
   time: number;
   close: number;
+  /** The cut: close time of the last revealed bar of the update interval; nothing at or after it is shown. */
+  cut: number;
   /** The word at the cut ("Replay"). */
   label: string;
+  /** The replay caught up with real time: the chart shows live data again. */
+  caughtUp?: boolean;
+}
+
+/** Where drawings stop showing: the cut while a replay holds data back, none once it caught up (or without one). */
+export function drawingCut(m: ReplayMarks | null): number | null {
+  return m && !m.caughtUp ? m.cut : null;
 }
 
 export type Level = "stop" | "take";
@@ -81,8 +91,8 @@ function tag(ctx: CanvasRenderingContext2D, text: string, color: string, x: numb
 export class ReplayLayer {
   private marks: ReplayMarks | null = null;
   private coords: Coords | null = null;
-  /** A stop or take being dragged, of the open trade entered at `entryBar`. */
-  private drag: { level: Level; stop: number; take: number; entryBar: number } | null = null;
+  /** A stop or take being dragged, of the open trade entered at `entryTime`. */
+  private drag: { level: Level; stop: number; take: number; entryTime: number } | null = null;
 
   /**
    * New marks (a step, a command). A drag goes on while its trade is still the open one, its
@@ -93,7 +103,7 @@ export class ReplayLayer {
     const d = this.drag;
     if (!d) return;
     const t = this.open();
-    if (!m || t?.entryBar !== d.entryBar) this.drag = null;
+    if (!m || t?.entryTime !== d.entryTime) this.drag = null;
     else d[d.level] = clampLevel(t.side, d.level, m.close, d[d.level]);
   }
 
@@ -129,7 +139,7 @@ export class ReplayLayer {
 
   startDrag(level: Level): void {
     const t = this.open();
-    if (t) this.drag = { level, stop: t.stop, take: t.take, entryBar: t.entryBar };
+    if (t) this.drag = { level, stop: t.stop, take: t.take, entryTime: t.entryTime };
   }
 
   /** Moves the dragged level to `y`, kept on its side of the close (as the engine checks an edit). */
@@ -206,6 +216,9 @@ export class ReplayLayer {
     for (const t of m.trades) if (t.reason !== "open" && this.paintClosed(ctx, t, c, th) && debug) debug.replayClosed++;
     const open = this.open();
     if (open) this.paintOpen(ctx, open, c, dpr, th);
+    // Left open at real time: its zone and R as it stood there, without handles to drag.
+    const unfinished = m.trades.find((t) => t.reason === "unfinished");
+    if (unfinished) this.paintOpen(ctx, unfinished, c, dpr, th, false);
     ctx.restore();
   }
 
@@ -262,11 +275,13 @@ export class ReplayLayer {
     return true;
   }
 
-  private paintOpen(ctx: CanvasRenderingContext2D, t: ReplayTrade, c: Coords, dpr: number, th: ChartTheme): void {
+  private paintOpen(ctx: CanvasRenderingContext2D, t: ReplayTrade, c: Coords, dpr: number, th: ChartTheme, handles = true): void {
     const tool = toolFor("position");
     if (!tool) return;
     const body = this.body(t, c);
     const g = tool.layout(body, c);
+    // R against the stop at entry, as the results measure it (a moved stop changes the risk shown, not 1R).
+    measureFromInitialStop(g, body, t.initialStop);
     ctx.strokeStyle = th.muted;
     ctx.fillStyle = th.muted;
     ctx.lineWidth = 1;
@@ -277,6 +292,7 @@ export class ReplayLayer {
     ctx.textBaseline = "middle";
     // The marked R right of the zone, on the entry line.
     tag(ctx, formatR(t.r), signColor(t.r, th), c.x(body.endT) + GAP, c.y(t.entryPrice), th);
+    if (!handles) return;
     const mid = (c.x(body.entry.t) + c.x(body.endT)) / 2;
     const debug = chartDebug();
     if (debug) debug.replayHandles = { stop: { x: mid, y: c.y(body.stop) }, take: { x: mid, y: c.y(body.take) } };

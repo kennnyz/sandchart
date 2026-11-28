@@ -162,11 +162,11 @@ impl BarState {
 }
 
 /// What a result was computed over: the cached bars of one generation, or the revealed
-/// bars of a replay session up to its current bar (fixed while neither changes).
+/// bars of a replay session up to its cut (fixed while neither changes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Generation {
     Cache(u64),
-    Replay { session: u64, current: u32 },
+    Replay { session: u64, cut: i64 },
 }
 
 /// The last result of one instance and what it was computed from.
@@ -784,13 +784,13 @@ impl Engine {
         })
         .await?;
         // A replay computes over its revealed bars only, never the cache; its generation
-        // (session, current bar) keeps its results apart from the cache's in the memo. Its
-        // bars are converted on the first memo miss, off the replay lock and the async threads.
-        let (mut bars, generation, mut replay) = match self.shared.replay_bars(id, tf) {
+        // (session, cut) keeps its results apart from the cache's in the memo. Its bars are
+        // built and converted on the first memo miss, off the replay lock and the async threads.
+        let (mut bars, generation, mut replay) = match self.shared.replay_bars(id, tf)? {
             Some(r) => {
                 let generation = Generation::Replay {
                     session: r.session,
-                    current: r.current,
+                    cut: r.cut,
                 };
                 (None, generation, Some(r))
             }
@@ -826,7 +826,7 @@ impl Engine {
                         (Some(b), _) => Arc::clone(b),
                         (None, Some(r)) => {
                             let b = spawn_blocking(move || {
-                                let candles = r.revealed();
+                                let candles = r.revealed()?;
                                 let newest =
                                     &candles[candles.len().saturating_sub(MAX_INDICATOR_BARS)..];
                                 Ok(Arc::new(to_bars(newest, &r.instrument)))
@@ -906,10 +906,10 @@ impl Engine {
     ) -> Result<(Vec<i64>, Computed), EngineError> {
         let (loaded, resolved) = self.resolve_strict(module_id, &params).await?;
 
-        let bars = match self.shared.replay_bars(id, tf) {
+        let bars = match self.shared.replay_bars(id, tf)? {
             Some(r) => {
                 spawn_blocking(move || {
-                    let candles = r.revealed();
+                    let candles = r.revealed()?;
                     let newest = &candles[candles.len().saturating_sub(MAX_INDICATOR_BARS)..];
                     Ok(Arc::new(to_bars(newest, &r.instrument)))
                 })

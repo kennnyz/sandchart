@@ -132,24 +132,26 @@ describe("tauri backend", () => {
       return Promise.resolve(null);
     }) as never);
     const { tauriBackend } = await import("./tauri");
-    const command = { kind: "open" as const, bar: 3, side: "long" as const, stop: 90, take: 120 };
+    const command = { kind: "open" as const, time: 3_600_000, side: "long" as const, stop: 90, take: 120 };
     const file = new Uint8Array([123, 125]);
     await tauriBackend.replayStart({ source: "binance", symbol: "BTCUSDT" }, "4h", 7);
     await tauriBackend.replayStep(2);
+    await tauriBackend.replaySetBase("1h");
     await tauriBackend.replayCommand(command);
-    await tauriBackend.replayState(10, 3);
+    await tauriBackend.replayState("1d", 10, 3);
     await tauriBackend.replaySave();
     await tauriBackend.replayOpen(file);
     await tauriBackend.replayExit();
     expect(seen).toEqual([
-      ["replay_start", { source: "binance", symbol: "BTCUSDT", tf: "4h", startTime: 7 }],
+      ["replay_start", { source: "binance", symbol: "BTCUSDT", base: "4h", startTime: 7 }],
       ["replay_step", { n: 2 }],
+      ["replay_set_base", { base: "1h" }],
       ["replay_command", { command }],
-      ["replay_state", { cursor: 10, tradesFrom: 3 }],
+      ["replay_state", { tf: "1d", cursor: 10, tradesFrom: 3 }],
       ["replay_save", undefined],
       ["replay_open", file],
       ["replay_exit", undefined],
     ]);
-    expect(seen[5]![1]).toBeInstanceOf(Uint8Array);
+    expect(seen[6]![1]).toBeInstanceOf(Uint8Array);
   });
 });

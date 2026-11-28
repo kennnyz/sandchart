@@ -48,6 +48,10 @@ interface Debug {
   selectedHandles: { x: number; y: number }[];
   ruler: string | null;
   outcomes: Record<string, string>;
+  snapRing: { x: number; y: number } | null;
+  crosshair: { x: number; y: number } | null;
+  lockGlyphs: number;
+  lockedHint: boolean;
 }
 
 async function openChart(page: Page, query = ""): Promise<Plot> {
@@ -403,6 +407,47 @@ test("magnet_snaps_a_level_to_a_candle_high", async ({ page }) => {
   await expect(page.getByTestId("tool-magnet")).toHaveAttribute("aria-pressed", "true");
 });
 
+test("cmd_held_before_the_first_click_previews_the_snap_and_places_on_a_bar_price", async ({ page }) => {
+  const plot = await openChart(page);
+  const cx = Math.round(plot.left + plot.width / 2);
+  const legend = page.getByTestId("legend");
+  await page.mouse.move(cx, plot.top + plot.height / 2);
+  const time = Number(await legend.getAttribute("data-time"));
+  const prices = await Promise.all([3, 5, 7, 9].map(async (i) => ticksOf((await legend.locator("span").nth(i).textContent())!)));
+
+  await page.keyboard.press("Alt+KeyT");
+  await expect.poll(async () => (await debug(page)).snapRing).toBeNull();
+  // With ⌘ held, find a height close enough to the bar under the mouse for a snap.
+  await page.keyboard.down("ControlOrMeta");
+  let y = plot.top + 10;
+  for (; y < plot.top + plot.height; y += 20) {
+    await page.mouse.move(cx, y);
+    if ((await debug(page)).snapRing) break;
+  }
+  const ring = (await debug(page)).snapRing;
+  expect(ring).not.toBeNull();
+  expect(ring!.x).toBeCloseTo(cx - plot.left, -1);
+  // The crosshair (and its price label) sits on the ring, not at the pointer.
+  expect((await debug(page)).crosshair).toEqual(ring);
+  // The key alone, without moving the mouse, hides and shows the ring; the base stays as it is.
+  const before = await settled(page);
+  await page.keyboard.up("ControlOrMeta");
+  await expect.poll(async () => (await debug(page)).snapRing).toBeNull();
+  await page.keyboard.down("ControlOrMeta");
+  await expect.poll(async () => (await debug(page)).snapRing).toEqual(ring);
+  const after = await debug(page);
+  expect(after.baseDraws).toBe(before.baseDraws);
+  expect(after.overlayDraws).toBeGreaterThan(before.overlayDraws);
+
+  // The first point lands on the price the ring showed: one of the bar's O, H, L, C.
+  await page.mouse.click(cx, y);
+  await page.keyboard.up("ControlOrMeta");
+  await page.mouse.click(cx + 120, plot.top + plot.height * 0.3);
+  const [line] = await storedCount(page, 1);
+  expect(line!.body.a!.t).toBe(time);
+  expect(prices).toContain(line!.body.a!.p);
+});
+
 /** Handles of the selected drawing in page px. */
 async function handles(page: Page, plot: Plot): Promise<[number, number][]> {
   const d = await debug(page);
@@ -713,8 +758,12 @@ test("a_locked_drawing_does_not_move", async ({ page }) => {
   await expect.poll(async () => (await stored(page))[0]!.locked).toBe(true);
   await page.keyboard.press("Escape");
 
+  // Selected, it shows a lock by its handle; a drag says "Locked" for a moment and moves nothing.
+  await page.mouse.click(cx - 100, y);
+  await expect.poll(async () => (await debug(page)).lockGlyphs).toBe(1);
   await drag(page, [cx - 100, y], [cx - 60, y + 80]);
-  await page.waitForTimeout(300);
+  expect((await debug(page)).lockedHint).toBe(true);
+  await expect.poll(async () => (await debug(page)).lockedHint, { timeout: 3000 }).toBe(false);
   const [after] = await stored(page);
   expect(after!.body.p).toBe(line!.body.p);
   expect((await debug(page)).selectedDrawing).toBe(line!.id);
@@ -857,7 +906,7 @@ test("right_click_shows_our_menu_and_never_the_native_one", async ({ page }) => 
   await expect(menu).toBeVisible();
   expect((await prevented()).at(-1)).toBe(true);
   expect((await debug(page)).selectedDrawing).toBe(line!.id);
-  await expect(menu.getByRole("menuitem")).toHaveText([/Lock/, /Hide/, /Remove/, /Settings/]);
+  await expect(menu.getByRole("menuitem")).toHaveText([/Lock/, /Hide/, /Add alert/, /Remove/, /Settings/]);
   await expect(page.getByTestId("drawing-menu-lock")).toBeFocused();
   await page.keyboard.press("ArrowDown");
   await expect(page.getByTestId("drawing-menu-hide")).toBeFocused();
@@ -1017,8 +1066,11 @@ test("lock_from_the_menu_keeps_every_selected_drawing_in_place", async ({ page }
   const all = await levels(page, cx, ys);
   await cmdDrag(page, [cx - 300, ys[0]! - 15], [cx - 250, ys[1]! + 15]);
   expect((await debug(page)).selectedDrawings).toHaveLength(2);
+  // The selection says how many; so does its menu.
+  await expect(page.getByTestId("selection-count")).toHaveText("2 drawings selected");
   await page.mouse.click(cx, ys[1]!, { button: "right" });
   await expect(page.getByTestId("drawing-menu-settings")).toHaveCount(0);
+  await expect(page.getByTestId("drawing-menu").getByRole("menuitem")).toHaveText([/Lock 2 drawings/, /Hide 2 drawings/, /Remove 2 drawings/]);
   await page.getByTestId("drawing-menu-lock").click();
   await expect.poll(async () => (await stored(page)).every((s) => s.locked)).toBe(true);
 
@@ -1030,8 +1082,12 @@ test("lock_from_the_menu_keeps_every_selected_drawing_in_place", async ({ page }
 
   // Unlock both again from the menu of the selection.
   await page.mouse.click(cx, ys[0]!, { button: "right" });
+  await expect(page.getByTestId("drawing-menu-unlock")).toContainText("Unlock 2 drawings");
   await page.getByTestId("drawing-menu-unlock").click();
   await expect.poll(async () => (await stored(page)).some((s) => s.locked)).toBe(false);
+  // One selected: no count.
+  await page.mouse.click(cx - 100, ys[0]!);
+  await expect(page.getByTestId("selection-count")).toHaveCount(0);
 });
 
 test("hide_from_the_menu_persists_across_a_reload_until_shown_from_the_rail", async ({ page }) => {
@@ -1043,6 +1099,8 @@ test("hide_from_the_menu_persists_across_a_reload_until_shown_from_the_rail", as
   await page.getByTestId("drawing-menu-hide").click();
   await expect.poll(async () => (await stored(page)).find((s) => s.id === top!.id)!.hidden).toBe(true);
   await expect.poll(async () => (await debug(page)).drawingsPainted).toBe(1);
+  // The eye says how many are hidden one by one.
+  await expect(page.getByTestId("drawings-hidden-badge")).toHaveText("1");
   expect(isBlue(await basePixel(page, plot.left + 80, ys[0]!))).toBe(false);
   // Neither hit nor selected.
   await page.mouse.click(cx - 100, ys[0]!);
@@ -1058,6 +1116,7 @@ test("hide_from_the_menu_persists_across_a_reload_until_shown_from_the_rail", as
   await show.click();
   await expect.poll(async () => (await debug(page)).drawingsPainted).toBe(2);
   await expect.poll(async () => (await stored(page)).some((s) => s.hidden)).toBe(false);
+  await expect(page.getByTestId("drawings-hidden-badge")).toHaveCount(0);
   await page.getByTestId("tool-hide-all").click();
   await expect(page.getByTestId("visibility-menu-show-hidden")).toBeDisabled();
 });

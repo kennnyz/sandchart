@@ -1,6 +1,7 @@
 import type {
   Backend,
   Drawing,
+  DrawingBody,
   DrawingInput,
   InstrumentId,
   PositionBody,
@@ -26,11 +27,25 @@ export interface DrawingSurface {
   setDrawingsHidden(on: boolean): void;
   drawingMenu(action: MenuAction): void;
   showHiddenDrawings(): void;
+  /** Stores a whole drawing of the chart's pair (from a menu), selected. */
+  addDrawing(body: DrawingBody): void;
   onDrawingCommit(cb: ((step: DrawingChange[]) => void) | null): void;
   onDrawingTool(cb: ((id: ToolId | null) => void) | null): void;
   onDrawingText(cb: ((edit: TextEdit | null) => void) | null): void;
   onDrawingStyle(cb: ((edit: StyleEdit | null) => void) | null): void;
   onDrawingMenu(cb: ((edit: MenuEdit | null) => void) | null): void;
+  /** How many drawings are selected, whenever that changes. */
+  onDrawingSelection(cb: ((count: number) => void) | null): void;
+  /** Asks before deleting drawings: true when `cb` took the question (and calls `go` on a yes). */
+  onDrawingConfirmDelete(cb: ((ids: readonly string[], go: () => void) => boolean) | null): void;
+}
+
+/** Drawings about to be deleted that have alerts: waiting for a yes (see `DrawingController.askDelete`). */
+export interface DeleteQuestion {
+  /** How many drawings would go, and how many of them have an alert. */
+  count: number;
+  alerts: number;
+  go: () => void;
 }
 
 /** A failed store, or a failed load (the chart then shows no drawings). */
@@ -85,6 +100,7 @@ function positionOf(d: Drawing | null | undefined): PositionBody | null {
 }
 
 const sameId = (a: InstrumentId, b: InstrumentId) => a.source === b.source && a.symbol === b.symbol;
+const isLine = (d: Drawing) => d.body.kind === "hline" || d.body.kind === "trend";
 
 /**
  * Keeps the chart's drawings and the backend in step: loads the instrument's drawings,
@@ -107,12 +123,20 @@ export class DrawingController {
   styleEdit: StyleEdit | null = null;
   /** The context menu the chart has open; null when closed. */
   menu: MenuEdit | null = null;
+  /** How many drawings the chart has selected. */
+  selectionCount = 0;
+  /** A delete that would take alerts with it, waiting for the answer; null when none. */
+  deleteQuestion: DeleteQuestion | null = null;
+  /** Whether a drawing has an alert (set by the view from the alerts); none without it. */
+  private hasAlert: (id: string) => boolean = () => false;
   /** Points snap to bar prices; kept across sessions. */
   magnet: boolean;
   /** Hide all: for this session only, the drawings are not changed. */
   hidden = false;
   /** Why the last store or load failed; null once a store succeeds or another instrument opens. */
   error: DrawingError | null = null;
+  /** The shown pair's horizontal and trend lines, by id: what a line alert follows. */
+  private lines = new Map<string, Drawing>();
   /** Ids of the shown pair's drawings hidden one by one (stored `hidden`). */
   private hiddenIds = new Set<string>();
   private surface: DrawingSurface | null = null;
@@ -164,6 +188,11 @@ export class DrawingController {
       this.menu = edit;
       this.onChange();
     });
+    surface.onDrawingConfirmDelete((ids, go) => this.askDelete(ids, go));
+    surface.onDrawingSelection((n) => {
+      this.selectionCount = n;
+      this.onChange();
+    });
     surface.setDrawingsHidden(this.hidden);
     return () => {
       surface.onDrawingCommit(null);
@@ -171,7 +200,11 @@ export class DrawingController {
       surface.onDrawingText(null);
       surface.onDrawingStyle(null);
       surface.onDrawingMenu(null);
+      surface.onDrawingConfirmDelete(null);
+      surface.onDrawingSelection(null);
       if (this.surface !== surface) return;
+      this.deleteQuestion = null;
+      this.selectionCount = 0;
       this.surface = null;
       this.tool = null;
       this.textEdit = null;
@@ -181,8 +214,36 @@ export class DrawingController {
     };
   }
 
+  /** Tells which drawings have alerts, so deleting one asks first. */
+  setAlertCheck(hasAlert: (id: string) => boolean): void {
+    this.hasAlert = hasAlert;
+  }
+
+  /**
+   * Deleting `ids` would delete the alerts of the lines among them too (in the engine, with
+   * the drawing), and undo brings back the drawing only: ask first. False when none has an alert.
+   */
+  private askDelete(ids: readonly string[], go: () => void): boolean {
+    const alerts = ids.filter((id) => this.hasAlert(id)).length;
+    if (alerts === 0) return false;
+    this.deleteQuestion = { count: ids.length, alerts, go };
+    this.onChange();
+    return true;
+  }
+
+  /** The answer to `deleteQuestion`: yes deletes them (the ones still there), no keeps them. */
+  answerDelete(yes: boolean): void {
+    const q = this.deleteQuestion;
+    if (!q) return;
+    this.deleteQuestion = null;
+    this.onChange();
+    if (yes) q.go();
+  }
+
   /** Shows the drawings of `id`: the chart is cleared at once, then filled when they arrive. */
   async open(id: InstrumentId): Promise<void> {
+    // A question about the old pair's drawings is void.
+    this.deleteQuestion = null;
     this.id = id;
     this.bars = null;
     this.setError(null);
@@ -239,6 +300,12 @@ export class DrawingController {
     this.hidden = on;
     this.surface?.setDrawingsHidden(on);
     this.onChange();
+  }
+
+  /** A horizontal line at exactly `price` (ticks), from the "+" menu; hide all is turned off, so it is not placed unseen. */
+  addLevel(price: number): void {
+    this.setHidden(false);
+    this.surface?.addDrawing({ kind: "hline", p: price });
   }
 
   /** How many drawings of the shown pair are hidden one by one. */
@@ -339,6 +406,7 @@ export class DrawingController {
 
   /** Puts `list` on the chart and tracks its positions; their outcomes start unknown. */
   private show(list: Drawing[]): void {
+    this.lines = new Map(list.filter(isLine).map((d) => [d.id, d]));
     this.surface?.setDrawings(list);
     this.hiddenIds = new Set(list.filter((d) => d.hidden).map((d) => d.id));
     this.onChange();
@@ -349,6 +417,22 @@ export class DrawingController {
       if (p) this.positions.set(d.id, p);
     }
     this.setOutcomes(new Map());
+  }
+
+  /** A horizontal or trend line of the shown pair, as the chart has it now (a line alert's level). */
+  line(id: string): Drawing | undefined {
+    return this.lines.get(id);
+  }
+
+  private trackLines(step: DrawingChange[]): void {
+    let changed = false;
+    for (const c of step) {
+      if (c.after && isLine(c.after)) {
+        this.lines.set(c.after.id, c.after);
+        changed = true;
+      } else if (c.before && this.lines.delete(c.before.id)) changed = true;
+    }
+    if (changed) this.onChange();
   }
 
   private setOutcomes(outcomes: Map<string, PositionOutcome>): void {
@@ -437,6 +521,7 @@ export class DrawingController {
     if (step.length === 0) return;
     this.commits++;
     this.trackPositions(step);
+    this.trackLines(step);
     for (const c of step) this.trackHidden(c);
     const id = this.id;
     const saves: Drawing[] = [];
@@ -458,6 +543,7 @@ export class DrawingController {
           rescaled.push({ before: sent, after: saved });
         });
         this.trackPositions(rescaled);
+        this.trackLines(rescaled);
       }
       if (deletes.length > 0) await this.backend.deleteDrawings(deletes);
     };

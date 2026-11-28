@@ -13,9 +13,13 @@ import {
   type Side,
   type TimeframeCode,
 } from "../backend/types";
+import { buildsFrom, bucketStart, closeTime } from "../timeframes";
+
+/** The replay keys as shown in tooltips, menus and the shortcut list ("→", "Space", "⇧B"). */
+export const REPLAY_KEYS = { step: "→", play: "Space", buy: "⇧B", sell: "⇧S", close: "⇧C" } as const;
 
 /** Bars per second of Play. */
-export const SPEEDS = [1, 2, 5, 10] as const;
+export const SPEEDS = [1, 2, 3, 5, 10] as const;
 export type Speed = (typeof SPEEDS)[number];
 /** A new trade risks this share of the close... */
 export const TRADE_STOP = 0.015;
@@ -24,18 +28,39 @@ export const TRADE_RR = 2;
 /** The engine refuses bigger `.replay` files; checked here too, before the file is read. */
 export const MAX_REPLAY_FILE_MIB = 32;
 const MAX_TICKS = Number.MAX_SAFE_INTEGER;
+/** Base candles one step of "jump to real time" asks for: a whole session (the engine's cap). */
+const JUMP_STEP = 200_000;
+/** `replay_state` clamps its cursors: this asks for no bars and no trades, only the flags. */
+const NOTHING = 0xffff_ffff;
+/** Where the results panel remembers that it was collapsed. */
+export const RESULTS_COLLAPSED_KEY = "sandchart.replay.resultsCollapsed";
+
+/** The part of `Storage` the controller uses; reads and writes may throw (no storage). */
+export interface KeyValue {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+}
+
+const browserStorage: KeyValue = {
+  getItem: (k) => (typeof localStorage === "undefined" ? null : localStorage.getItem(k)),
+  setItem: (k, v) => {
+    if (typeof localStorage !== "undefined") localStorage.setItem(k, v);
+  },
+};
 
 type ReplayBackend = Pick<
   Backend,
-  "replayStart" | "replayStep" | "replayCommand" | "replayState" | "replaySave" | "replayOpen" | "replayExit"
+  "replayStart" | "replayStep" | "replaySetBase" | "replayCommand" | "replayState" | "replaySave" | "replayOpen" | "replayExit"
 >;
 
 /** What the controller needs from the chart view: put bars on the chart, or go back to live. */
 export interface ReplayFeed {
   /** The revealed bars are the whole chart now (a start, an open file, a resync). */
   show(st: ReplayState): void;
-  /** Newly revealed bars, after the last one shown. */
+  /** Newly revealed bars from the last one shown on (a forming bar is sent again as it grows). */
   append(bars: CandleColumns): void;
+  /** The replay caught up: show the pair's live candles again (for display; the backtest ended at the cut). */
+  follow(): void;
   /** The replay ended: load the live chart again (candles and live updates). */
   reload(): void;
 }
@@ -43,11 +68,24 @@ export interface ReplayFeed {
 /** The session as the UI shows it; the engine's numbers, never computed here. */
 export interface ReplayView {
   instrument: Instrument;
+  /** The chart's timeframe, the one the bars are in. */
   tf: TimeframeCode;
+  /** The step resolution (the update interval). */
+  base: TimeframeCode;
   start: number;
   /** Index of the last revealed bar. */
   current: number;
+  /** The close time of the current bar; commands carry it. */
+  cut: number;
   atEnd: boolean;
+  /** Reached the newest data in this session: the chart shows live candles again (ADR 0008). */
+  caughtUp: boolean;
+  /** The cut at which the backtest ended at real time (a file's too): no steps or commands. */
+  caughtUpAt: number | null;
+  /** The last bar is still forming (a chart above the base). */
+  partial: boolean;
+  /** Newer candles could not be loaded at the last step: a notice, the next step tries again. */
+  newerError: string | null;
   /** Open time and close of the last revealed bar. */
   time: number;
   close: number;
@@ -56,6 +94,24 @@ export interface ReplayView {
   /** The trade still open, if any (its `r` is marked to the close). */
   open: ReplayTrade | null;
 }
+
+/** Why a `.replay` file was refused, for the message: the engine's own words go in its tooltip. */
+export type ReplayFileProblem = "notFile" | "version" | "tooLarge" | "damaged";
+
+/**
+ * Sorts the engine's refusal of a file (`ReplayFile::from_json`): not JSON of a replay file, a
+ * version this app does not read, too large, or anything else (a hash, a limit, a command), which
+ * means it was damaged or edited.
+ */
+export function replayFileProblem(message: string): ReplayFileProblem {
+  if (message.startsWith("not a replay file")) return "notFile";
+  if (/^replay file version .* is not supported/.test(message)) return "version";
+  if (message.startsWith("the replay file is ")) return "tooLarge";
+  return "damaged";
+}
+
+/** What a question about dropping the trades is for: a new start, an exit, or another pair. */
+export type ConfirmKind = "select" | "exit" | "switch";
 
 /** `off`: the live chart; `picking`: the next click on a bar starts; `on`: replaying. */
 export type ReplayPhase = "off" | "picking" | "on";
@@ -107,6 +163,36 @@ export function validLevels(side: Side, close: number, stop: number, take: numbe
   return inRange && (side === "long" ? stop < close && close < take : take < close && close < stop);
 }
 
+/** What a `.replay` file of the session holds that the UI sees: where it stands and its trades. */
+function sessionKey(v: ReplayView): string {
+  return JSON.stringify([v.instrument.id, v.base, v.cut, v.trades]);
+}
+
+/** One update interval the replay can step: `stepTo` is set when the cut must reach that time first. */
+export interface BaseChoice {
+  tf: TimeframeCode;
+  stepTo: number | null;
+}
+
+/**
+ * The update intervals a replay shown at `tf` can step, finest first: the base and every
+ * timeframe the chart builds from that the engine can re-base to (ADR 0008, decision 8). A lower
+ * one always qualifies (the engine may still refuse it, e.g. a span too long for 1m); a higher
+ * one only at a cut on its boundary, else it names the time to step to.
+ */
+export function baseChoices(tf: TimeframeCode, base: TimeframeCode, cut: number, all: readonly TimeframeCode[]): BaseChoice[] {
+  const out: BaseChoice[] = [];
+  for (const b of all) {
+    if (!buildsFrom(tf, b)) continue;
+    if (b === base || buildsFrom(base, b)) out.push({ tf: b, stepTo: null });
+    else if (buildsFrom(b, base)) {
+      const at = bucketStart(b, cut);
+      out.push({ tf: b, stepTo: at === cut ? null : closeTime(b, at) });
+    }
+  }
+  return out;
+}
+
 /**
  * Runs the replay from the UI: picks a start, steps and plays, sends trade commands, saves and
  * opens files. Every engine call runs one after another; after each step or command it asks the
@@ -121,14 +207,26 @@ export class ReplayController {
   view: ReplayView | null = null;
   /** The engine's message for the last call that failed; cleared by the next action. */
   error: string | null = null;
+  /** The last `.replay` file that was refused, until dismissed or another opens. */
+  fileError: { kind: ReplayFileProblem; detail: string } | null = null;
+  /** Select bar, exit or a pair switch asked whether the trades so far may be dropped; waiting for the answer. */
+  confirming: ConfirmKind | null = null;
+  /** The pair switch held until the answer. */
+  private pending: (() => void) | null = null;
+  /** The session as last saved or opened (`sessionKey`): leaving it then drops nothing. */
+  private savedKey: string | null = null;
+  /** The results panel is folded to its header (remembered). */
+  resultsCollapsed: boolean;
   private cursor = 0;
   /** Closed trades so far; they never change, so only later ones are asked for. */
   private closed: ReplayTrade[] = [];
   private feed: ReplayFeed | null = null;
   private switchTo: ((id: InstrumentId, tf: TimeframeCode) => void) | null = null;
   private queue: Promise<void> = Promise.resolve();
-  /** Bumped by cancelling a pick and by exit: a start in flight from before is stale. */
+  /** Bumped by cancelling a pick, by exit and by a new pick: a job in flight from before is stale. */
   private generation = 0;
+  /** The generation the running job was queued in; it shows nothing once that is over. */
+  private jobGeneration = 0;
   /** A start is in flight; another click starts nothing more. */
   private starting = false;
   /** Steps queued or running. */
@@ -138,7 +236,21 @@ export class ReplayController {
   constructor(
     private readonly backend: ReplayBackend,
     private readonly onChange: () => void,
-  ) {}
+    private readonly storage: KeyValue = browserStorage,
+  ) {
+    let collapsed = false;
+    try {
+      collapsed = storage.getItem(RESULTS_COLLAPSED_KEY) === "1";
+    } catch {
+      // No storage: the panel starts open.
+    }
+    this.resultsCollapsed = collapsed;
+  }
+
+  /** The backtest ended at real time: no steps and no trade commands any more. */
+  get finished(): boolean {
+    return this.view?.caughtUpAt != null;
+  }
 
   /** Connects the chart view; the returned function disconnects it. */
   attach(feed: ReplayFeed): () => void {
@@ -148,15 +260,15 @@ export class ReplayController {
     };
   }
 
-  /** How an opened file switches the chart to its instrument and timeframe. */
+  /** How an opened file (or a timeframe the replay cannot show) switches the chart to an instrument and timeframe. */
   onSwitch(fn: ((id: InstrumentId, tf: TimeframeCode) => void) | null): void {
     this.switchTo = fn;
   }
 
-  /** The replay shows `(id, tf)`. */
-  matches(id: InstrumentId, tf: TimeframeCode): boolean {
+  /** The replay is on and replays `id` (at any timeframe). */
+  replays(id: InstrumentId): boolean {
     const v = this.view;
-    return this.phase === "on" && v !== null && v.tf === tf && v.instrument.id.source === id.source && v.instrument.id.symbol === id.symbol;
+    return this.phase === "on" && v !== null && v.instrument.id.source === id.source && v.instrument.id.symbol === id.symbol;
   }
 
   /** The next click on a bar picks the start (the Replay button). */
@@ -208,11 +320,12 @@ export class ReplayController {
    * holding the key runs at the engine's pace instead of queueing steps it cannot keep up with.
    */
   step(held = false): Promise<void> {
-    if (this.phase !== "on" || this.view?.atEnd || (held && this.steps > 0)) return Promise.resolve();
+    if (this.phase !== "on" || this.view?.atEnd || this.finished || (held && this.steps > 0)) return Promise.resolve();
     this.steps++;
     return this.run(async () => {
       try {
-        if (this.phase !== "on") return;
+        // A step queued behind the one that reached the end has nothing left to do.
+        if (this.phase !== "on" || this.view?.atEnd || this.finished) return;
         await this.backend.replayStep(1);
         await this.sync();
       } finally {
@@ -239,6 +352,153 @@ export class ReplayController {
     if (this.playing) this.set({ playing: false });
   }
 
+  /**
+   * Steps to the newest data: every loaded candle, then the newer ones the engine loads, until
+   * it has caught up (or a file reaches its end). The chart then shows every revealed bar.
+   */
+  jumpToEnd(): Promise<void> {
+    if (this.phase !== "on" || !this.view || this.view.atEnd) return Promise.resolve();
+    this.pause();
+    return this.run(async () => {
+      let v = this.view;
+      if (this.phase !== "on" || !v || v.atEnd || this.finished) return;
+      let cut = v.cut;
+      // Each step loads one more batch of newer candles at most; the cut stops moving at the end.
+      for (;;) {
+        const next = await this.backend.replayStep(JUMP_STEP);
+        // Only the flags: at the base no bars are aggregated for them.
+        const st = await this.backend.replayState(v.base, NOTHING, NOTHING);
+        if (st.atEnd || st.caughtUp || next === cut) break;
+        cut = next;
+      }
+      v = this.view;
+      if (this.phase !== "on" || !v) return;
+      const st = await this.backend.replayState(v.tf, 0, 0);
+      if (this.phase === "on") this.show(st);
+    });
+  }
+
+  /**
+   * The chart switched to `tf`: one the base builds shows its bars at once (the forming bar
+   * too); a lower one re-bases the session to it first. Trades and results stay. One the
+   * replay cannot show, or a re-base the engine refuses, puts the chart back on its timeframe.
+   */
+  setTimeframe(tf: TimeframeCode): Promise<void> {
+    if (this.phase !== "on") return Promise.resolve();
+    return this.run(async () => {
+      const v = this.view;
+      if (this.phase !== "on" || !v || v.tf === tf) return;
+      let st: ReplayState;
+      try {
+        st = tf !== v.base && buildsFrom(v.base, tf) ? await this.backend.replaySetBase(tf) : await this.backend.replayState(tf, 0, 0);
+      } catch (e) {
+        if (this.stale()) return;
+        this.switchTo?.(v.instrument.id, v.tf);
+        throw e;
+      }
+      if (this.phase === "on") this.show(st);
+    });
+  }
+
+  /** Steps `base` candles from now on (the update interval); the engine's message when it refuses. */
+  setBase(base: TimeframeCode): Promise<void> {
+    if (this.phase !== "on") return Promise.resolve();
+    this.pause();
+    return this.run(async () => {
+      const v = this.view;
+      if (this.phase !== "on" || !v || v.base === base) return;
+      await this.backend.replaySetBase(base);
+      const st = await this.backend.replayState(v.tf, 0, 0);
+      if (this.phase === "on") this.show(st);
+    });
+  }
+
+  /**
+   * "Select bar": pick a new start. With trades so far it asks first (`confirming`), since a new
+   * start drops them; then the live chart comes back to pick on.
+   */
+  selectBar(): Promise<void> {
+    if (this.phase !== "on" || !this.view) return Promise.resolve();
+    if (this.unsaved()) {
+      this.ask("select");
+      return Promise.resolve();
+    }
+    return this.repick();
+  }
+
+  /** The X: ends the replay, asking first when that drops trades. */
+  requestExit(): Promise<void> {
+    if (this.unsaved()) {
+      this.ask("exit");
+      return Promise.resolve();
+    }
+    return this.exit();
+  }
+
+  /**
+   * Another pair is about to open, which ends the replay: `go` opens it, at once without trades,
+   * else only once the user lets them go (nothing switches on Cancel).
+   */
+  requestSwitch(go: () => void): void {
+    if (this.unsaved()) {
+      this.ask("switch", go);
+      return;
+    }
+    go();
+  }
+
+  /** The trades may go: do what was asked. */
+  confirm(): Promise<void> {
+    const kind = this.confirming;
+    const go = this.pending;
+    this.pending = null;
+    if (kind === null) return Promise.resolve();
+    if (kind === "select") return this.repick();
+    if (kind === "exit") return this.exit();
+    this.set({ confirming: null });
+    go?.();
+    return Promise.resolve();
+  }
+
+  /** Saves the replay first, then does what was asked; a cancelled save panel or a failed save keeps the replay. */
+  saveFirst(): Promise<void> {
+    const kind = this.confirming;
+    if (kind === null || this.phase !== "on") return Promise.resolve();
+    return this.run(async () => {
+      const where = await this.backend.replaySave();
+      if (where !== null) this.markSaved();
+      // Cancelled, or the question went away meanwhile: nothing more to do.
+      if (where === null || this.confirming !== kind) return;
+      void this.confirm();
+    }, () => this.cancelConfirm());
+  }
+
+  cancelConfirm(): void {
+    this.pending = null;
+    if (this.confirming !== null) this.set({ confirming: null });
+  }
+
+  /** The replay has trades that are not in a file saved or opened as it is now. */
+  private unsaved(): boolean {
+    const v = this.view;
+    return this.phase === "on" && v !== null && v.trades.length > 0 && this.savedKey !== sessionKey(v);
+  }
+
+  private ask(kind: ConfirmKind, go: (() => void) | null = null): void {
+    this.pause();
+    this.pending = go;
+    this.set({ confirming: kind });
+  }
+
+  toggleResults(): void {
+    this.set({ resultsCollapsed: !this.resultsCollapsed });
+    try {
+      this.storage.setItem(RESULTS_COLLAPSED_KEY, this.resultsCollapsed ? "1" : "0");
+    } catch {
+      // No storage: the choice lasts for this session only.
+    }
+  }
+
   setSpeed(speed: Speed): void {
     this.set({ speed });
     if (this.playing) {
@@ -263,8 +523,8 @@ export class ReplayController {
 
   /** Closes the open trade at the close of the current bar. */
   closeTrade(): Promise<void> {
-    if (!this.view?.open) return Promise.resolve();
-    return this.command(() => (this.view!.open ? { kind: "close", bar: this.view!.current } : null));
+    if (!this.view?.open || this.finished) return Promise.resolve();
+    return this.command(() => (this.view!.open ? { kind: "close", time: this.view!.cut } : null));
   }
 
   /**
@@ -273,14 +533,14 @@ export class ReplayController {
    * whose trade closed in the meantime, or whose levels no longer hold, is dropped without a word.
    */
   edit(stop: number, take: number): Promise<void> {
-    const entryBar = this.view?.open?.entryBar;
-    if (entryBar === undefined) return Promise.resolve();
+    const entryTime = this.view?.open?.entryTime;
+    if (entryTime === undefined || this.finished) return Promise.resolve();
     return this.command(() => {
       const v = this.view!;
       const t = v.open;
-      if (!t || t.entryBar !== entryBar || !validLevels(t.side, v.close, stop, take)) return null;
+      if (!t || t.entryTime !== entryTime || !validLevels(t.side, v.close, stop, take)) return null;
       if (stop === t.stop && take === t.take) return null;
-      const cmd: ReplayCommand = { kind: "edit", bar: v.current };
+      const cmd: ReplayCommand = { kind: "edit", time: v.cut };
       if (stop !== t.stop) cmd.stop = stop;
       if (take !== t.take) cmd.take = take;
       return cmd;
@@ -291,31 +551,41 @@ export class ReplayController {
   save(): Promise<void> {
     if (this.phase !== "on") return Promise.resolve();
     return this.run(async () => {
-      await this.backend.replaySave();
+      if ((await this.backend.replaySave()) !== null) this.markSaved();
     });
   }
 
   /** Opens a `.replay` file and shows it on its own instrument and timeframe. A bad file leaves everything as it was. */
   open(bytes: Uint8Array): Promise<void> {
     this.pause();
+    this.fileError = null;
     return this.run(async () => {
-      const st = await this.backend.replayOpen(bytes);
-      if (this.phase === "picking") this.phase = "off";
+      let st: ReplayState;
+      try {
+        st = await this.backend.replayOpen(bytes);
+      } catch (e) {
+        // The replay that was open stays as it was; the message says what is wrong with the file.
+        this.refuseFile(toProblem(e).message);
+        return;
+      }
       this.cursor = 0;
       this.phase = "on";
       this.show(st);
+      this.markSaved();
       this.switchTo?.(st.instrument.id, st.tf);
     });
   }
 
-  /** The chart (back from another instrument) shows the replay again: every revealed bar. */
-  resync(): Promise<void> {
-    return this.run(async () => {
-      if (this.phase !== "on") return;
-      const st = await this.backend.replayState(0, 0);
-      this.cursor = 0;
-      this.show(st);
-    });
+  /** A file was refused (by the engine, or before it was read): says why until dismissed. */
+  refuseFile(detail: string): void {
+    this.fileError = { kind: replayFileProblem(detail), detail };
+    this.changed();
+  }
+
+  dismissFileError(): void {
+    if (this.fileError === null) return;
+    this.fileError = null;
+    this.changed();
   }
 
   /**
@@ -325,17 +595,17 @@ export class ReplayController {
   exit(reload = true): Promise<void> {
     this.pause();
     this.generation++;
+    this.confirming = null;
+    this.pending = null;
     if (this.phase === "picking") {
       this.set({ phase: "off" });
       return Promise.resolve();
     }
     if (this.phase === "off") return Promise.resolve();
+    // Off at once: a chart opened right after this call must not get bars from a job still
+    // on its way (each one checks the generation before it shows anything).
+    this.drop("off");
     return this.run(async () => {
-      this.phase = "off";
-      this.view = null;
-      this.cursor = 0;
-      this.closed = [];
-      this.changed();
       try {
         await this.backend.replayExit();
       } finally {
@@ -344,21 +614,57 @@ export class ReplayController {
     });
   }
 
+  private markSaved(): void {
+    if (this.view && !this.stale()) this.savedKey = sessionKey(this.view);
+  }
+
+  /** Forgets the session at once and moves to `phase`. */
+  private drop(phase: ReplayPhase): void {
+    this.savedKey = null;
+    this.phase = phase;
+    this.view = null;
+    this.cursor = 0;
+    this.closed = [];
+    this.changed();
+  }
+
+  /** The running job was queued before the session it belongs to ended. */
+  private stale(): boolean {
+    return this.jobGeneration !== this.generation;
+  }
+
+  /** Ends the engine's session and shows the live chart to pick a new start on. */
+  private repick(): Promise<void> {
+    this.pause();
+    this.generation++;
+    this.confirming = null;
+    if (this.phase !== "on") return Promise.resolve();
+    this.drop("picking");
+    return this.run(async () => {
+      try {
+        await this.backend.replayExit();
+      } finally {
+        this.feed?.reload();
+      }
+    });
+  }
+
   private openTrade(side: Side): Promise<void> {
     const v = this.view;
-    if (this.phase !== "on" || !v || v.open) return Promise.resolve();
+    if (this.phase !== "on" || !v || v.open || this.finished) return Promise.resolve();
     return this.command(() => {
       // A second click while the first trade was on its way opens nothing.
       if (this.view!.open) return null;
       const { stop, take } = defaultLevels(side, this.view!.close);
-      return { kind: "open", bar: this.view!.current, side, stop, take };
+      return { kind: "open", time: this.view!.cut, side, stop, take };
     });
   }
 
   /** Sends a command made at run time (from the then current bar) and reads the results back. */
   private command(make: () => ReplayCommand | null): Promise<void> {
     return this.run(async () => {
-      if (this.phase !== "on" || !this.view) return;
+      // A command queued behind the step that caught up has nothing to trade on.
+      if (this.phase !== "on" || !this.view || this.finished) return;
       const cmd = make();
       if (!cmd) return;
       await this.backend.replayCommand(cmd);
@@ -367,20 +673,26 @@ export class ReplayController {
   }
 
   private async sync(): Promise<void> {
-    const st = await this.backend.replayState(this.cursor, this.closed.length);
-    if (this.phase !== "on") return;
+    if (this.phase !== "on" || !this.view) return;
+    const tf = this.view.tf;
+    const st = await this.backend.replayState(tf, this.cursor, this.closed.length);
+    if (this.phase !== "on" || this.stale()) return;
     if (st.from !== this.cursor) {
       // Not where the chart is: show everything again.
-      const all = await this.backend.replayState(0, 0);
+      const all = await this.backend.replayState(tf, 0, 0);
+      if (this.phase !== "on") return;
       this.cursor = 0;
       this.show(all);
       return;
     }
     if (st.bars.time.length > 0) this.feed?.append(st.bars);
+    const was = this.view?.caughtUp ?? false;
     this.apply(st);
+    if (st.caughtUp && !was) this.feed?.follow();
   }
 
   private show(st: ReplayState): void {
+    if (this.stale()) return;
     this.feed?.show(st);
     this.view = null;
     this.closed = [];
@@ -389,7 +701,8 @@ export class ReplayController {
 
   private apply(st: ReplayState): void {
     const n = st.bars.time.length;
-    this.cursor = st.from + n;
+    // A forming bar is asked for again, from its index, until it is complete.
+    this.cursor = st.from + n - (st.partial && n > 0 ? 1 : 0);
     const prev = this.view;
     const trades = [...this.closed.slice(0, st.tradesFrom), ...st.trades];
     const last = trades.at(-1);
@@ -398,9 +711,15 @@ export class ReplayController {
     this.view = {
       instrument: st.instrument,
       tf: st.tf,
+      base: st.base,
       start: st.start,
       current: st.current,
+      cut: st.cut,
       atEnd: st.atEnd,
+      caughtUp: st.caughtUp,
+      caughtUpAt: st.caughtUpAt,
+      partial: st.partial,
+      newerError: st.newerError,
       time: n > 0 ? st.bars.time[n - 1]! : (prev?.time ?? 0),
       close: n > 0 ? st.bars.close[n - 1]! : (prev?.close ?? 0),
       trades,
@@ -424,10 +743,14 @@ export class ReplayController {
   /** Runs `job` after every earlier one; a failure keeps the engine's message and stops Play. */
   private run(job: () => Promise<void>, onError?: () => void): Promise<void> {
     this.error = null;
+    const generation = this.generation;
     const next = this.queue.then(async () => {
+      this.jobGeneration = generation;
       try {
         await job();
       } catch (e) {
+        // The session it was for has ended: its failure is no news.
+        if (this.stale()) return;
         this.pause();
         this.error = toProblem(e).message;
         onError?.();
@@ -438,7 +761,7 @@ export class ReplayController {
     return next;
   }
 
-  private set(patch: Partial<Pick<ReplayController, "phase" | "playing" | "speed">>): void {
+  private set(patch: Partial<Pick<ReplayController, "phase" | "playing" | "speed" | "confirming" | "resultsCollapsed">>): void {
     Object.assign(this, patch);
     this.changed();
   }
