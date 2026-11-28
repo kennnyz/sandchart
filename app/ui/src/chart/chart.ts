@@ -997,12 +997,12 @@ export class Chart {
     this.gestureScale = 1;
   };
 
-  /** Our own menu on a drawing; never the web view's (the window blocks it everywhere too). */
+  /** Our own menu on a drawing; never the web view's over it (the window blocks it elsewhere, except in dev). */
   private readonly onContextMenu = (e: MouseEvent): void => {
-    e.preventDefault();
+    if (!import.meta.env.DEV) e.preventDefault();
     if (this.drag || this.pickCb) return;
     const p = this.local(e);
-    if (this.inPricePlot(p)) this.drawings.contextMenu(p.x, p.y);
+    if (this.inPricePlot(p) && this.drawings.contextMenu(p.x, p.y)) e.preventDefault();
   };
 
   private readonly onDoubleClick = (e: MouseEvent): void => {

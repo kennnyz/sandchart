@@ -49,6 +49,14 @@ export function typing(target: unknown): boolean {
 }
 
 /**
+ * The web view's own menu (Reload, Inspect Element) opens only in a text field, for copy and
+ * paste, and anywhere in a dev build, for the inspector; elsewhere the app blocks it.
+ */
+export function keepsNativeMenu(target: unknown, dev: boolean = import.meta.env.DEV): boolean {
+  return dev || typing(target);
+}
+
+/**
  * What a key press does to drawings: Alt + a tool's key picks the tool, Alt+R arms the
  * ruler, Alt+M toggles the magnet, ⌘Z / Ctrl+Z
  * undoes, with Shift redoes, Delete / Backspace removes the selection, Enter edits its

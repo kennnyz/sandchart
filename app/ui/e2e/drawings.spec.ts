@@ -878,10 +878,17 @@ test("right_click_shows_our_menu_and_never_the_native_one", async ({ page }) => 
   await expect(page.getByTestId("drawing-style")).toBeVisible();
   await page.keyboard.press("Escape");
 
-  // A text field keeps the web view's edit menu.
+  // A text field keeps the web view's edit menu: an input and a textarea.
   await page.keyboard.press("ControlOrMeta+k");
   const input = page.getByRole("dialog").locator("input").first();
   await input.click({ button: "right" });
+  expect((await prevented()).at(-1)).toBe(false);
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Alt+KeyN");
+  await page.mouse.click(cx + 150, plot.top + plot.height * 0.7);
+  const area = page.getByTestId("note-editor").getByRole("textbox");
+  await expect(area).toBeFocused();
+  await area.click({ button: "right" });
   expect((await prevented()).at(-1)).toBe(false);
 });
 

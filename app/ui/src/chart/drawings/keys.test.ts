@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ALERT_CODE, alertKey, cmdHeld, drawingKeyAction, MAGNET_CODE, macContextClick, RULER_CODE, type KeyLike } from "./keys";
+import { ALERT_CODE, alertKey, cmdHeld, drawingKeyAction, keepsNativeMenu, MAGNET_CODE, macContextClick, RULER_CODE, type KeyLike } from "./keys";
 import { TOOLS } from "./registry";
 
 const key = (code: string, mods: Partial<KeyLike> = {}): KeyLike => ({
@@ -95,5 +95,15 @@ describe("cmdHeld", () => {
     expect(macContextClick({ ctrlKey: true, button: 0 }, true)).toBe(true);
     expect(macContextClick({ ctrlKey: false, button: 0 }, true)).toBe(false);
     expect(macContextClick({ ctrlKey: true, button: 0 }, false)).toBe(false);
+  });
+});
+
+describe("keepsNativeMenu", () => {
+  it("keeps the web view's menu in text fields, and everywhere in a dev build", () => {
+    expect(keepsNativeMenu({ tagName: "TEXTAREA" }, false)).toBe(true);
+    expect(keepsNativeMenu({ tagName: "INPUT", type: "text" }, false)).toBe(true);
+    expect(keepsNativeMenu({ tagName: "CANVAS" }, false)).toBe(false);
+    expect(keepsNativeMenu({ tagName: "INPUT", type: "checkbox" }, false)).toBe(false);
+    expect(keepsNativeMenu({ tagName: "CANVAS" }, true)).toBe(true);
   });
 });
