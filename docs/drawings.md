@@ -47,7 +47,7 @@ Every change is saved when you release the mouse, not while you drag.
 - **⌘-drag** (Ctrl-drag on Windows and Linux) on empty chart space draws a selection box. Every drawing the box touches is added to the selection.
 - **⌘-click** (Ctrl-click) a drawing to add it to the selection, or to take it out.
 - **Drag** any of them to move them all together. Locked ones stay where they are.
-- **Delete** or Backspace removes them all.
+- **Delete** or Backspace removes them all, and the [alerts](alerts.md) of the lines among them. Undo brings the drawings back, but not their alerts.
 - A click without a drag on one of them selects only that one; a click on empty space deselects all.
 
 Moving or deleting several is one step for undo, and one write: either all of them are saved or none is.
