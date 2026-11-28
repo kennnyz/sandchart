@@ -7,6 +7,7 @@ import { DrawingToolbar } from "./components/DrawingToolbar";
 import { IndicatorsDialog } from "./components/IndicatorsDialog";
 import { ShortcutsDialog } from "./components/ShortcutsDialog";
 import { helpKey } from "./shortcuts";
+import { markPointerFocus } from "./focus";
 import { StatusBar } from "./components/StatusBar";
 import { tfLabel } from "./components/TimeframePicker";
 import { SymbolSearch, type SearchMode } from "./components/SymbolSearch";
@@ -114,6 +115,9 @@ export function App() {
   useLayoutEffect(() => {
     document.documentElement.dataset.theme = themeName;
   }, [themeName]);
+
+  // A button clicked with the mouse shows no focus ring; one reached with Tab does.
+  useEffect(() => markPointerFocus(), []);
 
   const showWatchlist = (visible: boolean) => {
     setWatchlistVisible(visible);

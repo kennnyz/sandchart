@@ -1,4 +1,5 @@
 import { FileUp, X } from "lucide-react";
+import { hasRing, restoreFocus } from "../focus";
 import { useEffect, useRef, useState, useSyncExternalStore, type ChangeEvent } from "react";
 import { toProblem, type Backend, type FailedIndicator, type IndicatorInfo, type Inspection } from "../backend/types";
 import { t } from "../i18n";
@@ -86,8 +87,11 @@ export function IndicatorsDialog({ backend, store, onClose }: IndicatorsDialogPr
   // Focus moves into the dialog and back to where it was on close.
   useEffect(() => {
     const before = document.activeElement as HTMLElement | null;
+    const ring = hasRing(before);
     dialogRef.current?.querySelector<HTMLElement>("button")?.focus();
-    return () => before?.focus();
+    return () => {
+      if (before) restoreFocus(before, ring);
+    };
   }, []);
 
   /** Runs a backend job; its failure is shown in the dialog. */

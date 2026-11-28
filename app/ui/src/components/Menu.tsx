@@ -1,4 +1,5 @@
 import type { Icon } from "../icons";
+import { hasRing, restoreFocus } from "../focus";
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 
 export interface MenuItem {
@@ -59,13 +60,14 @@ export function Menu({ items, label, testId, x, y, width, height, fixed, onClose
   // focus goes back to where it was, unless it has moved on outside the menu.
   useEffect(() => {
     const before = document.activeElement;
+    const ring = hasRing(before);
     const id = requestAnimationFrame(() => ref.current?.querySelector<HTMLElement>('[role^="menuitem"]:not(:disabled)')?.focus());
     const menu = ref.current;
     return () => {
       cancelAnimationFrame(id);
       const now = document.activeElement;
       const lost = now === null || now === document.body || menu?.contains(now) === true;
-      if (lost && before instanceof HTMLElement && before.isConnected) before.focus();
+      if (lost && before instanceof HTMLElement) restoreFocus(before, ring);
     };
   }, []);
 

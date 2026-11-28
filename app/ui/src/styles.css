@@ -91,6 +91,10 @@ select:focus-visible {
   outline: 1px solid var(--muted);
   outline-offset: 1px;
 }
+/* Focus given back to a control that was clicked (see focus.ts): no ring. */
+[data-no-ring]:focus-visible {
+  outline: none;
+}
 .mono {
   font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }

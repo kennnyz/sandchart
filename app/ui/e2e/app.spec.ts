@@ -330,3 +330,31 @@ test("the_watchlist_remove_button_never_covers_the_24h_change", async ({ page })
   const head = (await page.locator(".wl-columns span").last().boundingBox())!;
   expect(Math.abs(head.x + head.width - (chg.x + chg.width))).toBeLessThan(1.5);
 });
+
+test("a_clicked_control_gets_focus_back_without_a_ring_but_a_keyboard_one_keeps_it", async ({ page }) => {
+  await openApp(page);
+  /** The outline the focused element shows now. */
+  const ring = () => page.evaluate(() => getComputedStyle(document.activeElement as Element).outlineStyle);
+  // Clicked, closed with Esc: focus is back on the button, without a ring.
+  await page.getByTestId("indicators-button").click();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("indicators-button")).toBeFocused();
+  expect(await ring()).toBe("none");
+  await page.getByTestId("tf-more").click();
+  await page.keyboard.press("Escape");
+  expect(await ring()).toBe("none");
+  // A key pressed after a click does not bring the ring either.
+  await page.getByTestId("tool-trend").click();
+  await page.keyboard.press("Shift");
+  if (await page.getByTestId("tool-trend").evaluate((el) => el === document.activeElement)) expect(await ring()).toBe("none");
+  await page.keyboard.press("Escape");
+  // Reached with Tab, the ring stays after the menu closes.
+  await page.getByTestId("tf-more").focus();
+  await page.keyboard.press("Shift+Tab");
+  await page.keyboard.press("Tab");
+  await expect(page.getByTestId("tf-more")).toBeFocused();
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("tf-more")).toBeFocused();
+  expect(await ring()).not.toBe("none");
+});
