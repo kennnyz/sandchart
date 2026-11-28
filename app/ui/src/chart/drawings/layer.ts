@@ -223,6 +223,16 @@ export class DrawingLayer {
     this.host.invalidateOverlay();
   }
 
+  /** Stores a whole drawing at once (from a menu) and selects it; a tool, a drag and open editors are put away. */
+  add(body: DrawingBody): void {
+    this.abort();
+    this.finishText(null);
+    this.closeStyle();
+    this.closeMenu();
+    this.state.setTool(null);
+    if (this.state.add(body)) this.host.invalidate();
+  }
+
   /** The engine stored `sent` as `saved` (another price scale): show and keep that copy. */
   stored(sent: Drawing, saved: Drawing): void {
     if (!this.state.stored(sent, saved)) return;

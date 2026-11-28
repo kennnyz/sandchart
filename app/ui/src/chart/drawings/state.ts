@@ -175,19 +175,33 @@ export class DrawingState {
     return this.complete(tool, this.owner, c);
   }
 
-  /** Makes and stores the drawing from the placed points; a tool that is not sticky is put down. */
-  private complete(tool: ToolDef, owner: Owner, c: Coords): Drawing {
-    const d: Drawing = {
+  /** Stores a whole drawing at once (from a menu, not placed point by point), on top and selected; null without an owner. */
+  add(body: DrawingBody): Drawing | null {
+    if (!this.owner) return null;
+    const d = this.make(this.owner, body);
+    this.record([{ before: null, after: d }]);
+    this.pick([d.id]);
+    return d;
+  }
+
+  /** A new drawing of the owner with this body, on top of the others; not stored. */
+  private make(owner: Owner, body: DrawingBody): Drawing {
+    return {
       id: this.newId(),
       instrument: { ...owner.instrument },
       priceScale: owner.priceScale,
-      body: tool.create(this.points, c),
+      body,
       style: { ...DEFAULT_STYLE },
       locked: false,
       hidden: false,
       z: this.drawings.reduce((z, o) => Math.max(z, o.z), 0) + 1,
       updatedAt: 0,
     };
+  }
+
+  /** Makes and stores the drawing from the placed points; a tool that is not sticky is put down. */
+  private complete(tool: ToolDef, owner: Owner, c: Coords): Drawing {
+    const d = this.make(owner, tool.create(this.points, c));
     this.points = [];
     if (tool.text) {
       this.draft = d;

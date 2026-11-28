@@ -587,3 +587,18 @@ describe("⌘ snap preview", () => {
     expect(l.snapPreview()).toBeNull();
   });
 });
+
+describe("add from a menu", () => {
+  it("stores the drawing, selects it and puts the armed tool down", () => {
+    const { l, rec } = recording();
+    l.setOwner({ instrument: { source: "mock", symbol: "BTCUSDT" }, priceScale: 2 });
+    l.setTool("trend");
+    const base = rec.base;
+    l.add({ kind: "hline", p: 4_321 });
+    expect(rec.commits).toHaveLength(1);
+    expect(rec.commits[0]!.after).toMatchObject({ body: { kind: "hline", p: 4_321 } });
+    expect(l.state.selected).toBe(rec.commits[0]!.after!.id);
+    expect(l.state.tool).toBeNull();
+    expect(rec.base).toBeGreaterThan(base);
+  });
+});

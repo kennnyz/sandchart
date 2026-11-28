@@ -34,6 +34,7 @@ function fakeSurface() {
   const hidden: boolean[] = [];
   const storedCopies: [Drawing, Drawing][] = [];
   const menus: MenuAction[] = [];
+  const added: DrawingBody[] = [];
   let showHidden = 0;
   let menu: ((e: MenuEdit | null) => void) | null = null;
   let style: ((e: StyleEdit | null) => void) | null = null;
@@ -68,6 +69,7 @@ function fakeSurface() {
       showHidden++;
     },
     onDrawingMenu: (cb) => (menu = cb),
+    addDrawing: (body) => added.push(body),
   };
   return {
     surface,
@@ -81,6 +83,7 @@ function fakeSurface() {
     hidden,
     storedCopies,
     menus,
+    added,
     showHiddenCalls: () => showHidden,
     openMenu: (e: MenuEdit | null) => menu!(e),
     openStyle: (e: StyleEdit | null) => style!(e),
@@ -422,6 +425,18 @@ describe("DrawingController", () => {
     expect(s.menus).toEqual(["lock", null]);
     s.openMenu(null);
     expect(c.menu).toBeNull();
+  });
+
+  it("adds a horizontal line at a price, shown even under hide all", () => {
+    const s = fakeSurface();
+    const c = new DrawingController(fakeBackend([]).backend, () => {});
+    c.attach(s.surface);
+    c.toggleHidden();
+    expect(c.hidden).toBe(true);
+    c.addLevel(1_234_567);
+    expect(s.added).toEqual([{ kind: "hline", p: 1_234_567 }]);
+    expect(c.hidden).toBe(false);
+    expect(s.hidden.at(-1)).toBe(false);
   });
 
   it("counts the drawings hidden one by one, and shows them with hide all turned off", async () => {

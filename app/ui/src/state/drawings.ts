@@ -1,6 +1,7 @@
 import type {
   Backend,
   Drawing,
+  DrawingBody,
   DrawingInput,
   InstrumentId,
   PositionBody,
@@ -26,6 +27,8 @@ export interface DrawingSurface {
   setDrawingsHidden(on: boolean): void;
   drawingMenu(action: MenuAction): void;
   showHiddenDrawings(): void;
+  /** Stores a whole drawing of the chart's pair (from a menu), selected. */
+  addDrawing(body: DrawingBody): void;
   onDrawingCommit(cb: ((step: DrawingChange[]) => void) | null): void;
   onDrawingTool(cb: ((id: ToolId | null) => void) | null): void;
   onDrawingText(cb: ((edit: TextEdit | null) => void) | null): void;
@@ -239,6 +242,12 @@ export class DrawingController {
     this.hidden = on;
     this.surface?.setDrawingsHidden(on);
     this.onChange();
+  }
+
+  /** A horizontal line at exactly `price` (ticks), from the "+" menu; hide all is turned off, so it is not placed unseen. */
+  addLevel(price: number): void {
+    this.setHidden(false);
+    this.surface?.addDrawing({ kind: "hline", p: price });
   }
 
   /** How many drawings of the shown pair are hidden one by one. */
