@@ -561,6 +561,33 @@ test("writes_edits_and_deletes_a_note", async ({ page }) => {
   await storedCount(page, 0);
 });
 
+test("delete_keys_on_a_note_editor_button_stay_in_the_editor", async ({ page }) => {
+  const plot = await openChart(page);
+  const cx = Math.round(plot.left + plot.width / 2);
+  await page.keyboard.press("Alt+KeyN");
+  await page.mouse.click(cx, Math.round(plot.top + plot.height * 0.5));
+  await expect(page.getByTestId("note-editor").getByRole("textbox")).toBeFocused();
+  await page.keyboard.type("keep me");
+  await page.getByTestId("note-save").click();
+  const [note] = await storedCount(page, 1);
+  const marker = await findMarker(page, cx);
+
+  // The note is selected and its editor is open with the focus on a button.
+  await page.mouse.click(marker[0], marker[1]);
+  expect((await debug(page)).selectedDrawing).toBe(note!.id);
+  await page.keyboard.press("Enter");
+  await page.getByTestId("note-save").focus();
+  await page.keyboard.press("Backspace");
+  await page.keyboard.press("Delete");
+  await nextFrame(page);
+  await expect(page.getByTestId("note-editor")).toBeVisible();
+  expect((await debug(page)).selectedDrawing).toBe(note!.id);
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("note-editor")).toBeHidden();
+  await nextFrame(page);
+  expect(await stored(page)).toHaveLength(1);
+});
+
 test("style_popover_changes_a_fib_and_the_change_survives_a_reload", async ({ page }) => {
   const plot = await openChart(page);
   const cx = Math.round(plot.left + plot.width / 2);

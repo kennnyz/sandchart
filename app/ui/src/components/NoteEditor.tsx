@@ -56,13 +56,16 @@ export function NoteEditor({ edit, hostWidth, hostHeight, onSave, onCancel, onDe
   }, [onCancel]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === "Escape") {
+    // Every key stays in the editor: Delete or Backspace on one of its buttons must not
+    // reach the chart's shortcuts and delete the selected drawing (nor make WebKit go back).
+    e.stopPropagation();
+    if ((e.key === "Backspace" || e.key === "Delete") && e.target !== area.current) {
       e.preventDefault();
-      e.stopPropagation();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
       onCancel();
     } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
-      e.stopPropagation();
       onSave(text);
     } else if (e.key === "Tab") {
       // Focus stays in the dialog.
