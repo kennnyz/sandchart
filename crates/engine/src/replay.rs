@@ -171,6 +171,11 @@ impl Engine {
         self.with_session(|s| s.state(cursor))
     }
 
+    /// The default name of the session's file, `<symbol>-<timeframe>.replay`.
+    pub fn replay_file_name(&self) -> Result<String, EngineError> {
+        self.with_session(|s| Ok(format!("{}-{}.replay", s.instrument.id.symbol, s.tf.code())))
+    }
+
     /// The `.replay` file: context and revealed bars only, never a bar after the current one.
     pub fn replay_export(&self) -> Result<Vec<u8>, EngineError> {
         self.with_session(|s| {

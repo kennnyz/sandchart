@@ -193,6 +193,7 @@ async fn export_holds_no_future_bar_and_opens_to_the_same_state() {
         .replay_command(Command::Close { bar: st.start + 7 })
         .unwrap();
     let before = engine.replay_state(0).unwrap();
+    assert_eq!(engine.replay_file_name().unwrap(), "BTCUSDT-1h.replay");
     let bytes = engine.replay_export().unwrap();
     let text = String::from_utf8(bytes.clone()).unwrap();
     // Bar 557 is the current one; 558 and later stay in the engine.

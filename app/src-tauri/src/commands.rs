@@ -394,12 +394,8 @@ pub async fn replay_state(state: State<'_, AppState>, cursor: u32) -> CmdResult<
 /// Returns the path, or `None` when the user cancelled.
 #[tauri::command]
 pub async fn replay_save(app: AppHandle, state: State<'_, AppState>) -> CmdResult<Option<String>> {
-    let (name, bytes) = blocking(&state, |e| {
-        let st = e.replay_state(u32::MAX)?;
-        let name = format!("{}-{}.replay", st.instrument.id.symbol, st.tf.code());
-        Ok((name, e.replay_export()?))
-    })
-    .await?;
+    let (name, bytes) =
+        blocking(&state, |e| Ok((e.replay_file_name()?, e.replay_export()?))).await?;
     spawn_blocking(move || {
         let Some(path) = app
             .dialog()
