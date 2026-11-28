@@ -34,7 +34,9 @@ export interface ReplayBarProps {
 const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 
 /** "→", "Space", "⇧B". */
-const KEYS = { step: "→", play: "Space", buy: "⇧B", sell: "⇧S", close: "⇧C" } as const;
+/** The replay keys as shown in tooltips and menus. */
+export const REPLAY_KEYS = { step: "→", play: "Space", buy: "⇧B", sell: "⇧S", close: "⇧C" } as const;
+const KEYS = REPLAY_KEYS;
 const titled = (name: string, shortcut: string) => t("replay.shortcut", { name, shortcut });
 
 /**

@@ -50,6 +50,8 @@ export interface ChartDebug {
   replayClosed: number;
   /** Price alert levels painted at the last base frame, with their y in CSS px of the chart. */
   alertLevels: { id: string; y: number }[];
+  /** Centre of the "+" at the crosshair price at the last overlay frame, in CSS px of the chart; null when not shown. */
+  plusButton: { x: number; y: number } | null;
 }
 
 let debug: ChartDebug | null = null;
@@ -82,6 +84,7 @@ export function enableChartDebug(): void {
     replayHandles: null,
     replayClosed: 0,
     alertLevels: [],
+    plusButton: null,
   };
   (window as unknown as { __sandchartDebug: ChartDebug }).__sandchartDebug = debug;
 }

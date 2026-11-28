@@ -1,4 +1,4 @@
-import type { Alert, CandleColumns, Candles, Drawing, Instrument, LiveCandle, PositionOutcome, TimeframeCode } from "../backend/types";
+import type { Alert, CandleColumns, Candles, Drawing, DrawingBody, Instrument, LiveCandle, PositionOutcome, TimeframeCode } from "../backend/types";
 import { AlertLevelLayer } from "./alerts";
 import { chartDebug } from "./debug";
 import { Coords, MAX_TICKS, type Step } from "./drawings/geometry";
@@ -17,6 +17,7 @@ import type { ToolId } from "./drawings/registry";
 import type { DrawingChange } from "./drawings/state";
 import { alignOffset, hasOwnPane, layoutPanes, overlayRange, paneRange, seriesValues, type IndicatorLayer } from "./indicators";
 import { draw, drawingTag, drawOverlay, plotSize, priceAxisWidth, RenderBuffers, type Crosshair, type FrameInput, type Series } from "./render";
+import { onPlus, paintPlus, plusX } from "./plus";
 import type { IndicatorFrame } from "./renderIndicators";
 import { ReplayLayer, snapStart, type Level, type ReplayMarks } from "./replay";
 import { autoscale, PriceScale, type PriceScaleMode } from "./scale";
@@ -85,6 +86,21 @@ interface GestureEventLike extends UIEvent {
   readonly clientY: number;
 }
 
+/** The "+" at the crosshair price was pressed: the pair, the price in ticks, and where (CSS px of the chart). */
+export interface PriceMenuAt {
+  instrument: Instrument;
+  price: number;
+  x: number;
+  y: number;
+}
+
+/** A right click on a price alert's level: the alert, and where (CSS px of the chart). */
+export interface AlertMenuAt {
+  id: string;
+  x: number;
+  y: number;
+}
+
 type Drag = { kind: "pan" | "price" | "drawing" | "replay"; pointerId: number; lastX: number; lastY: number };
 
 /**
@@ -151,6 +167,9 @@ export class Chart {
   /** Active price alerts of the pair, on the base layer; a press on one selects it. */
   private readonly alertLevels = new AlertLevelLayer();
   private alertClickCb: ((id: string) => void) | null = null;
+  private alertMenuCb: ((at: AlertMenuAt) => void) | null = null;
+  /** While set, a round "+" at the left edge of the crosshair price label opens a menu at that price. */
+  private priceMenuCb: ((at: PriceMenuAt) => void) | null = null;
   /** Drawings: painted on both layers, and first in line for pointer input on the price plot. */
   private readonly drawings = new DrawingLayer({
     invalidate: () => this.invalidate(),
@@ -380,12 +399,9 @@ export class Chart {
   /** The pair and the price in whole ticks under the mouse on the price plot; null elsewhere. */
   crosshairPrice(): { instrument: Instrument; price: number } | null {
     const m = this.mouse;
-    const f = this.lastFrame;
-    if (!m || !f || !this.instrument || this.drag) return null;
-    if (!(m.x >= 0 && m.x < this.plot().plotW && m.y >= 0 && m.y < this.priceH())) return null;
-    const v = Math.round(f.scale.fromY(m.y));
-    const price = Math.min(MAX_TICKS, Math.max(f.scale.mode === "log" ? 1 : -MAX_TICKS, v));
-    return Number.isSafeInteger(price) ? { instrument: this.instrument, price } : null;
+    if (!m || !this.instrument || this.drag || !this.inPricePlot(m)) return null;
+    const price = this.priceAt(m.y);
+    return price === null ? null : { instrument: this.instrument, price };
   }
 
   /** The drawings of the instrument on the chart; selection and undo history start over. */
@@ -477,6 +493,22 @@ export class Chart {
   /** A press on an alert level: called with the alert's id. */
   onAlertClick(cb: ((id: string) => void) | null): void {
     this.alertClickCb = cb;
+  }
+
+  /** A right click on an alert level (and on no drawing): called with the alert and where. */
+  onAlertMenu(cb: ((at: AlertMenuAt) => void) | null): void {
+    this.alertMenuCb = cb;
+  }
+
+  /** Shows the "+" at the crosshair price while set; a press on it calls `cb` instead of panning or drawing. */
+  onPriceMenu(cb: ((at: PriceMenuAt) => void) | null): void {
+    this.priceMenuCb = cb;
+    this.invalidateOverlay();
+  }
+
+  /** Stores a whole drawing of the chart's pair (from a menu), selected; the tool is put down. */
+  addDrawing(body: DrawingBody): void {
+    this.drawings.add(body);
   }
 
   /** A replay's trades and where its revealed bars end, or none. */
@@ -571,6 +603,9 @@ export class Chart {
     this.drawingMenuCb = null;
     this.replayEditCb = null;
     this.pickCb = null;
+    this.alertClickCb = null;
+    this.alertMenuCb = null;
+    this.priceMenuCb = null;
   }
 
   // ---- Internals ----
@@ -835,6 +870,30 @@ export class Chart {
         this.replay.paintPick(octx, x, plotW, plotH, this.dpr, this.theme);
       }
     });
+    // Over the crosshair line, at the left edge of its price label.
+    const plus = m !== null && this.plusShown(m);
+    if (plus) paintPlus(octx, plotW, m.y, this.dpr, this.onPlusAt(m), this.theme);
+    const debug = chartDebug();
+    if (debug) debug.plusButton = plus ? { x: plusX(plotW), y: m.y } : null;
+  }
+
+  /** The price in whole ticks at `y` on the price plot of the last frame, clamped to what a drawing or an alert can hold. */
+  private priceAt(y: number): number | null {
+    const f = this.lastFrame;
+    if (!f) return null;
+    const v = Math.round(f.scale.fromY(y));
+    const price = Math.min(MAX_TICKS, Math.max(f.scale.mode === "log" ? 1 : -MAX_TICKS, v));
+    return Number.isSafeInteger(price) ? price : null;
+  }
+
+  /** The "+" shows at the crosshair price: the mouse is on the price plot of a pair, nothing is dragged or picked. */
+  private plusShown(p: { x: number; y: number }): boolean {
+    return this.priceMenuCb !== null && this.instrument !== null && this.series.count > 0 && !this.drag && !this.pickCb && this.inPricePlot(p);
+  }
+
+  /** `p` is on the "+", which sits on the pointer's own row. */
+  private onPlusAt(p: { x: number; y: number }): boolean {
+    return this.plusShown(p) && onPlus(this.plot().plotW, this.priceH(), p.x, p.y, p.y);
   }
 
   private local(e: { clientX: number; clientY: number }): { x: number; y: number } {
@@ -855,6 +914,13 @@ export class Chart {
       this.updateCrosshair();
       const i = this.crosshairIndex;
       if (i !== null && p.y < this.plot().plotH) this.pickCb(this.series.time[i]!);
+      return;
+    }
+    // The "+" opens its menu: no pan, no drawing, and focus stays where it was.
+    if (this.onPlusAt(p)) {
+      e.preventDefault();
+      const price = this.priceAt(p.y);
+      if (price !== null && this.instrument) this.priceMenuCb?.({ instrument: this.instrument, price, x: p.x, y: p.y });
       return;
     }
     // The open replay trade's stop and take come first, then drawings: a tool places, a press on a drawing selects it.
@@ -879,6 +945,10 @@ export class Chart {
   private updateCursor(p: { x: number; y: number }): void {
     if (this.pickCb) {
       this.canvas.style.cursor = "crosshair";
+      return;
+    }
+    if (!this.drag && this.onPlusAt(p)) {
+      this.canvas.style.cursor = "pointer";
       return;
     }
     const onPriceAxis = p.x >= this.plot().plotW && p.y < this.priceH();
@@ -919,7 +989,8 @@ export class Chart {
       this.afterViewChange();
       return;
     }
-    if (this.inPricePlot(p)) this.drawings.pointerMove(p.x, p.y, e.shiftKey, cmdHeld(e));
+    // On the "+" no drawing is hovered and no placement is previewed.
+    if (this.inPricePlot(p) && !this.onPlusAt(p)) this.drawings.pointerMove(p.x, p.y, e.shiftKey, cmdHeld(e));
     else this.drawings.leave();
     this.updateCursor(p);
     // Only the mouse moved: the base layer stays as it is.
@@ -1012,12 +1083,24 @@ export class Chart {
     this.gestureScale = 1;
   };
 
-  /** Our own menu on a drawing; never the web view's over it (the window blocks it elsewhere, except in dev). */
+  /**
+   * Our own menu on a drawing, else on a price alert's level; never the web view's over them
+   * (the window blocks it elsewhere, except in dev).
+   */
   private readonly onContextMenu = (e: MouseEvent): void => {
     if (!import.meta.env.DEV) e.preventDefault();
     if (this.drag || this.pickCb) return;
     const p = this.local(e);
-    if (this.inPricePlot(p) && this.drawings.contextMenu(p.x, p.y)) e.preventDefault();
+    if (!this.inPricePlot(p)) return;
+    if (this.drawings.contextMenu(p.x, p.y)) {
+      e.preventDefault();
+      return;
+    }
+    const alert = this.alertMenuCb ? this.alertLevels.hit(p.x, p.y) : null;
+    if (alert) {
+      e.preventDefault();
+      this.alertMenuCb?.({ id: alert, x: p.x, y: p.y });
+    }
   };
 
   private readonly onDoubleClick = (e: MouseEvent): void => {

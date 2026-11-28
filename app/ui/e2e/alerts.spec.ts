@@ -23,6 +23,7 @@ interface Debug {
   overlayDraws: number;
   lastBarTime: number | null;
   alertLevels: { id: string; y: number }[];
+  plusButton: { x: number; y: number } | null;
 }
 
 async function openChart(page: Page): Promise<Plot> {
@@ -268,4 +269,139 @@ test("an_active_price_alert_is_a_level_on_the_chart_that_picks_it_in_the_panel",
   await feed(page, price - 300, price + 150, price + 120);
   await expect(row).toHaveAttribute("data-state", "fired");
   await expect.poll(async () => (await debug(page)).alertLevels.length).toBe(0);
+});
+
+/** `ticks` at 2 decimals as the chart writes them: thin-space thousands. */
+function price2(ticks: number): string {
+  const [int, frac] = (ticks / 100).toFixed(2).split(".");
+  return `${int!.replace(/\B(?=(\d{3})+$)/g, "\u2009")}.${frac}`;
+}
+
+test("right_click_on_an_alert_level_removes_the_alert", async ({ page }) => {
+  const plot = await openChart(page);
+  const cx = Math.round(plot.left + plot.width / 2);
+  const y = Math.round(plot.top + plot.height * 0.4);
+  await page.mouse.move(cx, y);
+  await nextFrame(page);
+  await page.keyboard.press("Alt+KeyA");
+  await alertCount(page, 1);
+  await expect.poll(async () => (await debug(page)).alertLevels.length).toBe(1);
+  const ly = plot.top + (await debug(page)).alertLevels[0]!.y;
+
+  // Off the level: no menu of ours (the drawing menu needs a drawing).
+  await page.mouse.click(cx - 150, ly + 60, { button: "right" });
+  await expect(page.getByTestId("alert-menu")).toHaveCount(0);
+  await expect(page.getByTestId("drawing-menu")).toHaveCount(0);
+
+  await page.mouse.click(cx - 150, ly, { button: "right" });
+  const menu = page.getByTestId("alert-menu");
+  await expect(menu).toBeVisible();
+  await expect(page.getByTestId("drawing-menu")).toHaveCount(0);
+  await expect(page.getByTestId("alert-menu-remove")).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+  expect(await alerts(page)).toHaveLength(1);
+
+  await page.mouse.click(cx - 150, ly, { button: "right" });
+  await page.getByTestId("alert-menu-remove").click();
+  await alertCount(page, 0);
+  await expect(menu).toHaveCount(0);
+  await expect.poll(async () => (await debug(page)).alertLevels.length).toBe(0);
+});
+
+test("right_click_on_a_drawing_over_an_alert_level_keeps_the_drawing_menu", async ({ page }) => {
+  const plot = await openChart(page);
+  const cx = Math.round(plot.left + plot.width / 2);
+  const y = Math.round(plot.top + plot.height * 0.4);
+  await page.mouse.move(cx, y);
+  await nextFrame(page);
+  await page.keyboard.press("Alt+KeyA");
+  await alertCount(page, 1);
+  await page.keyboard.press("Alt+KeyH");
+  await page.mouse.click(cx, y);
+  await expect.poll(async () => (await storedDrawings(page)).length).toBe(1);
+  await page.mouse.click(cx, y, { button: "right" });
+  await expect(page.getByTestId("drawing-menu")).toBeVisible();
+  await expect(page.getByTestId("alert-menu")).toHaveCount(0);
+});
+
+test("the_plus_at_the_crosshair_price_sets_an_alert_or_draws_a_level_there", async ({ page }) => {
+  const plot = await openChart(page);
+  const cx = Math.round(plot.left + plot.width / 2);
+  const y = Math.round(plot.top + plot.height * 0.4);
+  await page.mouse.move(cx, y);
+  const shown = await debug(page);
+  expect(shown.plusButton).not.toBeNull();
+  expect(Math.abs(plot.top + shown.plusButton!.y - y)).toBeLessThan(1);
+  const px = plot.left + shown.plusButton!.x;
+  expect(px).toBeGreaterThan(plot.left + plot.width - 24);
+  expect(px).toBeLessThan(plot.left + plot.width);
+
+  // It follows the crosshair on the overlay only; off the price plot it goes away.
+  const before = await debug(page);
+  for (let i = 0; i < 10; i++) {
+    await page.mouse.move(cx - 100 + i * 20, y + (i % 3) * 7);
+    await nextFrame(page);
+  }
+  await page.mouse.move(px, y);
+  const after = await debug(page);
+  expect(after.baseDraws).toBe(before.baseDraws);
+  expect(Math.abs(plot.top + after.plusButton!.y - y)).toBeLessThan(1);
+  await expect(page.getByTestId("chart").locator("canvas").first()).toHaveCSS("cursor", "pointer");
+  await page.mouse.move(cx, plot.top + plot.height + 10);
+  expect((await debug(page)).plusButton).toBeNull();
+
+  // With the level tool armed, a press on the + neither places a line nor pans; focus comes back.
+  await page.mouse.move(cx, y);
+  await nextFrame(page);
+  const hovered = await page.getByTestId("legend").getAttribute("data-time");
+  await page.getByTestId("replay-button").focus();
+  await page.keyboard.press("Alt+KeyH");
+  await page.mouse.move(px, y);
+  await nextFrame(page);
+  await page.mouse.down();
+  await page.mouse.move(px - 200, y, { steps: 5 });
+  await page.mouse.up();
+  const menu = page.getByTestId("price-menu");
+  await expect(menu).toBeVisible();
+  await expect(page.getByTestId("price-menu-buy")).toHaveCount(0);
+  const alertItem = page.getByTestId("price-menu-alert");
+  await expect(alertItem).toContainText(/Add alert on BTCUSDT at [\d\u2009]+\.\d\d/);
+  await expect(alertItem).toContainText(/A$/);
+  await expect(page.getByTestId("price-menu-hline")).toContainText(/Draw horizontal line at [\d\u2009]+\.\d\d/);
+  await expect(page.getByTestId("price-menu-hline")).toContainText(/H$/);
+  await expect(alertItem).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByTestId("price-menu-hline")).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+  await expect(page.getByTestId("replay-button")).toBeFocused();
+  expect(await storedDrawings(page)).toHaveLength(0);
+  await page.mouse.move(cx, y);
+  await nextFrame(page);
+  expect(await page.getByTestId("legend").getAttribute("data-time")).toBe(hovered);
+  await page.keyboard.press("Escape");
+
+  // The alert: at the price of the label, direction cross, as with Alt+A.
+  await page.mouse.move(px, y);
+  await nextFrame(page);
+  await page.mouse.click(px, y);
+  const label = (await alertItem.textContent()) ?? "";
+  await alertItem.click();
+  const [set] = await alertCount(page, 1);
+  expect(set).toMatchObject({ direction: "cross", active: true, kind: { kind: "price" } });
+  const price = (set!.kind as { price: number }).price;
+  expect(label).toContain(`at ${price2(price)}`);
+  await expect(menu).toHaveCount(0);
+
+  // The level: exactly at that price, selected.
+  await page.mouse.move(px, y);
+  await nextFrame(page);
+  await page.mouse.click(px, y);
+  await expect(page.getByTestId("price-menu-hline")).toContainText(`at ${price2(price)}`);
+  await expect(alertItem).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  await expect.poll(async () => (await storedDrawings(page)).length).toBe(1);
+  expect((await storedDrawings(page))[0]!.body).toEqual({ kind: "hline", p: price });
 });

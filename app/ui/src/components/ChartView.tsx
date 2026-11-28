@@ -1,12 +1,14 @@
-import { EyeOff, Lock, LockOpen, Settings2, Trash2 } from "lucide-react";
+import { Bell, ChevronsDown, ChevronsUp, EyeOff, Lock, LockOpen, Settings2, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { Backend, ConnectionState, InstrumentId, TimeframeCode } from "../backend/types";
-import { Chart } from "../chart/chart";
-import { formatDate, formatUtcClock } from "../chart/format";
+import { Chart, type AlertMenuAt, type PriceMenuAt } from "../chart/chart";
+import { formatDate, formatPrice, formatUtcClock } from "../chart/format";
+import { priceMenuEntries } from "../chart/plus";
+import { HorizontalLevelIcon } from "../icons";
 import type { PriceScaleMode } from "../chart/scale";
 import type { ChartTheme } from "../chart/theme";
 import { t, useLanguage } from "../i18n";
-import { bannerText, deleteKeyLabel, enterKeyLabel, sourceName } from "../labels";
+import { altShortcutLabel, bannerText, deleteKeyLabel, enterKeyLabel, sourceName } from "../labels";
 import { ChartSession, type SessionState } from "../state/chartSession";
 import { alertKey } from "../chart/drawings/keys";
 import type { DrawingPatch } from "../chart/drawings/state";
@@ -21,7 +23,7 @@ import { IndicatorSettings } from "./IndicatorSettings";
 import { Legend } from "./Legend";
 import { Menu, type MenuItem } from "./Menu";
 import { NoteEditor } from "./NoteEditor";
-import { ReplayBar } from "./ReplayBar";
+import { REPLAY_KEYS, ReplayBar } from "./ReplayBar";
 import { ReplayStats } from "./ReplayStats";
 import { tfLabel } from "./TimeframePicker";
 
@@ -39,6 +41,9 @@ export interface ChartViewProps {
 }
 
 const NO_VALUES = new Map<string, Map<string, number>>();
+
+/** A menu of the chart itself: the "+" at the crosshair price, or a right click on an alert level; `n` counts the openings. */
+type ChartMenu = ({ kind: "price" } & PriceMenuAt) | ({ kind: "alert" } & AlertMenuAt);
 
 /** Five small bars, one lit, and what is being loaded (Design Reference, States). */
 export function Loading({ symbol, tf, source }: { symbol: string; tf: string; source: string }) {
@@ -64,6 +69,7 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
   const [hover, setHover] = useState<number | null>(null);
   const [hostHeight, setHostHeight] = useState(0);
   const [hostWidth, setHostWidth] = useState(0);
+  const [chartMenu, setChartMenu] = useState<(ChartMenu & { n: number }) | null>(null);
   const [settings, setSettings] = useState<{ instance: string; top: number; bottom: number; left: number } | null>(
     null,
   );
@@ -244,6 +250,21 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
     return () => chart.onAlertClick(null);
   }, [chart, alerts, alertList, replaying]);
 
+  // The "+" at the crosshair price and a right click on an alert level open a menu of the chart.
+  useEffect(() => {
+    if (!chart) return;
+    let n = 0;
+    chart.onPriceMenu((at) => setChartMenu({ kind: "price", ...at, n: ++n }));
+    chart.onAlertMenu((at) => setChartMenu({ kind: "alert", ...at, n: ++n }));
+    return () => {
+      chart.onPriceMenu(null);
+      chart.onAlertMenu(null);
+    };
+  }, [chart]);
+  // Another pair: its menu would act on the old one.
+  useEffect(() => setChartMenu(null), [source, symbol]);
+  const closeChartMenu = useCallback(() => setChartMenu(null), []);
+
   // Alt+A: a price alert at the crosshair price, on the pair the chart shows.
   useEffect(() => {
     if (!chart) return;
@@ -307,6 +328,58 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
           : []),
       ]
     : [];
+
+  let chartItems: MenuItem[] = [];
+  if (chartMenu?.kind === "alert") {
+    const alertId = chartMenu.id;
+    chartItems = [
+      {
+        id: "remove",
+        label: t("alertMenu.remove"),
+        icon: Trash2,
+        shortcut: deleteKeyLabel(),
+        keys: ["Delete", "Backspace"],
+        onSelect: () => {
+          setChartMenu(null);
+          void alerts.state.remove(alertId);
+        },
+      },
+    ];
+  } else if (chartMenu?.kind === "price") {
+    const { instrument, price: at } = chartMenu;
+    const price = formatPrice(at, instrument.priceScale);
+    const pick = (run: () => void) => () => {
+      setChartMenu(null);
+      run();
+    };
+    // A replay's prices are from the past: no alert there, a paper trade at the current close instead.
+    const entries = priceMenuEntries(rp.phase !== "off" ? { finished: rp.finished, hasOpen: rp.view?.open != null } : null);
+    chartItems = entries.map((e): MenuItem => {
+      const off = { disabled: e.disabled, title: e.realTime ? t("replay.realTime.title") : undefined };
+      switch (e.id) {
+        case "alert":
+          return {
+            id: "alert",
+            label: t("priceMenu.alert", { symbol: instrument.id.symbol, price }),
+            icon: Bell,
+            shortcut: altShortcutLabel("A"),
+            onSelect: pick(() => void alerts.state.createPrice(instrument.id, instrument.priceScale, at)),
+          };
+        case "hline":
+          return {
+            id: "hline",
+            label: t("priceMenu.hline", { price }),
+            icon: HorizontalLevelIcon,
+            shortcut: altShortcutLabel("H"),
+            onSelect: pick(() => drawings.state.addLevel(at)),
+          };
+        case "buy":
+          return { id: "buy", label: t("replay.buy"), icon: ChevronsUp, shortcut: REPLAY_KEYS.buy, ...off, onSelect: pick(() => void rp.buy()) };
+        case "sell":
+          return { id: "sell", label: t("replay.sell"), icon: ChevronsDown, shortcut: REPLAY_KEYS.sell, ...off, onSelect: pick(() => void rp.sell()) };
+      }
+    });
+  }
 
   const openSettings = useCallback((instance: string, row: HTMLElement) => {
     const host = hostRef.current;
@@ -456,6 +529,19 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
             width={hostWidth}
             height={hostHeight}
             onClose={closeMenu}
+          />
+        )}
+        {chartMenu && chartItems.length > 0 && (
+          <Menu
+            key={chartMenu.n}
+            items={chartItems}
+            label={t(chartMenu.kind === "price" ? "priceMenu.label" : "alertMenu.label")}
+            testId={chartMenu.kind === "price" ? "price-menu" : "alert-menu"}
+            x={chartMenu.x}
+            y={chartMenu.y}
+            width={hostWidth}
+            height={hostHeight}
+            onClose={closeChartMenu}
           />
         )}
         {loading && <Loading symbol={symbol} tf={tfLabel(tf)} source={sourceLabel} />}

@@ -20,6 +20,7 @@ interface Debug {
   replayClosed: number;
   outcomes: Record<string, string>;
   drawingsPainted: number;
+  plusButton: { x: number; y: number } | null;
 }
 
 /** Little mock latency, so stepping through a few hundred bars stays quick. */
@@ -579,4 +580,52 @@ test("replay_results_sit_under_the_bar_collapse_and_scroll", async ({ page }) =>
   await expect(panel).toHaveAttribute("data-collapsed", "true");
   await page.getByTestId("replay-results-toggle").click();
   await expect(page.getByTestId("replay-trades")).toBeVisible();
+});
+
+test("replay_plus_menu_buys_sells_and_draws_but_sets_no_alert", async ({ page }) => {
+  const plot = await openChart(page);
+  await startAt(page, plot, plot.width - 100);
+  const plusAt = async (y: number) => {
+    await page.mouse.move(plot.left + plot.width / 2, y);
+    await nextFrame(page);
+    const b = (await debug(page)).plusButton!;
+    await page.mouse.move(plot.left + b.x, plot.top + b.y);
+    await nextFrame(page);
+    await page.mouse.click(plot.left + b.x, plot.top + b.y);
+    await expect(page.getByTestId("price-menu")).toBeVisible();
+  };
+  const y = Math.round(plot.top + plot.height * 0.45);
+  await plusAt(y);
+  await expect(page.getByTestId("price-menu-alert")).toHaveCount(0);
+  const buy = page.getByTestId("price-menu-buy");
+  const sell = page.getByTestId("price-menu-sell");
+  await expect(buy).toContainText(/Buy\s*⇧B/);
+  await expect(sell).toContainText(/Sell\s*⇧S/);
+  await expect(page.getByTestId("price-menu-hline")).toContainText("Draw horizontal line at");
+  await buy.click();
+  await expect(page.getByTestId("price-menu")).toHaveCount(0);
+  await expect(stat(page, "open-r")).not.toHaveText("—");
+
+  // One trade at a time: Buy and Sell are off while it is open, as in the replay bar.
+  await plusAt(y);
+  await expect(buy).toBeDisabled();
+  await expect(sell).toBeDisabled();
+  await page.getByTestId("price-menu-hline").click();
+  await expect
+    .poll(async () => page.evaluate(() => JSON.parse(localStorage.getItem("sandchart.mock.drawings") ?? "[]").length))
+    .toBe(1);
+
+  // Caught up with real time: off with the reason.
+  await page.getByTestId("replay-close").click();
+  await page.getByTestId("replay-jump").click();
+  await expect(page.getByTestId("replay-bar")).toHaveAttribute("data-finished", "true");
+  await plusAt(Math.round(plot.top + plot.height * 0.3));
+  await expect(buy).toBeDisabled();
+  await expect(sell).toBeDisabled();
+  await expect(buy).toHaveAttribute("title", /backtest is finished/);
+  await expect(page.getByTestId("price-menu-alert")).toHaveCount(0);
+  // Focus skips the items that are off.
+  await expect(page.getByTestId("price-menu-hline")).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("price-menu")).toHaveCount(0);
 });
