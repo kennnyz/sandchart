@@ -26,7 +26,7 @@ The chart then shows the bars up to the one you picked, with up to 500 bars of c
 
 Only bars already in the local cache can be replayed. A pair you just opened has its newest 1000 bars cached; older ones are cached as you scroll back to them.
 
-No bar after the current one ever reaches the screen. The price scale, the crosshair, the indicators and the outcomes of your position drawings all see only the revealed bars: an SMA ends at the current bar, and a position drawn earlier shows as open until a revealed bar decides it.
+No bar after the current one ever reaches the screen. The price scale, the crosshair, the indicators and the outcomes of your position drawings all see only the revealed bars: an SMA ends at the current bar, and a position drawn earlier shows as open until a revealed bar decides it. A drawing whose first point is after the current bar is hidden (neither drawn nor clickable) until a step reveals that bar; a horizontal line, which has no time, always shows.
 
 ## Controls
 

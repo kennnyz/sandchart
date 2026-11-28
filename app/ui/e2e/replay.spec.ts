@@ -19,6 +19,7 @@ interface Debug {
   replayHandles: { stop: { x: number; y: number }; take: { x: number; y: number } } | null;
   replayClosed: number;
   outcomes: Record<string, string>;
+  drawingsPainted: number;
 }
 
 /** Little mock latency, so stepping through a few hundred bars stays quick. */
@@ -266,4 +267,41 @@ test("replay_mouse_move_redraws_only_the_overlay", async ({ page }) => {
   const after = await debug(page);
   expect(after.baseDraws).toBe(before.baseDraws);
   expect(after.overlayDraws).toBeGreaterThanOrEqual(before.overlayDraws + 20);
+});
+
+test("replay_hides_drawings_anchored_after_the_revealed_bars", async ({ page }) => {
+  await openChart(page);
+  const live = await lastBar(page);
+  const at = live - 30 * H;
+  await page.evaluate((t) => {
+    const d = {
+      id: "later",
+      instrument: { source: "mock", symbol: "BTCUSDT" },
+      priceScale: 2,
+      body: { kind: "note", t, text: "later" },
+      style: { color: 0, width: 1, dash: false },
+      locked: false,
+      z: 0,
+      updatedAt: 1,
+    };
+    localStorage.setItem("sandchart.mock.drawings", JSON.stringify([d]));
+  }, at);
+  await page.reload();
+  await expect(page.getByTestId("legend")).toHaveAttribute("data-time", /^\d+$/);
+  await expect.poll(async () => (await debug(page)).drawingsPainted).toBe(1);
+
+  // A day or two before the note: step up to the bar just before it, which leaves the note's
+  // bar inside the room right of the cut, where it would be painted.
+  await page.getByTestId("replay-button").click();
+  const dayStart = Math.floor((at - 24 * H) / (24 * H)) * 24 * H;
+  await page.getByTestId("replay-date").fill(new Date(dayStart).toISOString().slice(0, 10));
+  await expect.poll(() => lastBar(page)).toBe(dayStart);
+  await stepUntil(page, async () => (await lastBar(page)) === at - H);
+  await expect.poll(async () => (await debug(page)).drawingsPainted).toBe(0);
+  await page.keyboard.press("ArrowRight");
+  await expect.poll(() => lastBar(page)).toBe(at);
+  await expect.poll(async () => (await debug(page)).drawingsPainted).toBe(1);
+  await page.getByTestId("replay-exit").click();
+  await expect.poll(() => lastBar(page)).toBe(live);
+  await expect.poll(async () => (await debug(page)).drawingsPainted).toBe(1);
 });

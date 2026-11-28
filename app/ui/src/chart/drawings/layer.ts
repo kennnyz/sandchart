@@ -18,6 +18,32 @@ const HALO_ALPHA = 0.25;
 const DASH = [6, 4];
 const NO_DASH: number[] = [];
 
+const earliest = new WeakMap<DrawingBody, number>();
+
+/**
+ * The earliest anchor time of a drawing: every `t` in its body (anchors, a point list, a note),
+ * found without per-tool code; -Infinity for one without a time (a horizontal line). Kept per
+ * body object, since hit-testing asks on every pointer move.
+ */
+export function earliestTime(body: DrawingBody): number {
+  const hit = earliest.get(body);
+  if (hit !== undefined) return hit;
+  let lo = Infinity;
+  const visit = (v: unknown): void => {
+    if (Array.isArray(v)) for (const x of v) visit(x);
+    else if (typeof v === "object" && v !== null) {
+      for (const [k, x] of Object.entries(v)) {
+        if (k === "t" && typeof x === "number") lo = Math.min(lo, x);
+        else visit(x);
+      }
+    }
+  };
+  visit(body);
+  const t = lo === Infinity ? -Infinity : lo;
+  earliest.set(body, t);
+  return t;
+}
+
 /**
  * `ruler` arms the ruler for the next drag, whatever the tool (pressed again, disarms it);
  * `edit` opens the text editor of the selected drawing when it holds text, else its style popover.
@@ -119,6 +145,8 @@ export class DrawingLayer {
   private styleEdit: { id: string; at: Point } | null = null;
   /** Hide all: nothing is painted or hit; the drawings themselves are unchanged. */
   private hiddenAll = false;
+  /** In a replay, the open time of the last revealed bar: a drawing anchored only later is not shown. */
+  private cutoff: number | null = null;
 
   constructor(private readonly host: LayerHost) {
     this.state = new DrawingState({
@@ -241,6 +269,25 @@ export class DrawingLayer {
       this.state.setTool(null);
       this.state.select(null);
       this.state.hover = null;
+    }
+    this.host.invalidate();
+  }
+
+  /**
+   * While a replay is on: the open time of its last revealed bar. A drawing whose earliest anchor
+   * is after it would give a later bar away, so it is neither painted nor hit until a step reveals
+   * that bar (null: every drawing). Drops the selection of a drawing it hides.
+   */
+  setCutoff(t: number | null): void {
+    if (t === this.cutoff) return;
+    this.cutoff = t;
+    const sel = this.state.selected;
+    const d = sel === null ? undefined : this.state.byId(sel);
+    if (d && t !== null && earliestTime(d.body) > t) {
+      this.abort();
+      this.closeText();
+      this.closeStyle();
+      this.state.select(null);
     }
     this.host.invalidate();
   }
@@ -625,6 +672,7 @@ export class DrawingLayer {
   /** The tool of a drawing that is shown and inside the visible times. */
   private visibleTool(d: Drawing): ToolDef | undefined {
     if (this.hiddenAll) return undefined;
+    if (this.cutoff !== null && earliestTime(d.body) > this.cutoff) return undefined;
     const tool = toolFor(d.body.kind);
     if (!tool) return undefined;
     const [lo, hi] = tool.timeSpan(d.body);

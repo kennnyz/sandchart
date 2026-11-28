@@ -190,3 +190,62 @@ describe("geometry cache", () => {
     expect(f.note).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("replay cutoff", () => {
+  it("neither paints nor hits a drawing whose earliest anchor is after the cutoff", () => {
+    const l = layer();
+    const c = coords();
+    const at = (i: number) => i * STEP;
+    const past = drawing({ kind: "note", t: at(40), text: "past" }, "past");
+    const later = drawing({ kind: "note", t: at(60), text: "later" }, "later");
+    // Starts before the cut and reaches past it: its first anchor is revealed, so it shows.
+    const across = drawing(
+      { kind: "trend", a: { t: at(70), p: 5_500 }, b: { t: at(45), p: 4_500 }, extendLeft: true, extendRight: false },
+      "across",
+    );
+    // Both anchors later, though it extends to the left: hidden.
+    const ahead = drawing(
+      { kind: "trend", a: { t: at(80), p: 4_200 }, b: { t: at(90), p: 4_200 }, extendLeft: true, extendRight: false },
+      "ahead",
+    );
+    const position = drawing({ kind: "position", side: "long", entry: { t: at(55), p: 5_000 }, stop: 4_000, take: 7_000, endT: at(70) }, "pos");
+    const level = drawing({ kind: "hline", p: 3_000 }, "level");
+    l.setDrawings([past, later, across, ahead, position, level]);
+    const note = toolFor("note")!;
+    const where = (d: Drawing) => note.layout(d.body, c) as { x: number; y: number };
+    const painted = () => {
+      const spies = (["note", "trend", "position", "hline"] as const).map((k) => vi.spyOn(toolFor(k)!, "paint"));
+      l.paintBase(ctx, c, 1, dark, () => {});
+      const n = spies.reduce((a, s) => a + s.mock.calls.length, 0);
+      spies.forEach((s) => s.mockRestore());
+      return n;
+    };
+    expect(painted()).toBe(6);
+
+    l.setCutoff(at(50));
+    expect(painted()).toBe(3);
+    const p = where(past);
+    expect(l.pointerDown(p.x, p.y, false)).toBe(true);
+    l.pointerUp(p.x, p.y, false);
+    expect(l.state.selected).toBe("past");
+    const q = where(later);
+    l.state.select(null);
+    expect(l.pointerDown(q.x, q.y, false)).toBe(false);
+    l.pointerUp(q.x, q.y, false);
+    expect(l.state.selected).toBeNull();
+
+    // A step reveals the bar of the later note and the position's entry.
+    l.setCutoff(at(60));
+    expect(painted()).toBe(5);
+    l.setCutoff(null);
+    expect(painted()).toBe(6);
+  });
+
+  it("drops the selection of a drawing the cutoff hides", () => {
+    const l = layer();
+    l.setDrawings([drawing({ kind: "note", t: 60 * STEP, text: "later" }, "later")]);
+    l.state.select("later");
+    l.setCutoff(50 * STEP);
+    expect(l.state.selected).toBeNull();
+  });
+});
