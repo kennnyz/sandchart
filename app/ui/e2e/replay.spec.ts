@@ -305,3 +305,19 @@ test("replay_hides_drawings_anchored_after_the_revealed_bars", async ({ page }) 
   await expect.poll(() => lastBar(page)).toBe(live);
   await expect.poll(async () => (await debug(page)).drawingsPainted).toBe(1);
 });
+
+test("replay_hides_the_replayed_pair_quote_in_the_watchlist", async ({ page }) => {
+  const plot = await openChart(page);
+  const row = (s: string) => page.locator(`[data-testid="watchlist-row"][data-symbol="${s}"]`);
+  await expect(row("BTCUSDT")).toContainText("+1.84%");
+  const ethBefore = await row("ETHUSDT").textContent();
+  await startAt(page, plot, plot.width * 0.5);
+  // The live price and 24h change would tell where the replay goes: a dash and a marker instead.
+  await expect(row("BTCUSDT").locator(".wl-last")).toHaveText("—");
+  await expect(row("BTCUSDT").locator(".wl-chg")).toHaveText("Replay");
+  await expect(row("BTCUSDT")).not.toContainText("%");
+  // Other pairs keep their quotes.
+  await expect(row("ETHUSDT")).toHaveText(ethBefore!);
+  await page.getByTestId("replay-exit").click();
+  await expect(row("BTCUSDT")).toContainText("+1.84%");
+});

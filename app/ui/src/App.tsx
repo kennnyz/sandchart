@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { backend, firstUpdateCheckMs } from "./backend";
 import type { ConnectionState, Instrument, InstrumentId, TimeframeCode } from "./backend/types";
 import { dark, light } from "./chart/theme";
@@ -63,6 +63,12 @@ export function App() {
   const [updates] = useState(() => updateStore(backend));
   const [replay] = useState(() => replayStore(backend));
   const replayPhase = useSyncExternalStore(replay.subscribe, () => replay.state.phase);
+  // The replayed pair as a stable key: the watchlist hides its live quote.
+  const replayingKey = useSyncExternalStore(replay.subscribe, () => {
+    const v = replay.state.phase === "on" ? replay.state.view : null;
+    return v ? JSON.stringify(v.instrument.id) : null;
+  });
+  const replaying = useMemo(() => (replayingKey ? (JSON.parse(replayingKey) as InstrumentId) : null), [replayingKey]);
 
   // An opened replay file shows its own instrument and timeframe.
   useEffect(() => {
@@ -250,6 +256,7 @@ export function App() {
           ids={watchlist}
           savedVersion={savedVersion}
           current={current}
+          replaying={replaying}
           onOpen={setCurrent}
           onChange={saveWatchlist}
           onAdd={() => setSearchMode("add")}

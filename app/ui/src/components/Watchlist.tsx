@@ -15,6 +15,8 @@ export interface WatchlistProps {
   /** Bumped after the list was saved, so the quotes are fetched for the new list. */
   savedVersion: number;
   current: InstrumentId | null;
+  /** The pair a replay is on: its live quote would give the replay's future away, so it is hidden. */
+  replaying: InstrumentId | null;
   onOpen: (id: InstrumentId) => void;
   onChange: (ids: InstrumentId[]) => void;
   onAdd: () => void;
@@ -27,7 +29,7 @@ const keyOf = (id: InstrumentId) => `${id.source}/${id.symbol}`;
 type Drag = { pointerId: number; from: number; to: number; startY: number; moved: boolean };
 
 /** Pairs with their last price and 24 h change; click opens, drag reorders, × removes. */
-export function Watchlist({ backend, ids, savedVersion, current, onOpen, onChange, onAdd, onHide }: WatchlistProps) {
+export function Watchlist({ backend, ids, savedVersion, current, replaying, onOpen, onChange, onAdd, onHide }: WatchlistProps) {
   const [quotes, setQuotes] = useState<Map<string, DayChange>>(new Map());
   const [scales, setScales] = useState<Map<string, number>>(new Map());
   const [drag, setDrag] = useState<Drag | null>(null);
@@ -143,7 +145,8 @@ export function Watchlist({ backend, ids, savedVersion, current, onOpen, onChang
         )}
         {shown.map((id) => {
           const key = keyOf(id);
-          const q = quotes.get(key);
+          const hidden = replaying !== null && keyOf(replaying) === key;
+          const q = hidden ? undefined : quotes.get(key);
           const scale = scales.get(key);
           const index = ids.findIndex((x) => keyOf(x) === key);
           const dragging = drag?.moved === true && drag.from === index;
@@ -163,7 +166,7 @@ export function Watchlist({ backend, ids, savedVersion, current, onOpen, onChang
               <span className="wl-sym">{id.symbol}</span>
               <span className="wl-last">{q && scale !== undefined ? formatPrice(q.last, scale) : "—"}</span>
               <span className={`wl-chg ${q && q.changeBp < 0 ? "down" : q && q.changeBp > 0 ? "up" : ""}`}>
-                {q ? formatBp(q.changeBp) : ""}
+                {hidden ? t("replay.marker") : q ? formatBp(q.changeBp) : ""}
               </span>
               <button
                 className="wl-remove"
