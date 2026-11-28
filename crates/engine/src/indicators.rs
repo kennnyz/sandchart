@@ -21,7 +21,7 @@ use sandchart_store::{Store, StoreError, StoredInstance, StoredModule};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
-use crate::{Engine, EngineError, Shared, lock};
+use crate::{Engine, EngineError, Shared, lock, spawn_blocking};
 
 /// The compute window: at most this many of the newest cached bars.
 pub const MAX_INDICATOR_BARS: usize = 100_000;
@@ -760,14 +760,19 @@ impl Engine {
             Ok((s.indicator_instances()?, s.instrument(&key)?))
         })
         .await?;
-        let replayed = self.shared.with_replay_bars(id, tf, |inst, candles| {
-            let newest = &candles[candles.len().saturating_sub(MAX_INDICATOR_BARS)..];
-            Arc::new(to_bars(newest, inst))
-        });
-        let (bars, generation) = match replayed {
+        let (bars, generation) = match self.shared.replay_bars(id, tf) {
             // A replay computes over its revealed bars only, never the cache; a fresh
-            // generation keeps its results apart from the cache's in the memo.
-            Some(bars) => (bars, self.shared.bar_state().next_generation()),
+            // generation keeps its results apart from the cache's in the memo. The bars
+            // are converted off the replay lock and off the async threads.
+            Some(r) => {
+                let bars = spawn_blocking(move || {
+                    let candles = r.revealed();
+                    let newest = &candles[candles.len().saturating_sub(MAX_INDICATOR_BARS)..];
+                    Ok(Arc::new(to_bars(newest, &r.instrument)))
+                })
+                .await?;
+                (bars, self.shared.bar_state().next_generation())
+            }
             None => {
                 let inst = inst.ok_or_else(|| EngineError::UnknownInstrument(id.clone()))?;
                 let shared = self.shared.clone();
@@ -877,16 +882,6 @@ fn compute_one(
         series: cut(output.series, start),
         log: output.log,
     })
-}
-
-async fn spawn_blocking<T, F>(f: F) -> Result<T, EngineError>
-where
-    T: Send + 'static,
-    F: FnOnce() -> Result<T, EngineError> + Send + 'static,
-{
-    tokio::task::spawn_blocking(f)
-        .await
-        .map_err(|e| EngineError::Task(e.to_string()))?
 }
 
 #[cfg(test)]

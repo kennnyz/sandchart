@@ -1,7 +1,7 @@
 //! The replay session: one at a time, over cached candles held in memory. Only bars up to
 //! the current one ever leave the engine (ADR 0005).
 
-use std::sync::{MutexGuard, PoisonError};
+use std::sync::{Arc, MutexGuard, PoisonError};
 
 use sandchart_core::replay::{
     Command, ExitReason, MAX_CANDLES, ReplayFile, Simulation, Stats, Trade, check_candles, simulate,
@@ -16,8 +16,9 @@ pub const REPLAY_CONTEXT: usize = 500;
 pub(crate) struct Session {
     instrument: Instrument,
     tf: Timeframe,
-    /// Context, then every bar from the start to the newest cached one.
-    candles: Vec<Candle>,
+    /// Context, then every bar from the start to the newest cached one. Shared, so readers
+    /// take it out of the lock (`replay_bars`) instead of working under it.
+    candles: Arc<[Candle]>,
     start: u32,
     current: u32,
     commands: Vec<Command>,
@@ -43,6 +44,20 @@ pub struct ReplayState {
     pub trades_from: u32,
     pub trades: Vec<Trade>,
     pub stats: Stats,
+}
+
+/// A snapshot of the open replay's bars, taken by [`crate::Shared::replay_bars`].
+pub(crate) struct ReplayBars {
+    pub instrument: Instrument,
+    candles: Arc<[Candle]>,
+    /// How many bars are revealed.
+    len: usize,
+}
+
+impl ReplayBars {
+    pub fn revealed(&self) -> &[Candle] {
+        &self.candles[..self.len]
+    }
 }
 
 fn no_session() -> EngineError {
@@ -88,21 +103,21 @@ impl crate::Shared {
         self.replay.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Runs `f` over the instrument and the revealed bars (up to the current one) of the
-    /// open replay, if it replays `(id, tf)`. Indicators and position outcomes read these
-    /// instead of the cache, so they never see a bar the UI has not been shown (ADR 0005,
-    /// decision 5).
-    pub(crate) fn with_replay_bars<R>(
-        &self,
-        id: &InstrumentId,
-        tf: Timeframe,
-        f: impl FnOnce(&Instrument, &[Candle]) -> R,
-    ) -> Option<R> {
+    /// The instrument and the revealed bars (up to the current one) of the open replay, if
+    /// it replays `(id, tf)`. Indicators and position outcomes read these instead of the
+    /// cache, so they never see a bar the UI has not been shown (ADR 0005, decision 5).
+    /// Only an `Arc` is cloned under the lock; the work on the bars runs without it, so a
+    /// step never waits for it.
+    pub(crate) fn replay_bars(&self, id: &InstrumentId, tf: Timeframe) -> Option<ReplayBars> {
         let guard = self.session();
         let s = guard
             .as_ref()
             .filter(|s| s.instrument.id == *id && s.tf == tf)?;
-        Some(f(&s.instrument, &s.candles[..=s.current as usize]))
+        Some(ReplayBars {
+            instrument: s.instrument.clone(),
+            candles: Arc::clone(&s.candles),
+            len: s.current as usize + 1,
+        })
     }
 
     /// Live events of this instrument are held back while it is replayed.
@@ -155,7 +170,7 @@ impl Engine {
         let mut session = Session {
             instrument,
             tf,
-            candles,
+            candles: candles.into(),
             start,
             current: start,
             commands: Vec::new(),
@@ -242,7 +257,7 @@ impl Engine {
         let mut session = Session {
             instrument: file.instrument,
             tf: file.timeframe,
-            candles: file.candles,
+            candles: file.candles.into(),
             start: file.start,
             current: file.current,
             commands: file.commands,

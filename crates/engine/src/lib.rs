@@ -118,6 +118,17 @@ where
         .map_err(EngineError::from)
 }
 
+/// Runs CPU-heavy work on the blocking pool, off the async runtime's threads.
+pub(crate) async fn spawn_blocking<T, F>(f: F) -> Result<T, EngineError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, EngineError> + Send + 'static,
+{
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| EngineError::Task(e.to_string()))?
+}
+
 impl Shared {
     /// Applies `f` to the inputs and publishes the derived state if it changed.
     fn update(&self, f: impl FnOnce(&mut ConnectionInputs)) {

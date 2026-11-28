@@ -4,7 +4,7 @@ use sandchart_core::drawing::{validate, validate_id};
 use sandchart_core::{Drawing, InstrumentId, Outcome, PositionBody, Timeframe};
 use sandchart_store::MAX_DRAWINGS_PER_INSTRUMENT;
 
-use crate::{Engine, EngineError, blocking};
+use crate::{Engine, EngineError, blocking, spawn_blocking};
 
 impl Engine {
     /// The drawings of an instrument in paint order, in the instrument's current price
@@ -85,20 +85,19 @@ impl Engine {
                 .map_err(|e| EngineError::Drawing(format!("position {drawing_id}: {e}")))?;
         }
         // In a replay only the revealed bars count, so no outcome gives a later bar away.
-        let replayed = self.shared.with_replay_bars(id, tf, |_, bars| {
-            positions
-                .iter()
-                .map(|(drawing_id, p)| {
-                    let start = bars.partition_point(|c| c.open_time <= p.entry.t);
-                    (
-                        drawing_id.clone(),
-                        p.resolve_iter(bars[start..].iter().copied()),
-                    )
-                })
-                .collect::<Vec<_>>()
-        });
-        if let Some(outcomes) = replayed {
-            return Ok(outcomes);
+        // They are resolved off the replay lock and off the async threads.
+        if let Some(r) = self.shared.replay_bars(id, tf) {
+            return spawn_blocking(move || {
+                let bars = r.revealed();
+                Ok(positions
+                    .into_iter()
+                    .map(|(drawing_id, p)| {
+                        let start = bars.partition_point(|c| c.open_time <= p.entry.t);
+                        (drawing_id, p.resolve_iter(bars[start..].iter().copied()))
+                    })
+                    .collect())
+            })
+            .await;
         }
         let id = id.clone();
         blocking(&self.shared.store, move |s| {
