@@ -60,6 +60,9 @@ pub(crate) struct Session {
     caught_up_at: Option<i64>,
     /// Why the last load of newer candles failed; the next step tries again.
     newer_error: Option<String>,
+    /// Bumped by every change a re-base must not overwrite: a step, a command, newer
+    /// candles, catching up. A re-base swaps its candles in only if it is unchanged.
+    version: u64,
 }
 
 /// What the UI gets for one chart timeframe `tf` (the base or one that builds from it):
@@ -303,6 +306,7 @@ impl Session {
         }
         if changed {
             self.sim = None;
+            self.version += 1;
         }
     }
 }
@@ -353,6 +357,7 @@ impl Shared {
 /// What a re-base works from, copied out of the lock.
 struct Snapshot {
     id: u64,
+    version: u64,
     instrument: Instrument,
     base: Timeframe,
     candles: Arc<Vec<Candle>>,
@@ -416,6 +421,7 @@ impl Engine {
             sim: None,
             caught_up_at: None,
             newer_error: None,
+            version: 0,
         };
         *self.shared.session() = Some(session);
         self.load_newer().await;
@@ -443,6 +449,7 @@ impl Engine {
             if next > shown {
                 s.cut = s.base.close_time(s.candles[next - 1].open_time);
                 s.sim = None;
+                s.version += 1;
             }
             Ok(s.cut)
         })?;
@@ -479,6 +486,7 @@ impl Engine {
             Ok(newer) if newer.is_empty() => {
                 s.caught_up_at = Some(s.cut);
                 s.sim = None;
+                s.version += 1;
                 s.newer_error = None;
             }
             Ok(newer) => {
@@ -552,6 +560,7 @@ impl Engine {
         let snap = self.with_session(|s| {
             Ok(Snapshot {
                 id: s.id,
+                version: s.version,
                 instrument: s.instrument.clone(),
                 base: s.base,
                 candles: Arc::clone(&s.candles),
@@ -590,9 +599,15 @@ impl Engine {
         })?;
         {
             let mut guard = self.shared.session();
-            let s = guard.as_mut().filter(|s| s.id == snap.id).ok_or_else(|| {
-                EngineError::Replay("the replay changed while it was re-based".into())
-            })?;
+            let s = guard
+                .as_mut()
+                .filter(|s| s.id == snap.id && s.version == snap.version)
+                .ok_or_else(|| {
+                    EngineError::Replay(
+                        "the replay changed while it was re-based; change the update interval again"
+                            .into(),
+                    )
+                })?;
             s.id = next_session_id();
             s.base = base;
             s.candles = Arc::new(candles);
@@ -734,6 +749,7 @@ impl Engine {
             let sim = s.simulate(&next)?;
             s.commands = next;
             s.sim = Some(sim);
+            s.version += 1;
             Ok(())
         })
     }
@@ -807,6 +823,7 @@ impl Engine {
             live: false,
             caught_up_at: file.caught_up_at,
             newer_error: None,
+            version: 0,
         };
         // The whole state is built and checked before the open session is replaced, so a
         // file the UI could not show leaves the session as it was.

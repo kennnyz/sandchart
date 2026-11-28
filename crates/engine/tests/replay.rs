@@ -654,6 +654,8 @@ struct FakeProvider {
     streams: Mutex<Vec<(Timeframe, mpsc::UnboundedSender<LiveItem>)>>,
     /// History requests fail while set.
     down: AtomicBool,
+    /// History requests wait while a test holds this.
+    hold: tokio::sync::Mutex<()>,
 }
 
 impl FakeProvider {
@@ -701,6 +703,7 @@ impl Provider for FakeProvider {
         limit: u16,
     ) -> Result<Vec<Candle>, ProviderError> {
         self.history_calls.lock().unwrap().push((tf, end_before));
+        drop(self.hold.lock().await);
         if self.down.load(Ordering::Relaxed) {
             return Err(ProviderError::Network("connection refused".into()));
         }
@@ -1081,4 +1084,51 @@ async fn a_lower_re_base_measures_the_limit_from_the_start_to_the_cut() {
         msg,
         "a replay holds at most 200000 candles: at 1m that is 138 days from its start to its cut, and this one spans 141 days; replay at a higher step or start later"
     );
+}
+
+#[tokio::test]
+async fn a_step_or_a_command_during_a_re_base_makes_the_re_base_fail_and_both_stay() {
+    let f = live_engine(T0 + BARS * H);
+    f.provider
+        .set(Timeframe::M15, (0..BARS).flat_map(quarters).collect());
+    let st = f
+        .engine
+        .replay_start(&id(), TF, T0 + 550 * H)
+        .await
+        .unwrap();
+    // The quarters are on their way while the user steps.
+    let held = f.provider.hold.lock().await;
+    let (rebased, stepped) = tokio::join!(f.engine.replay_set_base(Timeframe::M15), async {
+        let cut = f.engine.replay_step(1).await;
+        drop(held);
+        cut
+    });
+    assert_eq!(stepped.unwrap(), st.cut + H);
+    assert_eq!(
+        replay_err(rebased),
+        "the replay changed while it was re-based; change the update interval again"
+    );
+    let now = f.engine.replay_state(TF, 0, 0).unwrap();
+    assert_eq!((now.base, now.cut), (TF, st.cut + H));
+
+    // The same for a trade given meanwhile: it stays, on the old base.
+    let held = f.provider.hold.lock().await;
+    let open = Command::Open {
+        time: now.cut,
+        side: Side::Long,
+        stop: 10_400,
+        take: 10_700,
+    };
+    let (rebased, given) = tokio::join!(f.engine.replay_set_base(Timeframe::M15), async {
+        let r = f.engine.replay_command(open);
+        drop(held);
+        r
+    });
+    given.unwrap();
+    assert!(replay_err(rebased).starts_with("the replay changed while it was re-based"));
+    let now = f.engine.replay_state(TF, 0, 0).unwrap();
+    assert_eq!((now.base, now.trades.len()), (TF, 1));
+    // Nothing in between: the re-base goes through and keeps the trade.
+    let st = f.engine.replay_set_base(Timeframe::M15).await.unwrap();
+    assert_eq!((st.base, st.trades.len()), (Timeframe::M15, 1));
 }
