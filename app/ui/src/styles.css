@@ -1564,6 +1564,7 @@ button:disabled {
 }
 .ctx-menu-label {
   flex: 1;
+  white-space: nowrap;
 }
 .ctx-menu-key {
   font: inherit;
