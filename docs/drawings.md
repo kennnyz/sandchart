@@ -88,7 +88,7 @@ Tab moves between the controls and stays inside the popover; Esc or a click outs
 
 **The magnet** (Alt+M, or the magnet button) snaps every placed or dragged point to the open, high, low or close of the nearest bar, within 8 px. The magnet setting is remembered between sessions.
 
-**⌘ (Ctrl)** held while you place a point or drag a handle snaps it to the bar under the pointer, magnet on or off: to the nearest of its open, high, low and close (a body end or a wick end), from anywhere between its high and low and up to 40 px above or below them. Keep ⌘ held while you drag and the point jumps from bar to bar. ⌘ on a handle snaps it, also on a drawing that is not selected yet. ⌘ on empty space starts a [selection box](#selecting-several) instead; ⌘ on a drawing's body adds it to the selection.
+**⌘ (Ctrl)** held while you place a point or drag a handle snaps it to the bar under the pointer, magnet on or off: to the nearest of its open, high, low and close (a body end or a wick end), from anywhere between its high and low and up to 40 px above or below them. Keep ⌘ held while you drag and the point jumps from bar to bar. With a tool picked, a small ring shows the price the next point snaps to as soon as ⌘ goes down, before you click (for the first point too) and while you place the next ones; it goes away when you let go of ⌘. You can press ⌘ before or after moving the mouse. ⌘ on a handle snaps it, also on a drawing that is not selected yet. ⌘ on empty space starts a [selection box](#selecting-several) instead; ⌘ on a drawing's body adds it to the selection.
 
 **The ruler** measures from where you press to where you release: the price change, the change in percent, the number of bars and the time. Start it with Shift+drag on empty space, or press Alt+R or the ruler button on the tools rail and then drag (with any tool picked). It is not saved; the next press or Esc puts it away.
 
@@ -106,7 +106,7 @@ The eye button at the bottom of the tools rail opens a menu:
 | Alt+T, H, B, F, L, S, P, N | Pick the trend line, horizontal line, rectangle, Fibonacci, long, short, brush or note tool (press again to put it down) |
 | Alt+R | Arm the ruler for the next drag |
 | Alt+M | Magnet on or off |
-| ⌘ / Ctrl held | Snap the point to the bar under the pointer while placing or dragging a handle |
+| ⌘ / Ctrl held | Snap the point to the bar under the pointer while placing or dragging a handle; with a tool picked, a ring shows where |
 | ⌘-drag / Ctrl-drag on empty space | Selection box |
 | ⌘-click / Ctrl-click | Add a drawing to the selection or take it out |
 | Right click | Context menu of the drawing or the selection |

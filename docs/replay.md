@@ -4,6 +4,8 @@ Replay walks through history bar by bar, as if it were live: you see a bar, deci
 
 - [Start a replay](#start-a-replay)
 - [Controls](#controls)
+- [Update interval and timeframes](#update-interval-and-timeframes)
+- [Catching up](#catching-up)
 - [Shortcuts](#shortcuts)
 - [Trades](#trades)
 - [Fills and R](#fills-and-r)
@@ -15,12 +17,12 @@ Replay walks through history bar by bar, as if it were live: you see a bar, deci
 ## Start a replay
 
 1. Open the pair and timeframe you want to practise on.
-2. Click **Replay** in the top bar. A strip under the chart says what to do next.
+2. Click **Replay** in the top bar. A bar under the chart says what to do next.
 3. Pick the first bar:
    - **click a bar** on the chart: a line marks the bar under the mouse and dims everything after it; or
    - **pick a date**: the replay starts at the first bar of that day (UTC). The date can be anywhere in the history the chart has loaded; scroll left first to load older bars.
 
-   Esc or **Cancel** puts it away without starting.
+   Esc or the **X** at the right end puts it away without starting.
 
 The chart then shows the bars up to the one you picked, with up to 500 bars of context before it, and nothing after it. A dashed line labelled **Replay** marks where the revealed bars end. Live updates for the pair stop while the replay is open, until it catches up with them (see [Catching up](#catching-up)).
 
@@ -30,34 +32,50 @@ No bar after the current one ever reaches the screen. The price scale, the cross
 
 ## Controls
 
-The controls bar is under the chart:
+The replay bar sits centred under the chart, with the results under it:
 
 | Control | What it does |
 | --- | --- |
-| Step | Reveals the next bar. |
-| Play / Pause | Reveals bars one after another at the chosen speed. |
-| 1× 2× 5× 10× | Speed of Play, in bars per second. |
-| Buy | Opens a long at the close of the current bar. |
-| Sell | Opens a short at the close of the current bar. |
-| Close trade | Closes the open trade at the close of the current bar. |
+| Select bar ▾ | Start again from another bar: **Pick a bar on the chart** or **Pick a date**. With trades in this replay it asks first, since a new start drops them (save the replay to keep them). The live chart comes back to pick on. |
+| Play / Pause | Reveals one step after another at the chosen speed. |
+| Step | Reveals the next step. |
+| 1x 2x 3x 5x 10x | Speed of Play, in steps per second. |
+| Update interval ▾ | The step: how much each Step reveals (see below). |
+| Jump to real time | Steps to the newest closed bar at once; the replay then has caught up (see below). |
+| Buy | Opens a long at the close of the current step. |
+| Sell | Opens a short at the close of the current step. |
+| Close trade | Closes the open trade at the close of the current step. |
 | Save | Saves the session as a `.replay` file. |
 | Open | Opens a `.replay` file. |
-| Exit replay | Ends the replay and goes back to the live chart. |
+| X | Ends the replay and goes back to the live chart. |
 
-Play stops by itself at the newest bar ("End of data"), when an action fails, and when the window is hidden or minimised. There is no step back: to try again, start a new replay at the same bar.
+Play stops by itself at the newest bar ("End of data"), when an action fails, and when the window is hidden or minimised. There is no step back: to try again, pick the same bar with **Select bar**.
 
-Opening another pair or timeframe ends the replay too.
+Opening another pair ends the replay. Another timeframe does not (see below).
+
+## Update interval and timeframes
+
+A replay steps one timeframe, its **update interval**: each step reveals one candle of it. It starts as the chart's timeframe. The dropdown offers the timeframes the chart can be built from: the chart's own and the lower ones whose bars line up with it (a 4h chart offers 1m, 3m, 5m, 15m, 30m, 1h, 2h and 4h; 5m is not offered while the replay steps 3m candles, since their bars do not line up). A higher one than the current interval is offered only where the replay stands on its boundary; otherwise it is greyed out with the time to step to first. The app's engine may still refuse one, for instance 1m over a span longer than 138 days; its message shows above the chart and the interval stays as it was.
+
+Changing the interval keeps the trades and the point the replay has reached. The commands are played again on the new candles, so a result can change: a 1h candle that touched both the stop and the take counts as a stop, while its 15m candles may show which came first.
+
+Switch the chart's timeframe at any time:
+
+- **A higher timeframe** (4h while stepping 1h) shows bars built from the revealed candles. The last one is still forming and grows with each step, as a live bar does.
+- **A lower timeframe** (15m while stepping 1h) changes the update interval to it first, then shows it.
+- Trades and results stay either way. A timeframe the replay cannot build (3d, or 1w from 3d) is refused with a message and the chart stays where it was.
 
 ### Catching up
 
-Steps do not stop at the bars that were cached when the replay began: when the last of them is revealed, the app loads the bars that have closed since (from the cache, else from the exchange). When no newer closed bar exists, the replay has **caught up** with the live data. From then on:
+Steps do not stop at the bars that were cached when the replay began: when the last of them is revealed, the app loads the bars that have closed since (from the cache, else from the exchange). When no newer closed bar exists, the replay has **caught up with real time**, and the backtest ends there:
 
-- it takes no more steps and no trade commands (buy, sell, close, moving a level): live prices after the current bar are on screen, so a command at that bar would know the future;
-- every bar of the pair that closes is added to the replay, so an open trade keeps resolving and the results keep counting;
-- live updates of the pair are no longer held back;
-- **Save** includes the bars added this way; **Exit replay** ends it as usual.
+- the point it reached is kept as the catch-up time and does not move again; trades and results count the bars up to it only;
+- a trade still open then is **not finished at real time**: it stays in the trades list with its R at that moment, and like an open trade it does not count in the results;
+- Play, Step, Jump to real time, Buy, Sell and Close trade are off ("Real time reached"); Select bar, Save, Open and X still work;
+- the chart shows live data again, for display only: new bars appear, but they move no trade;
+- **Save** writes the session up to the catch-up time, without live bars, so the file gives the same results anywhere. Opening it shows the same finished backtest.
 
-An opened file never loads newer bars: it ends at its last bar.
+Changing the timeframe or the update interval keeps a caught-up replay finished. An opened file never loads newer bars: it ends at its last bar.
 
 ## Shortcuts
 
@@ -68,7 +86,7 @@ An opened file never loads newer bars: it ends at its last bar.
 | Shift+B | Buy |
 | Shift+S | Sell |
 | Shift+C | Close the trade |
-| Esc | Cancel picking a start |
+| Esc | Cancel picking a start, close a dropdown, or answer no to Select bar's question |
 
 The replay keys never use Alt, so they do not clash with the drawing tools (Alt plus a letter). They do nothing while you type in a text field. Space on a control you reached with Tab presses that control instead.
 
@@ -80,7 +98,7 @@ A new trade has its **stop 1.5 % away** from the entry and its **take at 2 R** (
 
 Drag the round handle on the stop or the take to move it. The change is sent when you release the mouse and applies from the next bar. A level cannot be dragged across the current close: a long's stop stays below it and its take above it, a short's the other way round.
 
-Closed trades stay on the chart as an entry dot and an exit dot joined by a dashed line, with the trade's R at the exit.
+Closed trades stay on the chart as an entry dot and an exit dot joined by a dashed line, with the trade's R at the exit. A trade not finished at real time keeps its zone and R, without handles.
 
 ## Fills and R
 
@@ -95,7 +113,7 @@ Closed trades stay on the chart as an entry dot and an exit dot joined by a dash
 
 ## Results
 
-The panel on the right shows, over the closed trades:
+The panel under the replay bar shows a row of numbers over the closed trades and, below it, every trade, newest first: its side, the entry and exit times, how it ended (take, stop, closed, still open, not finished at real time) and its R. The list scrolls; the arrow on **Results** folds the panel to its row, and the app remembers that. The numbers:
 
 | | |
 | --- | --- |
@@ -106,7 +124,7 @@ The panel on the right shows, over the closed trades:
 | Profit factor | The sum of winning R over the sum of losing R; "—" while there is no losing trade. |
 | Max drawdown | The deepest fall of the running total R below its highest point. |
 | Losing streak | The longest run of losing trades in a row. |
-| Open trade | The open trade's R marked to the current close. It does not count in the numbers above. |
+| Open trade | The open trade's R marked to the current close. It does not count in the numbers above, nor does a trade not finished at real time. |
 
 All results are worked out by the app's engine, from the bars and the commands you gave. Numbers are coloured only by their sign.
 
@@ -118,6 +136,7 @@ All results are worked out by the app's engine, from the bars and the commands y
 - the pair (source, symbol, base and quote asset, price and quantity decimals) and the base timeframe, the one the replay steps;
 - the candles: the context before the start and every revealed bar, as whole numbers in the pair's tick and lot size. The app saves **no bar after the current one**;
 - the start and the cut as times: the close time of the first replayed bar and of the current one;
+- for a replay that caught up with real time, the catch-up time (`caughtUpAt`), which is the cut; such a file has no bar after it;
 - every command you gave, in order, each with the time it was given (the close time of the then current bar): open (side, stop, take), edit (the new stop or take) and close;
 - a SHA-256 hash of the candles. It covers the candles only, not the pair, the timeframe, the times or the commands.
 
@@ -131,7 +150,7 @@ Send the `.replay` file. Whoever opens it gets the same chart, the same trades a
 
 ## Limits
 
-- The controls step the chart's own timeframe. The app's engine can already step a smaller timeframe and build the chart's bars from it (ADR 0008); the controls for it come in a later version.
+- 3d is stepped only on its own: it is never built from lower bars, and no lower interval is offered on a 3d chart.
 - A file holds at most 200 000 candles and 10 000 commands, and is at most 32 MiB.
 - No step back, no fees, no slippage, one open trade at a time.
-- A replay starts only at a cached, closed bar. It plays up to the newest closed bar, loading the ones that closed after it began, then follows the live bars (see [Catching up](#catching-up)).
+- A replay starts only at a cached, closed bar. It plays up to the newest closed bar, loading the ones that closed after it began, and the backtest ends there (see [Catching up](#catching-up)).
