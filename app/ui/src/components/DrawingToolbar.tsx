@@ -90,6 +90,11 @@ export function DrawingToolbar({ store }: { store: DrawingStore }) {
         }}
       >
         {s.hidden ? <EyeOff size={18} strokeWidth={1.75} /> : <Eye size={18} strokeWidth={1.75} />}
+        {s.hiddenCount > 0 && (
+          <span className="tool-badge mono" data-testid="drawings-hidden-badge" aria-label={t("tools.hiddenBadge", { n: s.hiddenCount })}>
+            {s.hiddenCount}
+          </span>
+        )}
       </button>
       {menu && (
         <Menu

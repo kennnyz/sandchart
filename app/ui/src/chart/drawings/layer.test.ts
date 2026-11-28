@@ -678,3 +678,34 @@ describe("bell tags of lines with alerts", () => {
     expect(bellAt({ kind: "note", t: 0, text: "x" }, c)).toBeNull();
   });
 });
+
+describe("locked drawings", () => {
+  /** Overlay text painted by the layer. */
+  function texts(l: DrawingLayer): string[] {
+    const out: string[] = [];
+    const rec = new Proxy({} as CanvasRenderingContext2D, {
+      get: (_t, key) =>
+        key === "measureText" ? () => ({ width: 10 }) : key === "fillText" ? (s: string) => out.push(s) : () => undefined,
+      set: () => true,
+    });
+    l.paintOverlay(rec, 1, dark, () => {});
+    return out;
+  }
+
+  it("say Locked for a moment where a drag of one began, and do not move", () => {
+    vi.useFakeTimers();
+    const { l, c, rec, paint } = recording();
+    l.setDrawings([hl(c.p(400), "a", { locked: true })]);
+    paint();
+    expect(l.pointerDown(100, 400, false)).toBe(true);
+    l.pointerMove(100, 460, false);
+    expect(texts(l)).toContain("Locked");
+    l.pointerUp(100, 460, false);
+    expect(rec.commits).toEqual([]);
+    const overlays = rec.overlay;
+    vi.advanceTimersByTime(1200);
+    expect(rec.overlay).toBeGreaterThan(overlays);
+    expect(texts(l)).not.toContain("Locked");
+    vi.useRealTimers();
+  });
+});

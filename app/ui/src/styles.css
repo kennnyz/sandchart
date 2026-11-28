@@ -163,7 +163,24 @@ select:focus-visible {
   background: var(--line);
 }
 .tools-bottom {
+  position: relative;
   margin-top: auto;
+}
+/* How many drawings are hidden one by one, on the eye button. */
+.tool-badge {
+  position: absolute;
+  top: 1px;
+  right: 0;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--fg);
+  color: var(--bg);
+  font-size: 9px;
+  line-height: 14px;
+  text-align: center;
+  pointer-events: none;
 }
 
 /* ---- Top bar ---- */

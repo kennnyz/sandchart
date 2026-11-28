@@ -148,6 +148,8 @@
   "alertMenu.label": "Действия с алертом",
   "alertMenu.remove": "Удалить алерт",
   "tools.visibility": "Видимость рисунков",
+  "tools.hiddenBadge": "Скрыто: {n}",
+  "drawings.locked": "Закреплено",
   "tools.showHidden": "Показать скрытые рисунки ({n})",
   "drawingStyle.title": "Стиль рисунка",
   "drawingStyle.close": "Закрыть",

@@ -34,6 +34,10 @@ export interface ChartDebug {
   selectionBox: boolean;
   /** Handles of the selected drawing at the last overlay frame, in CSS px of the chart. */
   selectedHandles: { x: number; y: number }[];
+  /** Lock glyphs painted on locked selected or hovered drawings at the last overlay frame. */
+  lockGlyphs: number;
+  /** The "Locked" hint after a drag of a locked drawing showed at the last overlay frame. */
+  lockedHint: boolean;
   /** The crosshair at the last overlay frame, in CSS px of the chart; null when not shown. */
   crosshair: { x: number; y: number } | null;
   /** The ⌘ snap preview ring at the last overlay frame, in CSS px of the chart; null when not shown. */
@@ -89,6 +93,8 @@ export function enableChartDebug(): void {
     replayClosed: 0,
     alertLevels: [],
     crosshair: null,
+    lockGlyphs: 0,
+    lockedHint: false,
     lineBells: [],
     plusButton: null,
   };

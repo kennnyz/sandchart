@@ -50,6 +50,8 @@ interface Debug {
   outcomes: Record<string, string>;
   snapRing: { x: number; y: number } | null;
   crosshair: { x: number; y: number } | null;
+  lockGlyphs: number;
+  lockedHint: boolean;
 }
 
 async function openChart(page: Page, query = ""): Promise<Plot> {
@@ -756,8 +758,11 @@ test("a_locked_drawing_does_not_move", async ({ page }) => {
   await expect.poll(async () => (await stored(page))[0]!.locked).toBe(true);
   await page.keyboard.press("Escape");
 
+  // Selected, it shows a lock by its handle; a drag says "Locked" for a moment and moves nothing.
+  await expect.poll(async () => (await debug(page)).lockGlyphs).toBe(1);
   await drag(page, [cx - 100, y], [cx - 60, y + 80]);
-  await page.waitForTimeout(300);
+  expect((await debug(page)).lockedHint).toBe(true);
+  await expect.poll(async () => (await debug(page)).lockedHint, { timeout: 3000 }).toBe(false);
   const [after] = await stored(page);
   expect(after!.body.p).toBe(line!.body.p);
   expect((await debug(page)).selectedDrawing).toBe(line!.id);
@@ -1086,6 +1091,8 @@ test("hide_from_the_menu_persists_across_a_reload_until_shown_from_the_rail", as
   await page.getByTestId("drawing-menu-hide").click();
   await expect.poll(async () => (await stored(page)).find((s) => s.id === top!.id)!.hidden).toBe(true);
   await expect.poll(async () => (await debug(page)).drawingsPainted).toBe(1);
+  // The eye says how many are hidden one by one.
+  await expect(page.getByTestId("drawings-hidden-badge")).toHaveText("1");
   expect(isBlue(await basePixel(page, plot.left + 80, ys[0]!))).toBe(false);
   // Neither hit nor selected.
   await page.mouse.click(cx - 100, ys[0]!);
@@ -1101,6 +1108,7 @@ test("hide_from_the_menu_persists_across_a_reload_until_shown_from_the_rail", as
   await show.click();
   await expect.poll(async () => (await debug(page)).drawingsPainted).toBe(2);
   await expect.poll(async () => (await stored(page)).some((s) => s.hidden)).toBe(false);
+  await expect(page.getByTestId("drawings-hidden-badge")).toHaveCount(0);
   await page.getByTestId("tool-hide-all").click();
   await expect(page.getByTestId("visibility-menu-show-hidden")).toBeDisabled();
 });

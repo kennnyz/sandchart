@@ -75,7 +75,7 @@ Double-click a drawing, or select it and press Enter, to open its style popover.
 - **Dashed**: a dashed line instead of a solid one.
 - **Options of the tool**: extend left and right on a trend line, extend right on a rectangle, the levels of a Fibonacci retracement (at least one stays on).
 - **Alert** (horizontal and trend lines): set an alert on the line, crossing it either way, above or below; see [Alerts](alerts.md). The alert is not part of the undo history.
-- **Locked**: a locked drawing can still be selected, styled and deleted, but not moved or reshaped. Use it for levels you do not want to nudge by accident.
+- **Locked**: a locked drawing can still be selected, styled and deleted, but not moved or reshaped. Use it for levels you do not want to nudge by accident. Selected or hovered, it shows a small lock by its handle, and a drag on it says **Locked** for a moment instead of moving it.
 - **Delete** removes the drawing, and its alert with it (a line with an alert asks first).
 
 Tab moves between the controls and stays inside the popover; Esc or a click outside closes it.
@@ -95,7 +95,7 @@ Tab moves between the controls and stays inside the popover; Esc or a click outs
 
 ## Hide and show
 
-The eye button at the bottom of the tools rail opens a menu:
+The eye button at the bottom of the tools rail opens a menu. While drawings are hidden one by one, a small number on it says how many:
 
 - **Hide all drawings** hides every drawing, so you can look at the bare chart. They are not painted and cannot be clicked, dragged, deleted or undone until you pick **Show all drawings**. Picking a tool shows them again, so a new drawing is never placed unseen. This lasts for the session and changes nothing in storage.
 - **Show hidden drawings (n)** shows again every drawing hidden one by one with **Hide** in the [context menu](#context-menu). Such a drawing stays hidden after a restart, until you show it here (or undo). It is not painted and cannot be clicked, but it is still saved, and a line keeps firing its [alert](alerts.md).

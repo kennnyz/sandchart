@@ -1,6 +1,9 @@
 import type { Anchor, Drawing, DrawingBody, DrawingStyle, PositionOutcome } from "../../backend/types";
 import { BELL_TAG, paintBellTag } from "../alerts";
 import { chartDebug } from "../debug";
+import { t } from "../../i18n";
+import { MONO_FAMILY } from "../theme";
+import { pill } from "./label";
 import type { ChartTheme } from "../theme";
 import type { Coords } from "./geometry";
 import { snapToBar } from "./magnet";
@@ -117,6 +120,9 @@ export function bellAt(body: DrawingBody, c: Coords): { x: number; y: number } |
   return x > 0 && x <= c.plotW && y >= 0 && y <= c.priceH ? { x, y } : null;
 }
 
+/** How long the "Locked" hint stays after a drag of a locked drawing. */
+const LOCKED_HINT_MS = 1200;
+
 /** What the layer needs from the chart. */
 export interface LayerHost {
   /** Redraw both canvas layers. */
@@ -218,6 +224,9 @@ export class DrawingLayer {
   /** In a replay, the cut (close time of the last revealed base bar): a drawing anchored only at or after it is not shown. */
   private cut: number | null = null;
 
+  /** A press tried to drag a locked drawing: a "Locked" hint there for a moment. */
+  private lockedHint: { x: number; y: number } | null = null;
+  private lockedTimer: ReturnType<typeof setTimeout> | null = null;
   /** Drawings with an alert (see `setAlerted`). */
   private alerted: ReadonlySet<string> = new Set();
 
@@ -457,6 +466,17 @@ export class DrawingLayer {
     this.magnet = on;
   }
 
+  private showLocked(x: number, y: number): void {
+    this.lockedHint = { x, y };
+    if (this.lockedTimer !== null) clearTimeout(this.lockedTimer);
+    this.lockedTimer = setTimeout(() => {
+      this.lockedTimer = null;
+      this.lockedHint = null;
+      this.host.invalidateOverlay();
+    }, LOCKED_HINT_MS);
+    this.host.invalidateOverlay();
+  }
+
   /** Runs a keyboard command; false when there was nothing to do. */
   command(cmd: DrawingCommand): boolean {
     if (cmd === "cancel") {
@@ -613,7 +633,10 @@ export class DrawingLayer {
       if (tool.markers) paintHandles(ctx, tool.markers(g), color(theme, d.style), theme);
       for (const p of tool.axisPrices?.(item.body) ?? []) tags.push([p, color(theme, d.style)]);
     }
-    if (debug) debug.selectedHandles = [];
+    if (debug) {
+      debug.selectedHandles = [];
+      debug.lockGlyphs = 0;
+    }
     for (const id of new Set([...s.selection, hovered?.id])) {
       const d = id && !dragging(id) ? s.byId(id) : undefined;
       const tool = d && this.visibleTool(d);
@@ -623,7 +646,16 @@ export class DrawingLayer {
       paintHandles(ctx, handles, color(theme, d.style), theme);
       paintHandles(ctx, markers, color(theme, d.style), theme);
       if (debug && id === s.selected) debug.selectedHandles = [...handles, ...markers];
+      // A locked one shows a lock by its last handle: it will not move.
+      const last = handles.at(-1) ?? markers.at(-1);
+      if (d.locked && last) {
+        paintLock(ctx, last, theme);
+        if (debug) debug.lockGlyphs++;
+      }
     }
+    const hint = this.lockedHint;
+    if (hint) paintLockedHint(ctx, hint, theme);
+    if (debug) debug.lockedHint = hint !== null;
     if (this.box) paintBox(ctx, boxOf(this.box), theme);
 
     // The shape being placed: the points so far and the mouse as the next one. A stroke
@@ -765,6 +797,8 @@ export class DrawingLayer {
       if (!e.moved) {
         if (Math.hypot(x - e.x0, y - e.y0) < DRAG_THRESHOLD) return;
         e.moved = true;
+        // The pressed drawing is locked: say so where the drag began.
+        if (this.state.byId(e.id)?.locked) this.showLocked(e.x0, e.y0);
         // Only locked drawings were pressed: a drag, but nothing moves.
         if (e.items.length === 0) return;
         // The base is drawn once without them; from now on they move on the overlay only.
@@ -1146,6 +1180,46 @@ function paintSnap(ctx: CanvasRenderingContext2D, p: Point, theme: ChartTheme): 
   ctx.beginPath();
   ctx.arc(p.x, p.y, SNAP_RING_RADIUS, 0, Math.PI * 2);
   ctx.stroke();
+}
+
+/** Lucide `lock` (ISC), on its 24 px grid. */
+const LOCK = "M5 11h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2z M7 11V7a5 5 0 0 1 10 0v4";
+let lockPath: Path2D | null = null;
+const LOCK_SIZE = 12;
+
+/** A small lock up and right of `p`, on a pill so it reads over the chart. */
+function paintLock(ctx: CanvasRenderingContext2D, p: Point, theme: ChartTheme): void {
+  lockPath ??= new Path2D(LOCK);
+  const x = p.x + HANDLE_RADIUS + 4;
+  const y = p.y - HANDLE_RADIUS - 4 - LOCK_SIZE;
+  pill(ctx, x - 2, y - 2, LOCK_SIZE + 4, LOCK_SIZE + 4, theme);
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(LOCK_SIZE / 24, LOCK_SIZE / 24);
+  ctx.globalAlpha = 1;
+  ctx.setLineDash(NO_DASH);
+  ctx.lineWidth = 2;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = theme.fg;
+  ctx.stroke(lockPath);
+  ctx.restore();
+}
+
+/** "Locked" on a pill above where a drag of a locked drawing began. */
+function paintLockedHint(ctx: CanvasRenderingContext2D, p: Point, theme: ChartTheme): void {
+  const text = t("drawings.locked");
+  ctx.save();
+  ctx.globalAlpha = 1;
+  ctx.font = `11px ${MONO_FAMILY}`;
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "left";
+  const w = ctx.measureText(text).width + 10;
+  const top = p.y - 30;
+  pill(ctx, p.x - w / 2, top, w, 18, theme);
+  ctx.fillStyle = theme.fg;
+  ctx.fillText(text, p.x - w / 2 + 5, top + 9);
+  ctx.restore();
 }
 
 function paintHandles(ctx: CanvasRenderingContext2D, points: Point[], stroke: string, theme: ChartTheme): void {
