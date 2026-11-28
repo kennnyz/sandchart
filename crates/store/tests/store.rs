@@ -602,6 +602,20 @@ fn firing_happens_once_and_rearming_clears_it() {
 }
 
 #[test]
+fn a_firing_of_an_alert_that_was_replaced_meanwhile_is_ignored() {
+    let mut store = Store::open_in_memory().unwrap();
+    let old = alert("a", "BTCUSDT", price(100));
+    store.upsert_alert(&old).unwrap();
+    // Another process replaces it (a new created_at) before the firing of the old one lands.
+    let mut new = alert("a", "BTCUSDT", price(300));
+    new.created_at = old.created_at + 1;
+    store.upsert_alert(&new).unwrap();
+    assert!(!store.fire_alert(&fire(old, 3, 101, 2)).unwrap());
+    assert_eq!(store.alert("a").unwrap(), Some(new.clone()));
+    assert!(store.fire_alert(&fire(new, 4, 301, 2)).unwrap());
+}
+
+#[test]
 fn a_line_alert_fires_without_touching_its_drawing_id() {
     let mut store = Store::open_in_memory().unwrap();
     store

@@ -719,8 +719,9 @@ impl Store {
     }
 
     /// Records that an active alert fired: `fired` holds the trigger and its prices at the
-    /// scale they were seen at. Only an alert that is still active changes, so one that
-    /// was deleted or already fired meanwhile stays as it is; returns whether it changed.
+    /// scale they were seen at. Only an alert that is still active and still the one that
+    /// was armed (the same `created_at`) changes, so one that was deleted, already fired or
+    /// replaced by another process meanwhile stays as it is; returns whether it changed.
     pub fn fire_alert(&mut self, fired: &Alert) -> Result<bool, StoreError> {
         let price = match fired.kind {
             AlertKind::Price { price } => Some(price),
@@ -729,13 +730,14 @@ impl Store {
         let n = self.conn.execute(
             "UPDATE alerts SET active = 0, triggered_at = ?2, triggered_price = ?3,
                     price_scale = ?4, price = ?5
-             WHERE id = ?1 AND active = 1",
+             WHERE id = ?1 AND active = 1 AND created_at = ?6",
             params![
                 fired.id,
                 fired.triggered_at,
                 fired.triggered_price,
                 fired.price_scale,
-                price
+                price,
+                fired.created_at
             ],
         )?;
         Ok(n == 1)
