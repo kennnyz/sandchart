@@ -331,3 +331,203 @@ test("replay_hides_the_replayed_pair_quote_in_the_watchlist", async ({ page }) =
   await page.getByTestId("replay-exit").click();
   await expect(row("BTCUSDT")).toContainText("+1.84%");
 });
+
+const cutOf = async (page: Page) => Number(await page.getByTestId("replay-bar").getAttribute("data-cut"));
+const tfButton = (page: Page, tf: string) => page.locator(".timeframes").getByRole("button", { name: tf, exact: true });
+
+test("replay_keeps_its_session_across_timeframes", async ({ page }) => {
+  const plot = await openChart(page);
+  const start = await startAt(page, plot, plot.width * 0.4);
+  // Up to the last hour of a 4h bucket: the next step opens a new 4h bar.
+  await stepUntil(page, async () => ((await lastBar(page)) + H) % (4 * H) === 0, 8);
+  await page.getByTestId("replay-buy").click();
+  await expect(stat(page, "open-r")).not.toHaveText("—");
+  const hour = await lastBar(page);
+  expect(hour).toBeGreaterThanOrEqual(start);
+
+  // 4h: built from the revealed hours, no reset; the forming bar grows with each step.
+  await tfButton(page, "4h").click();
+  await expect.poll(() => lastBar(page)).toBe(hour - 3 * H);
+  await expect(page.getByTestId("chart")).toHaveAttribute("data-replay", "on");
+  await expect(page.getByTestId("replay-interval")).toHaveText("1h");
+  await expect(stat(page, "open-r")).not.toHaveText("—");
+  await page.keyboard.press("ArrowRight");
+  await expect.poll(() => cutOf(page)).toBe(hour + 2 * H);
+  await expect.poll(() => lastBar(page)).toBe(hour + H);
+  await page.keyboard.press("ArrowRight");
+  await expect.poll(() => cutOf(page)).toBe(hour + 3 * H);
+  expect(await lastBar(page)).toBe(hour + H);
+
+  // 15m: the session re-bases to it; the trade stays (its outcome may differ on 15m candles).
+  await tfButton(page, "15m").click();
+  await expect(page.getByTestId("replay-interval")).toHaveText("15m");
+  await expect.poll(() => lastBar(page)).toBe(hour + 3 * H - H / 4);
+  expect(await cutOf(page)).toBe(hour + 3 * H);
+  await expect(page.getByTestId("replay-trade")).toHaveCount(1);
+  await page.keyboard.press("ArrowRight");
+  await expect.poll(() => cutOf(page)).toBe(hour + 3 * H + H / 4);
+
+  // Back on 1h the update interval stays 15m; 1h is offered again once the cut is on the hour.
+  await tfButton(page, "1h").click();
+  await expect.poll(() => lastBar(page)).toBe(hour + 3 * H);
+  await page.getByTestId("replay-interval").click();
+  await expect(page.getByTestId("replay-interval-menu-1h")).toBeDisabled();
+  await expect(page.getByTestId("replay-interval-menu-15m")).toHaveAttribute("aria-checked", "true");
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("replay-interval-menu")).toHaveCount(0);
+  for (let i = 1; i <= 3; i++) {
+    await page.keyboard.press("ArrowRight");
+    await expect.poll(() => cutOf(page)).toBe(hour + 3 * H + (i + 1) * (H / 4));
+  }
+  await page.getByTestId("replay-interval").click();
+  await page.getByTestId("replay-interval-menu-1h").click();
+  await expect(page.getByTestId("replay-interval")).toHaveText("1h");
+  await page.keyboard.press("ArrowRight");
+  await expect.poll(() => cutOf(page)).toBe(hour + 5 * H);
+  await expect(page.getByTestId("replay-trade")).toHaveCount(1);
+
+  // Another pair ends the replay.
+  await page.locator('[data-testid="watchlist-row"][data-symbol="ETHUSDT"]').click();
+  await expect(page.getByTestId("chart")).toHaveAttribute("data-replay", "off");
+});
+
+test("replay_jumps_to_real_time_and_ends_the_backtest_there", async ({ page }) => {
+  const plot = await openChart(page);
+  const live = await lastBar(page);
+  // A few bars before the newest one.
+  await startAt(page, plot, plot.width - 100);
+  await page.getByTestId("replay-buy").click();
+  await expect(stat(page, "open-r")).not.toHaveText("—");
+  await page.getByTestId("replay-jump").click();
+  const bar = page.getByTestId("replay-bar");
+  await expect(bar).toHaveAttribute("data-finished", "true");
+  await expect(page.getByTestId("replay-real-time")).toBeVisible();
+  await expect.poll(() => lastBar(page)).toBe(live);
+  for (const id of ["replay-step", "replay-play", "replay-jump", "replay-buy", "replay-sell", "replay-close"]) {
+    await expect(page.getByTestId(id)).toBeDisabled();
+  }
+  await expect(page.getByTestId("replay-step")).toHaveAttribute("title", /backtest is finished/);
+  await expect(page.getByTestId("replay-select")).toBeEnabled();
+  await expect(page.getByTestId("replay-exit")).toBeEnabled();
+  // The trade is closed or left unfinished at real time; an unfinished one does not count.
+  const row = page.getByTestId("replay-trade");
+  await expect(row).toHaveCount(1);
+  await expect(stat(page, "open-r")).toHaveText("—");
+  const reason = await row.getAttribute("data-reason");
+  expect(["take", "stop", "unfinished"]).toContain(reason);
+  await expect(stat(page, "trades")).toHaveText(reason === "unfinished" ? "0" : "1");
+  const stats = await stat(page, "total-r").textContent();
+
+  // A live candle shows on the chart, but the backtest stays at its cut.
+  const cut = await cutOf(page);
+  await page.keyboard.press("ArrowRight");
+  await page.evaluate(
+    (t) =>
+      (window as unknown as { __sandchartMock: { emitLive(e: unknown): void } }).__sandchartMock.emitLive({
+        kind: "candle",
+        time: t,
+        open: 1_000_000,
+        high: 1_010_000,
+        low: 990_000,
+        close: 1_005_000,
+        volume: 10,
+        closed: true,
+      }),
+    live + H,
+  );
+  await expect.poll(() => lastBar(page)).toBe(live + H);
+  expect(await cutOf(page)).toBe(cut);
+  await expect(stat(page, "total-r")).toHaveText(stats!);
+  await expect(page.getByTestId("replay-trade")).toHaveAttribute("data-reason", reason!);
+
+  await page.getByTestId("replay-exit").click();
+  await expect(page.getByTestId("chart")).toHaveAttribute("data-replay", "off");
+});
+
+test("replay_select_bar_asks_before_dropping_trades", async ({ page }) => {
+  const plot = await openChart(page);
+  const live = await lastBar(page);
+  await startAt(page, plot, plot.width * 0.5);
+  await page.getByTestId("replay-buy").click();
+  await expect(stat(page, "open-r")).not.toHaveText("—");
+  await page.getByTestId("replay-select").click();
+  await page.getByTestId("replay-select-menu-chart").click();
+  const ask = page.getByRole("alertdialog");
+  await expect(ask).toBeVisible();
+  await expect(ask).toContainText("will be lost");
+  await page.getByTestId("replay-confirm-cancel").click();
+  await expect(ask).toHaveCount(0);
+  await expect(page.getByTestId("chart")).toHaveAttribute("data-replay", "on");
+  await expect(stat(page, "open-r")).not.toHaveText("—");
+
+  // Esc says no too; then yes: back to the live chart to pick a new start.
+  await page.getByTestId("replay-select").click();
+  await page.getByTestId("replay-select-menu-date").click();
+  await expect(ask).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(ask).toHaveCount(0);
+  await page.getByTestId("replay-select").click();
+  await page.getByTestId("replay-select-menu-chart").click();
+  await page.getByTestId("replay-confirm-ok").click();
+  await expect(page.getByTestId("chart")).toHaveAttribute("data-replay", "picking");
+  await expect(page.getByTestId("replay-hint")).toBeVisible();
+  // The live chart is back, with every bar to pick from.
+  await expect.poll(() => lastBar(page)).toBe(live);
+  const now = await plotOf(page);
+  await page.mouse.move(now.left + now.width * 0.3, now.top + now.height / 2);
+  await nextFrame(page);
+  await page.mouse.click(now.left + now.width * 0.3, now.top + now.height / 2);
+  await expect(page.getByTestId("chart")).toHaveAttribute("data-replay", "on");
+  await expect(stat(page, "trades")).toHaveText("0");
+  await expect(stat(page, "open-r")).toHaveText("—");
+
+  // Without trades it starts picking at once.
+  await page.getByTestId("replay-select").click();
+  await page.getByTestId("replay-select-menu-date").click();
+  await expect(page.getByTestId("chart")).toHaveAttribute("data-replay", "picking");
+  await expect(page.getByTestId("replay-date")).toBeFocused();
+});
+
+test("replay_results_sit_under_the_bar_collapse_and_scroll", async ({ page }) => {
+  const plot = await openChart(page);
+  await startAt(page, plot, plot.width * 0.3);
+  const panel = page.getByTestId("replay-stats");
+  const barBox = (await page.getByTestId("replay-bar").boundingBox())!;
+  const panelBox = (await panel.boundingBox())!;
+  expect(panelBox.y).toBeGreaterThanOrEqual(barBox.y + barBox.height - 1);
+  expect(panelBox.width).toBeGreaterThan(barBox.width - 2);
+  // Eight trades, closed by hand: more than the list shows at once.
+  for (let i = 0; i < 8; i++) {
+    await page.keyboard.press("Shift+B");
+    await expect(page.getByTestId("replay-close")).toBeEnabled();
+    await page.keyboard.press("ArrowRight");
+    await page.keyboard.press("Shift+C");
+    await expect(page.getByTestId("replay-trade")).toHaveCount(i + 1);
+    await expect(page.getByTestId("replay-buy")).toBeEnabled();
+  }
+  const list = page.getByTestId("replay-trades");
+  const sizes = await list.evaluate((el) => [el.scrollHeight, el.clientHeight]);
+  expect(sizes[0]).toBeGreaterThan(sizes[1]!);
+  await list.evaluate((el) => el.scrollTo(0, el.scrollHeight));
+  expect(await list.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+  // R is coloured by its sign only.
+  for (const cell of await page.locator('[data-testid="replay-trade"] td.num').all()) {
+    const text = (await cell.textContent())!;
+    const cls = (await cell.getAttribute("class"))!;
+    expect(cls.includes("up")).toBe(text.startsWith("+"));
+    expect(cls.includes("down")).toBe(text.startsWith("−"));
+  }
+
+  await page.getByTestId("replay-results-toggle").click();
+  await expect(list).toHaveCount(0);
+  await expect(panel).toHaveAttribute("data-collapsed", "true");
+  await expect(stat(page, "trades")).toHaveText("8");
+  expect(await page.evaluate(() => localStorage.getItem("sandchart.replay.resultsCollapsed"))).toBe("1");
+  // Remembered across a reload.
+  await page.reload();
+  await expect(page.getByTestId("legend")).toHaveAttribute("data-time", /^\d+$/);
+  await startAt(page, await plotOf(page), plot.width * 0.3);
+  await expect(panel).toHaveAttribute("data-collapsed", "true");
+  await page.getByTestId("replay-results-toggle").click();
+  await expect(page.getByTestId("replay-trades")).toBeVisible();
+});

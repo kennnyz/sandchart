@@ -48,6 +48,7 @@ interface Debug {
   selectedHandles: { x: number; y: number }[];
   ruler: string | null;
   outcomes: Record<string, string>;
+  snapRing: { x: number; y: number } | null;
 }
 
 async function openChart(page: Page, query = ""): Promise<Plot> {
@@ -401,6 +402,45 @@ test("magnet_snaps_a_level_to_a_candle_high", async ({ page }) => {
   // The switch is kept across a reload.
   await page.reload();
   await expect(page.getByTestId("tool-magnet")).toHaveAttribute("aria-pressed", "true");
+});
+
+test("cmd_held_before_the_first_click_previews_the_snap_and_places_on_a_bar_price", async ({ page }) => {
+  const plot = await openChart(page);
+  const cx = Math.round(plot.left + plot.width / 2);
+  const legend = page.getByTestId("legend");
+  await page.mouse.move(cx, plot.top + plot.height / 2);
+  const time = Number(await legend.getAttribute("data-time"));
+  const prices = await Promise.all([3, 5, 7, 9].map(async (i) => ticksOf((await legend.locator("span").nth(i).textContent())!)));
+
+  await page.keyboard.press("Alt+KeyT");
+  await expect.poll(async () => (await debug(page)).snapRing).toBeNull();
+  // With ⌘ held, find a height close enough to the bar under the mouse for a snap.
+  await page.keyboard.down("ControlOrMeta");
+  let y = plot.top + 10;
+  for (; y < plot.top + plot.height; y += 20) {
+    await page.mouse.move(cx, y);
+    if ((await debug(page)).snapRing) break;
+  }
+  const ring = (await debug(page)).snapRing;
+  expect(ring).not.toBeNull();
+  expect(ring!.x).toBeCloseTo(cx - plot.left, -1);
+  // The key alone, without moving the mouse, hides and shows the ring; the base stays as it is.
+  const before = await settled(page);
+  await page.keyboard.up("ControlOrMeta");
+  await expect.poll(async () => (await debug(page)).snapRing).toBeNull();
+  await page.keyboard.down("ControlOrMeta");
+  await expect.poll(async () => (await debug(page)).snapRing).toEqual(ring);
+  const after = await debug(page);
+  expect(after.baseDraws).toBe(before.baseDraws);
+  expect(after.overlayDraws).toBeGreaterThan(before.overlayDraws);
+
+  // The first point lands on the price the ring showed: one of the bar's O, H, L, C.
+  await page.mouse.click(cx, y);
+  await page.keyboard.up("ControlOrMeta");
+  await page.mouse.click(cx + 120, plot.top + plot.height * 0.3);
+  const [line] = await storedCount(page, 1);
+  expect(line!.body.a!.t).toBe(time);
+  expect(prices).toContain(line!.body.a!.p);
 });
 
 /** Handles of the selected drawing in page px. */

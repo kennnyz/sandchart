@@ -97,6 +97,19 @@ export function ReplayBar({ replay: r, range, onDate }: ReplayBarProps) {
     return () => window.removeEventListener("keydown", onKey);
   }, [confirming, r]);
 
+  // Esc closes a dropdown wherever focus is (WebKit does not focus a clicked button).
+  const menuOpen = menu !== null;
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      setMenu(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [menuOpen]);
+
   const picking = r.phase === "picking";
   useEffect(() => {
     if (!picking || !wantDate) return;
@@ -123,24 +136,26 @@ export function ReplayBar({ replay: r, range, onDate }: ReplayBarProps) {
     void file.arrayBuffer().then((b) => r.open(new Uint8Array(b)));
   };
 
-  /** The menu closed by the press that is now clicking its own button: that click must not open it again. */
-  const closed = useRef<{ id: MenuId; at: number } | null>(null);
-  const openMenu = (id: MenuId) => (e: MouseEvent<HTMLButtonElement>) => {
-    const last = closed.current;
-    closed.current = null;
-    if (menu?.id === id || (last?.id === id && performance.now() - last.at < 500)) {
-      setMenu(null);
-      return;
-    }
-    const box = e.currentTarget.getBoundingClientRect();
-    setMenu({ id, x: box.left, y: box.top });
-  };
+  /** The menu was open when the press on its own button began (that press closed it). */
+  const wasOpen = useRef<MenuId | null>(null);
+  const menuButton = (id: MenuId) => ({
+    "aria-haspopup": "menu" as const,
+    "aria-expanded": menu?.id === id,
+    onPointerDown: () => {
+      wasOpen.current = menu?.id === id ? id : null;
+    },
+    onClick: (e: MouseEvent<HTMLButtonElement>) => {
+      const closing = wasOpen.current === id || menu?.id === id;
+      wasOpen.current = null;
+      if (closing) {
+        setMenu(null);
+        return;
+      }
+      const box = e.currentTarget.getBoundingClientRect();
+      setMenu({ id, x: box.left, y: box.top });
+    },
+  });
   const closeMenu = () => setMenu(null);
-  /** Closed by Esc, Tab or a press outside it (maybe on its own button). */
-  const dismissMenu = () => {
-    if (menu) closed.current = { id: menu.id, at: performance.now() };
-    setMenu(null);
-  };
 
   const openButton = (
     <>
@@ -271,11 +286,9 @@ export function ReplayBar({ replay: r, range, onDate }: ReplayBarProps) {
           <button
             className="text-button with-icon"
             data-testid="replay-select"
-            aria-haspopup="menu"
-            aria-expanded={menu?.id === "select"}
+            {...menuButton("select")}
             title={t("replay.selectBar.title")}
-            onClick={openMenu("select")}
-          >
+                      >
             <Rewind size={14} />
             {t("replay.selectBar")}
             <ChevronDown size={12} />
@@ -342,25 +355,21 @@ export function ReplayBar({ replay: r, range, onDate }: ReplayBarProps) {
         <button
           className="text-button with-icon mono"
           data-testid="replay-speed"
-          aria-haspopup="menu"
-          aria-expanded={menu?.id === "speed"}
+          {...menuButton("speed")}
           aria-label={`${t("replay.speed")}: ${r.speed}x`}
           title={t("replay.speedValue", { n: r.speed })}
-          onClick={openMenu("speed")}
-        >
+                  >
           {r.speed}x
           <ChevronDown size={12} />
         </button>
         <button
           className="text-button with-icon mono"
           data-testid="replay-interval"
-          aria-haspopup="menu"
-          aria-expanded={menu?.id === "interval"}
+          {...menuButton("interval")}
           aria-label={intervalLabel}
           title={intervalLabel}
           disabled={!v}
-          onClick={openMenu("interval")}
-        >
+                  >
           {v ? tfLabel(v.base) : ""}
           <ChevronDown size={12} />
         </button>
@@ -441,7 +450,7 @@ export function ReplayBar({ replay: r, range, onDate }: ReplayBarProps) {
           // Only the room above the button: the menu always opens upwards, over the chart.
           height={menu.y}
           fixed
-          onClose={dismissMenu}
+          onClose={closeMenu}
         />
       )}
     </div>
