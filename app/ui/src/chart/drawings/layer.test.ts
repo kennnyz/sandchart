@@ -4,7 +4,7 @@ import { PriceScale } from "../scale";
 import { dark } from "../theme";
 import type { Viewport } from "../viewport";
 import { Coords } from "./geometry";
-import { DrawingLayer, type LayerHost, type MenuEdit, type StyleEdit } from "./layer";
+import { bellAt, DrawingLayer, type LayerHost, type MenuEdit, type StyleEdit } from "./layer";
 import type { DrawingChange } from "./state";
 import { toolFor } from "./registry";
 
@@ -659,5 +659,22 @@ describe("add from a menu", () => {
     expect(l.state.selected).toBe(rec.commits[0]!.after!.id);
     expect(l.state.tool).toBeNull();
     expect(rec.base).toBeGreaterThan(base);
+  });
+});
+
+describe("bell tags of lines with alerts", () => {
+  it("sit on the axis for a level, at the right end of a trend line or where it meets the axis", () => {
+    const c = coords();
+    expect(bellAt({ kind: "hline", p: c.p(300) }, c)).toEqual({ x: c.plotW, y: 300 });
+    const trend = { kind: "trend" as const, a: { t: c.t(400), p: c.p(600) }, b: { t: c.t(200), p: c.p(500) }, extendLeft: false, extendRight: false };
+    const end = bellAt(trend, c)!;
+    expect(end.x).toBeCloseTo(400);
+    expect(end.y).toBeCloseTo(600);
+    // Extended right it meets the axis: 600 px further on the same slope (-0.5 px per px).
+    const ext = bellAt({ ...trend, extendRight: true }, c)!;
+    expect(ext.x).toBe(c.plotW);
+    expect(ext.y).toBeCloseTo(600 + 0.5 * (c.plotW - 400));
+    expect(bellAt({ kind: "hline", p: c.p(-10) }, c)).toBeNull();
+    expect(bellAt({ kind: "note", t: 0, text: "x" }, c)).toBeNull();
   });
 });

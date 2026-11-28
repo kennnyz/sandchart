@@ -253,6 +253,10 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
     chart.onAlertClick((alertId) => alerts.state.select(alertId));
     return () => chart.onAlertClick(null);
   }, [chart, alerts, alertList, replaying]);
+  // Lines with an active alert carry a bell tag.
+  useEffect(() => {
+    chart?.setDrawingAlerts(new Set(alertList.flatMap((a) => (a.active && a.kind.kind === "drawing" ? [a.kind.drawingId] : []))));
+  }, [chart, alertList]);
   // A dragged level re-sets its alert at the new price, at the scale the chart shows it in.
   const scaleNow = state?.instrument?.priceScale ?? null;
   useEffect(() => {

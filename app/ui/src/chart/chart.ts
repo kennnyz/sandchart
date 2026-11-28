@@ -486,6 +486,11 @@ export class Chart {
   }
 
   /** Hide all drawings for this session (painting and hit-testing), or show them again. */
+  /** Ids of the drawings that have an active alert: they get a bell tag. */
+  setDrawingAlerts(ids: ReadonlySet<string>): void {
+    this.drawings.setAlerted(ids);
+  }
+
   setDrawingsHidden(on: boolean): void {
     this.drawings.setHiddenAll(on);
   }

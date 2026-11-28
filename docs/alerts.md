@@ -43,7 +43,7 @@ Every active price alert of the pair on the chart shows as a thin dashed amber l
 
 ## The alerts panel
 
-The panel under the watchlist lists every alert, newest first: the pair, the direction, the level (or **Line**) and the state, **Active** or when and at what price it fired. A click on an alert opens its pair on the chart.
+The panel under the watchlist lists every alert, newest first: the pair, the direction, the level and the state, **Active** or when and at what price it fired. A click on an alert opens its pair on the chart. A line alert of the pair on the chart shows the line's price now (a trend line's where it is at this moment, and it follows the line when you move it); one of another pair, or of a trend line that does not reach the present, shows **Line**. On the chart, a line with an active alert carries a bell tag: a horizontal line's on its price label, a trend line's at its right end or where it meets the price axis.
 
 - An alert that fired is highlighted until you look at it: click it, or close its message.
 - The arrow button arms a fired alert again. It then waits for the next time the price reaches the level.

@@ -98,6 +98,7 @@ function positionOf(d: Drawing | null | undefined): PositionBody | null {
 }
 
 const sameId = (a: InstrumentId, b: InstrumentId) => a.source === b.source && a.symbol === b.symbol;
+const isLine = (d: Drawing) => d.body.kind === "hline" || d.body.kind === "trend";
 
 /**
  * Keeps the chart's drawings and the backend in step: loads the instrument's drawings,
@@ -130,6 +131,8 @@ export class DrawingController {
   hidden = false;
   /** Why the last store or load failed; null once a store succeeds or another instrument opens. */
   error: DrawingError | null = null;
+  /** The shown pair's horizontal and trend lines, by id: what a line alert follows. */
+  private lines = new Map<string, Drawing>();
   /** Ids of the shown pair's drawings hidden one by one (stored `hidden`). */
   private hiddenIds = new Set<string>();
   private surface: DrawingSurface | null = null;
@@ -393,6 +396,7 @@ export class DrawingController {
 
   /** Puts `list` on the chart and tracks its positions; their outcomes start unknown. */
   private show(list: Drawing[]): void {
+    this.lines = new Map(list.filter(isLine).map((d) => [d.id, d]));
     this.surface?.setDrawings(list);
     this.hiddenIds = new Set(list.filter((d) => d.hidden).map((d) => d.id));
     this.onChange();
@@ -403,6 +407,22 @@ export class DrawingController {
       if (p) this.positions.set(d.id, p);
     }
     this.setOutcomes(new Map());
+  }
+
+  /** A horizontal or trend line of the shown pair, as the chart has it now (a line alert's level). */
+  line(id: string): Drawing | undefined {
+    return this.lines.get(id);
+  }
+
+  private trackLines(step: DrawingChange[]): void {
+    let changed = false;
+    for (const c of step) {
+      if (c.after && isLine(c.after)) {
+        this.lines.set(c.after.id, c.after);
+        changed = true;
+      } else if (c.before && this.lines.delete(c.before.id)) changed = true;
+    }
+    if (changed) this.onChange();
   }
 
   private setOutcomes(outcomes: Map<string, PositionOutcome>): void {
@@ -491,6 +511,7 @@ export class DrawingController {
     if (step.length === 0) return;
     this.commits++;
     this.trackPositions(step);
+    this.trackLines(step);
     for (const c of step) this.trackHidden(c);
     const id = this.id;
     const saves: Drawing[] = [];
@@ -512,6 +533,7 @@ export class DrawingController {
           rescaled.push({ before: sent, after: saved });
         });
         this.trackPositions(rescaled);
+        this.trackLines(rescaled);
       }
       if (deletes.length > 0) await this.backend.deleteDrawings(deletes);
     };

@@ -19,6 +19,28 @@ const GLYPH = 10;
 /** Lucide `bell` (ISC), on its 24 px grid. */
 const BELL = ["M10.268 21a2 2 0 0 0 3.464 0", "M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"];
 
+let bellPath: Path2D | null = null;
+
+/** A bell tag (the alert colour, a bell in the ground colour) with its left edge at `left`, centred on `y`; CSS px. */
+export function paintBellTag(ctx: CanvasRenderingContext2D, left: number, y: number, th: ChartTheme): void {
+  bellPath ??= new Path2D(BELL.join(" "));
+  const top = Math.round(y - TAG / 2);
+  ctx.fillStyle = th.alert;
+  ctx.fillRect(left, top, TAG, TAG);
+  ctx.save();
+  ctx.translate(left + (TAG - GLYPH) / 2, top + (TAG - GLYPH) / 2);
+  ctx.scale(GLYPH / 24, GLYPH / 24);
+  ctx.strokeStyle = th.bg;
+  ctx.lineWidth = 2.5;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.stroke(bellPath);
+  ctx.restore();
+}
+
+/** Width of a bell tag, CSS px. */
+export const BELL_TAG = TAG;
+
 /** `p` ticks at `from` decimals as ticks at `to`, rounded half away from zero; null past the safe range. */
 function rescale(p: number, from: number, to: number): number | null {
   const v = to >= from ? p * 10 ** (to - from) : Math.sign(p) * Math.round(Math.abs(p) / 10 ** (from - to));
@@ -59,7 +81,6 @@ export class AlertLevelLayer {
   private alerts: readonly Alert[] = [];
   private levels: AlertLevel[] = [];
   private coords: Coords | null = null;
-  private bell: Path2D | null = null;
   /** The level being dragged, at its price so far. */
   private drag: { id: string; from: number; price: number } | null = null;
   /**
@@ -117,7 +138,6 @@ export class AlertLevelLayer {
     const debug = chartDebug();
     if (debug) debug.alertLevels = [];
     if (this.levels.length === 0) return;
-    this.bell ??= new Path2D(BELL.join(" "));
     ctx.save();
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.beginPath();
@@ -138,22 +158,9 @@ export class AlertLevelLayer {
     }
     ctx.setLineDash(NO_DASH);
     // The bell tags, against the price axis.
-    const s = GLYPH / 24;
     for (const l of this.levels) {
       const y = c.y(l.price);
-      if (!(y >= 0 && y <= c.priceH)) continue;
-      const left = c.plotW - TAG;
-      ctx.fillStyle = th.alert;
-      ctx.fillRect(left, Math.round(y - TAG / 2), TAG, TAG);
-      ctx.save();
-      ctx.translate(left + (TAG - GLYPH) / 2, Math.round(y - TAG / 2) + (TAG - GLYPH) / 2);
-      ctx.scale(s, s);
-      ctx.strokeStyle = th.bg;
-      ctx.lineWidth = 2.5;
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      ctx.stroke(this.bell);
-      ctx.restore();
+      if (y >= 0 && y <= c.priceH) paintBellTag(ctx, c.plotW - TAG, y, th);
     }
     ctx.restore();
   }

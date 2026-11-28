@@ -142,6 +142,26 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 
 afterEach(() => vi.restoreAllMocks());
 
+describe("DrawingController lines", () => {
+  it("knows the shown pair's lines as the chart has them, for their alerts' levels", async () => {
+    const b = fakeBackend([]);
+    const s = fakeSurface();
+    const c = new DrawingController(b.backend, () => {});
+    c.attach(s.surface);
+    void c.open(BTC);
+    await flush();
+    const h = drawing("h", 100);
+    b.loads[0]!.resolve([h]);
+    await flush();
+    expect(c.line("h")).toEqual(h);
+    const moved = { ...h, body: { kind: "hline" as const, p: 120 } };
+    s.commit({ before: h, after: moved });
+    expect(c.line("h")).toEqual(moved);
+    s.commit({ before: moved, after: null });
+    expect(c.line("h")).toBeUndefined();
+  });
+});
+
 describe("DrawingController delete question", () => {
   it("asks only when a drawing to delete has an alert, and runs the delete on yes only", async () => {
     const b = fakeBackend([]);

@@ -150,7 +150,9 @@ test("an_hline_popover_sets_its_alert_and_deleting_the_line_deletes_it", async (
   const [set] = await alertCount(page, 1);
   expect(set).toMatchObject({ direction: "above", active: true, kind: { kind: "drawing", drawingId: line!.id } });
   await expect(section).toHaveAttribute("data-state", "active");
-  await expect(page.getByTestId("alert-row")).toContainText("Line");
+  // The panel shows the line's price, and the line carries a bell tag.
+  await expect(page.getByTestId("alert-level")).toHaveText(price2(line!.body.p!));
+  await expect.poll(async () => (await page.evaluate(() => (window as unknown as { __sandchartDebug: { lineBells: string[] } }).__sandchartDebug.lineBells))).toEqual([line!.id]);
 
   // Another direction re-sets the same alert.
   await pop.locator("#dstyle-alert-direction").selectOption("below");

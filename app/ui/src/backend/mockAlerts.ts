@@ -2,12 +2,11 @@
 // lets the browser mock and the e2e tests fire alerts. `mockAlerts.test.ts` runs it against
 // `crates/core/tests/fixtures/alerts.json`, the cases the Rust tests run, so the two cannot drift.
 
-import type { AlertDirection, AlertInput, Anchor, DrawingBody } from "./types";
+import { levelAt as mockLevelAt, type Level as MockLevel } from "../alertLevel";
+import type { AlertDirection, AlertInput } from "./types";
 
-/** The level an alert compares the price with (`Level` in Rust). */
-export type MockLevel =
-  | { kind: "flat"; p: number }
-  | { kind: "line"; a: Anchor; b: Anchor; extendLeft: boolean; extendRight: boolean };
+// The level rule is shared with the UI, which shows a line alert's level now (the fixture runs it here too).
+export { levelAt as mockLevelAt, levelOf as mockLevelOf, type Level as MockLevel } from "../alertLevel";
 
 /** One live update: when it arrived, its bar, and that bar's high, low and close so far. */
 export interface MockUpdate {
@@ -16,31 +15,6 @@ export interface MockUpdate {
   high: number;
   low: number;
   close: number;
-}
-
-const MAX = BigInt(Number.MAX_SAFE_INTEGER);
-
-/** `n / d` rounded half away from zero; `d > 0`. */
-function divRound(n: bigint, d: bigint): bigint {
-  const q = n / d;
-  const r = n % d;
-  const abs = r < 0n ? -r : r;
-  return abs * 2n >= d ? q + (n < 0n ? -1n : 1n) : q;
-}
-
-export function mockLevelOf(body: DrawingBody): MockLevel | null {
-  if (body.kind === "hline") return { kind: "flat", p: body.p };
-  if (body.kind === "trend") return { kind: "line", a: body.a, b: body.b, extendLeft: body.extendLeft, extendRight: body.extendRight };
-  return null;
-}
-
-/** The level at time `t`; null off the line (as `Level::at`). */
-export function mockLevelAt(level: MockLevel, t: number): number | null {
-  if (level.kind === "flat") return level.p;
-  const [first, last] = level.a.t <= level.b.t ? [level.a, level.b] : [level.b, level.a];
-  if (first.t === last.t || (t < first.t && !level.extendLeft) || (t > last.t && !level.extendRight)) return null;
-  const p = BigInt(first.p) + divRound(BigInt(last.p - first.p) * (BigInt(t) - BigInt(first.t)), BigInt(last.t) - BigInt(first.t));
-  return p > MAX || p < -MAX ? null : Number(p);
 }
 
 /** The price an alert fired at between `prev` and `cur`, or null (as `fires`). */

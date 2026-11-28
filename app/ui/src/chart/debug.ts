@@ -48,6 +48,8 @@ export interface ChartDebug {
   replayHandles: { stop: { x: number; y: number }; take: { x: number; y: number } } | null;
   /** Closed replay trades painted at the last base frame. */
   replayClosed: number;
+  /** Ids of the lines painted with a bell tag (they have an alert) at the last base frame. */
+  lineBells: string[];
   /** Price alert levels painted at the last base frame, with their y in CSS px of the chart. */
   alertLevels: { id: string; y: number }[];
   /** Centre of the "+" at the crosshair price at the last overlay frame, in CSS px of the chart; null when not shown. */
@@ -84,6 +86,7 @@ export function enableChartDebug(): void {
     replayHandles: null,
     replayClosed: 0,
     alertLevels: [],
+    lineBells: [],
     plusButton: null,
   };
   (window as unknown as { __sandchartDebug: ChartDebug }).__sandchartDebug = debug;

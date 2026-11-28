@@ -1,4 +1,5 @@
 import type { Anchor, Drawing, DrawingBody, DrawingStyle, PositionOutcome } from "../../backend/types";
+import { BELL_TAG, paintBellTag } from "../alerts";
 import { chartDebug } from "../debug";
 import type { ChartTheme } from "../theme";
 import type { Coords } from "./geometry";
@@ -90,6 +91,31 @@ export interface MenuEdit {
 
 /** A context menu item, or close it (null). */
 export type MenuAction = "lock" | "unlock" | "hide" | "remove" | "settings" | null;
+
+/**
+ * Where a line's bell tag goes, CSS px of the price plot: a horizontal line's at the price
+ * axis; a trend line's at its right end, or at the axis when it reaches it. Null off the plot.
+ */
+export function bellAt(body: DrawingBody, c: Coords): { x: number; y: number } | null {
+  let x: number;
+  let y: number;
+  if (body.kind === "hline") {
+    x = c.plotW;
+    y = c.y(body.p);
+  } else if (body.kind === "trend") {
+    const [l, r] = body.a.t <= body.b.t ? [body.a, body.b] : [body.b, body.a];
+    const x0 = c.x(l.t);
+    const y0 = c.y(l.p);
+    x = c.x(r.t);
+    y = c.y(r.p);
+    // Past the plot's right edge (or extended there) it meets the axis.
+    if (x !== x0 && (body.extendRight || x > c.plotW)) {
+      y = y0 + ((y - y0) * (c.plotW - x0)) / (x - x0);
+      x = c.plotW;
+    }
+  } else return null;
+  return x > 0 && x <= c.plotW && y >= 0 && y <= c.priceH ? { x, y } : null;
+}
 
 /** What the layer needs from the chart. */
 export interface LayerHost {
@@ -191,6 +217,9 @@ export class DrawingLayer {
   private hiddenAll = false;
   /** In a replay, the cut (close time of the last revealed base bar): a drawing anchored only at or after it is not shown. */
   private cut: number | null = null;
+
+  /** Drawings with an alert (see `setAlerted`). */
+  private alerted: ReadonlySet<string> = new Set();
 
   constructor(private readonly host: LayerHost) {
     this.state = new DrawingState({
@@ -517,9 +546,34 @@ export class DrawingLayer {
         const tool = this.visibleTool(d);
         if (tool?.axisPrices && !isDragged(d.id)) for (const p of tool.axisPrices(d.body)) tag(p, color(theme, d.style));
       }
+      this.paintBells(ctx, c, dpr, theme, isDragged);
     }
     const debug = chartDebug();
     if (debug) debug.drawingsPainted = painted;
+  }
+
+  /** Lines with an alert get a bell tag where they meet the price axis, or at their right end. */
+  private paintBells(ctx: CanvasRenderingContext2D, c: Coords, dpr: number, theme: ChartTheme, isDragged: (id: string) => boolean): void {
+    const debug = chartDebug();
+    if (debug) debug.lineBells = [];
+    if (this.alerted.size === 0) return;
+    ctx.save();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    for (const id of this.alerted) {
+      const d = this.state.byId(id);
+      if (!d || isDragged(id) || !this.visibleTool(d)) continue;
+      const at = bellAt(d.body, c);
+      if (!at) continue;
+      paintBellTag(ctx, Math.min(at.x, c.plotW) - BELL_TAG, at.y, theme);
+      debug?.lineBells.push(id);
+    }
+    ctx.restore();
+  }
+
+  /** Ids of the drawings that have an alert: they show a bell tag. */
+  setAlerted(ids: ReadonlySet<string>): void {
+    this.alerted = ids;
+    this.host.invalidate();
   }
 
   /** Hover halo, handles, and the drawing being dragged or placed, on the overlay. */
