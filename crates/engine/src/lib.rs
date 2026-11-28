@@ -216,7 +216,8 @@ impl Engine {
     /// Like [`Engine::open`] for a second process next to the app on the same data folder,
     /// such as the MCP server: it reads and writes the same database and loads the same
     /// indicators, but never deletes module files or prunes the compiled-module cache,
-    /// because the app may be installing a module at that moment. It does not need
+    /// because the app may be installing a module at that moment. A database an older app
+    /// left at an older schema version is refused, not upgraded. It does not need
     /// [`Engine::run_alerts`]: the app evaluates the alerts.
     pub fn open_secondary(
         data_dir: &Path,
@@ -238,7 +239,15 @@ impl Engine {
         runtime: Result<Runtime, String>,
         housekeeping: bool,
     ) -> Result<Engine, EngineError> {
-        let store = Arc::new(Mutex::new(Store::open(&data_dir.join("sandchart.db"))?));
+        let path = data_dir.join("sandchart.db");
+        // A second process never upgrades the app's database: an older app could then no
+        // longer open it.
+        let store = if housekeeping {
+            Store::open(&path)?
+        } else {
+            Store::open_existing(&path)?
+        };
+        let store = Arc::new(Mutex::new(store));
         let indicators =
             indicators::Service::start(data_dir, runtime, Arc::clone(&store), housekeeping);
         let (connection, _) = watch::channel(ConnectionState::Connecting);

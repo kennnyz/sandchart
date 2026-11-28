@@ -19,6 +19,11 @@ pub enum StoreError {
     Sqlite(#[from] rusqlite::Error),
     #[error("database schema version {found} is newer than supported version {supported}")]
     SchemaTooNew { found: u32, supported: u32 },
+    #[error(
+        "database schema version {found} is older than this program's version {supported}; \
+         update the Sandchart app first and start it once, so it upgrades its own database"
+    )]
+    SchemaTooOld { found: u32, supported: u32 },
     #[error("limit {0} does not fit the database integer range")]
     LimitTooLarge(usize),
     #[error("a stored drawing cannot be read: {0}")]
@@ -114,21 +119,33 @@ fn instrument_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Instrument> 
 impl Store {
     /// Opens (creating if needed) the database at `path` and applies pending migrations.
     pub fn open(path: &Path) -> Result<Store, StoreError> {
+        Self::open_file(path, true)
+    }
+
+    /// Like [`Store::open`] for a second program next to the app (the MCP server): a new
+    /// file is set up, but an existing one at an older schema version is refused with
+    /// [`StoreError::SchemaTooOld`], so a newer server never upgrades the database of an
+    /// older app, which could then no longer open it.
+    pub fn open_existing(path: &Path) -> Result<Store, StoreError> {
+        Self::open_file(path, false)
+    }
+
+    fn open_file(path: &Path, upgrade: bool) -> Result<Store, StoreError> {
         let conn = Connection::open(path)?;
         // Before anything that may need a lock, switching to WAL included.
         conn.busy_timeout(BUSY_TIMEOUT)?;
         conn.execute_batch("PRAGMA journal_mode = WAL;")?;
-        Self::init(conn)
+        Self::init(conn, upgrade)
     }
 
     /// Opens a private in-memory database with the latest schema.
     pub fn open_in_memory() -> Result<Store, StoreError> {
-        Self::init(Connection::open_in_memory()?)
+        Self::init(Connection::open_in_memory()?, true)
     }
 
-    fn init(mut conn: Connection) -> Result<Store, StoreError> {
+    fn init(mut conn: Connection, upgrade: bool) -> Result<Store, StoreError> {
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;
-        migrations::up(&mut conn)?;
+        migrations::up(&mut conn, upgrade)?;
         Ok(Store { conn })
     }
 

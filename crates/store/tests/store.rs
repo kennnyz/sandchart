@@ -807,3 +807,31 @@ fn data_version_changes_only_with_another_connections_commits() {
     assert_ne!(v1, v0);
     assert_eq!(app.data_version().unwrap(), v1);
 }
+
+#[test]
+fn a_second_process_never_migrates_an_older_apps_database() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sandchart.db");
+    Store::open(&path).unwrap().migrate_down_to(3).unwrap();
+    let err = Store::open_existing(&path).err().expect("refused");
+    assert!(
+        matches!(err, StoreError::SchemaTooOld { found: 3, supported: 4 }),
+        "{err:?}"
+    );
+    assert_contains_text(&err.to_string(), "update the Sandchart app first");
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let version: u32 = conn
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 3, "left as it was");
+
+    // A brand-new file is set up, and one at the latest version opens.
+    let fresh = dir.path().join("new.db");
+    Store::open_existing(&fresh).unwrap();
+    Store::open(&path).unwrap();
+    Store::open_existing(&path).unwrap();
+}
+
+fn assert_contains_text(haystack: &str, needle: &str) {
+    assert!(haystack.contains(needle), "{needle:?} not in {haystack:?}");
+}
