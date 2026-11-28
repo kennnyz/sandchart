@@ -367,6 +367,52 @@ describe("replay controller", () => {
     expect(c.error).toBeNull();
   });
 
+  /** `method` of the backend held until `release()`: the call is in flight meanwhile. */
+  function hold<K extends "replayState" | "replaySetBase" | "replayStep">(backend: Awaited<ReturnType<typeof setup>>["backend"], method: K) {
+    const real = (backend[method] as (...a: unknown[]) => Promise<unknown>).bind(backend);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const spy = vi.spyOn(backend, method).mockImplementation((async (...args: unknown[]) => {
+      await gate;
+      return real(...args);
+    }) as never);
+    return { spy, release: () => release() };
+  }
+
+  it("another pair picked while a step is on its way: off at once, and the old bars never reach the new chart", async () => {
+    const { c, backend, feed } = await started();
+    const appends = vi.spyOn(feed, "append");
+    const held = hold(backend, "replayState");
+    const step = c.step();
+    // The chart is told to open another pair now; the replay must be gone before it loads.
+    const exit = c.exit(false);
+    expect(c.phase).toBe("off");
+    expect(c.view).toBeNull();
+    expect(c.replays(id)).toBe(false);
+    held.release();
+    await Promise.all([step, exit]);
+    expect(appends).not.toHaveBeenCalled();
+    expect(feed.shows).toBe(1);
+    expect(c.view).toBeNull();
+    expect(c.error).toBeNull();
+    await expect(backend.replayState("1h", 0, 0)).rejects.toMatchObject({ message: "no replay is open" });
+  });
+
+  it("another pair picked during a timeframe switch or a re-base shows nothing of the old one", async () => {
+    for (const method of ["replayState", "replaySetBase"] as const) {
+      const { c, backend, feed } = await started();
+      const held = hold(backend, method);
+      const switched = method === "replayState" ? c.setTimeframe("4h") : c.setBase("15m");
+      const exit = c.exit(false);
+      held.release();
+      await Promise.all([switched, exit]);
+      expect(feed.shows).toBe(1);
+      expect(c.phase).toBe("off");
+      expect(c.view).toBeNull();
+      expect(c.error).toBeNull();
+    }
+  });
+
   it("exits without a reload when the user opened another chart, and picking just cancels", async () => {
     const { c, feed } = await started();
     await c.exit(false);

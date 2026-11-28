@@ -191,8 +191,10 @@ export class ReplayController {
   private feed: ReplayFeed | null = null;
   private switchTo: ((id: InstrumentId, tf: TimeframeCode) => void) | null = null;
   private queue: Promise<void> = Promise.resolve();
-  /** Bumped by cancelling a pick and by exit: a start in flight from before is stale. */
+  /** Bumped by cancelling a pick, by exit and by a new pick: a job in flight from before is stale. */
   private generation = 0;
+  /** The generation the running job was queued in; it shows nothing once that is over. */
+  private jobGeneration = 0;
   /** A start is in flight; another click starts nothing more. */
   private starting = false;
   /** Steps queued or running. */
@@ -337,7 +339,8 @@ export class ReplayController {
       }
       v = this.view;
       if (this.phase !== "on" || !v) return;
-      this.show(await this.backend.replayState(v.tf, 0, 0));
+      const st = await this.backend.replayState(v.tf, 0, 0);
+      if (this.phase === "on") this.show(st);
     });
   }
 
@@ -355,6 +358,7 @@ export class ReplayController {
       try {
         st = tf !== v.base && buildsFrom(v.base, tf) ? await this.backend.replaySetBase(tf) : await this.backend.replayState(tf, 0, 0);
       } catch (e) {
+        if (this.stale()) return;
         this.switchTo?.(v.instrument.id, v.tf);
         throw e;
       }
@@ -468,7 +472,6 @@ export class ReplayController {
     this.pause();
     return this.run(async () => {
       const st = await this.backend.replayOpen(bytes);
-      if (this.phase === "picking") this.phase = "off";
       this.cursor = 0;
       this.phase = "on";
       this.show(st);
@@ -489,12 +492,10 @@ export class ReplayController {
       return Promise.resolve();
     }
     if (this.phase === "off") return Promise.resolve();
+    // Off at once: a chart opened right after this call must not get bars from a job still
+    // on its way (each one checks the generation before it shows anything).
+    this.drop("off");
     return this.run(async () => {
-      this.phase = "off";
-      this.view = null;
-      this.cursor = 0;
-      this.closed = [];
-      this.changed();
       try {
         await this.backend.replayExit();
       } finally {
@@ -503,18 +504,28 @@ export class ReplayController {
     });
   }
 
+  /** Forgets the session at once and moves to `phase`. */
+  private drop(phase: ReplayPhase): void {
+    this.phase = phase;
+    this.view = null;
+    this.cursor = 0;
+    this.closed = [];
+    this.changed();
+  }
+
+  /** The running job was queued before the session it belongs to ended. */
+  private stale(): boolean {
+    return this.jobGeneration !== this.generation;
+  }
+
   /** Ends the engine's session and shows the live chart to pick a new start on. */
   private repick(): Promise<void> {
     this.pause();
     this.generation++;
     this.confirming = false;
+    if (this.phase !== "on") return Promise.resolve();
+    this.drop("picking");
     return this.run(async () => {
-      if (this.phase !== "on") return;
-      this.phase = "picking";
-      this.view = null;
-      this.cursor = 0;
-      this.closed = [];
-      this.changed();
       try {
         await this.backend.replayExit();
       } finally {
@@ -546,12 +557,14 @@ export class ReplayController {
   }
 
   private async sync(): Promise<void> {
-    const tf = this.view!.tf;
+    if (this.phase !== "on" || !this.view) return;
+    const tf = this.view.tf;
     const st = await this.backend.replayState(tf, this.cursor, this.closed.length);
-    if (this.phase !== "on") return;
+    if (this.phase !== "on" || this.stale()) return;
     if (st.from !== this.cursor) {
       // Not where the chart is: show everything again.
       const all = await this.backend.replayState(tf, 0, 0);
+      if (this.phase !== "on") return;
       this.cursor = 0;
       this.show(all);
       return;
@@ -563,6 +576,7 @@ export class ReplayController {
   }
 
   private show(st: ReplayState): void {
+    if (this.stale()) return;
     this.feed?.show(st);
     this.view = null;
     this.closed = [];
@@ -613,10 +627,14 @@ export class ReplayController {
   /** Runs `job` after every earlier one; a failure keeps the engine's message and stops Play. */
   private run(job: () => Promise<void>, onError?: () => void): Promise<void> {
     this.error = null;
+    const generation = this.generation;
     const next = this.queue.then(async () => {
+      this.jobGeneration = generation;
       try {
         await job();
       } catch (e) {
+        // The session it was for has ended: its failure is no news.
+        if (this.stale()) return;
         this.pause();
         this.error = toProblem(e).message;
         onError?.();
