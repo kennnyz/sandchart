@@ -16,8 +16,23 @@ struct Case {
 }
 
 #[derive(Deserialize)]
+struct Split {
+    name: String,
+    base: String,
+    lower: String,
+    candle: [i64; 6],
+    expect: Vec<[i64; 6]>,
+}
+
+#[derive(Deserialize)]
+struct Rebase {
+    splits: Vec<Split>,
+}
+
+#[derive(Deserialize)]
 struct Fixture {
     aggregates: Vec<Case>,
+    rebase: Rebase,
 }
 
 fn candles(rows: &[[i64; 6]]) -> Vec<Candle> {
@@ -48,6 +63,18 @@ fn aggregate_matches_the_fixture() {
             (None, Some(msg)) => assert_eq!(got.unwrap_err(), *msg, "{}", c.name),
             _ => panic!("{}: needs exactly one of expect and error", c.name),
         }
+    }
+}
+
+/// The browser mock splits a candle into lower ones on a re-base (`mockSplit`); the
+/// fixture's splits must aggregate back to exactly that candle here.
+#[test]
+fn fixture_splits_aggregate_back_to_their_candle() {
+    let fixture: Fixture = serde_json::from_str(include_str!("fixtures/replay.json")).unwrap();
+    assert!(fixture.rebase.splits.len() >= 2);
+    for c in &fixture.rebase.splits {
+        let got = aggregate(&candles(&c.expect), tf(&c.lower), tf(&c.base)).unwrap();
+        assert_eq!(got, candles(&[c.candle]), "{}", c.name);
     }
 }
 

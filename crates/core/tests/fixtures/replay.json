@@ -1091,5 +1091,102 @@
         "stats": {"count": 1, "wins": 1, "losses": 0, "winRate": 1, "totalR": 1, "averageR": 1, "profitFactor": null, "maxDrawdownR": 0, "longestLosingStreak": 0}
       }
     }
-  ]
+  ],
+  "rebase": {
+    "about": "higher: what a re-base to a higher timeframe builds from the current candles (engine higher_candles, mock mockHigher). splits: the mock's stand-in for lower candles (mockSplit), which aggregates back to the candle (Rust aggregate). Computed by hand.",
+    "higher": [
+      {
+        "name": "15m to 1h: the hour the candles start inside and the hour they end inside are left out",
+        "base": "15m",
+        "tf": "1h",
+        "candles": [
+          [1795753800000, 100, 105, 99, 104, 1],
+          [1795754700000, 104, 106, 103, 105, 1],
+          [1795755600000, 105, 110, 104, 108, 2],
+          [1795756500000, 108, 109, 101, 102, 3],
+          [1795757400000, 102, 104, 100, 103, 4],
+          [1795758300000, 103, 107, 102, 106, 5],
+          [1795759200000, 106, 108, 105, 107, 1],
+          [1795760100000, 107, 109, 106, 108, 1]
+        ],
+        "expect": [
+          [1795755600000, 105, 110, 100, 106, 14]
+        ]
+      },
+      {
+        "name": "1h to 4h: whole buckets at both ends stay, a missing hour inside one is a gap, not a cut",
+        "base": "1h",
+        "tf": "4h",
+        "candles": [
+          [1795752000000, 100, 102, 99, 101, 1],
+          [1795755600000, 101, 103, 100, 102, 1],
+          [1795759200000, 102, 104, 98, 103, 1],
+          [1795762800000, 103, 105, 102, 104, 1],
+          [1795766400000, 104, 106, 103, 105, 2],
+          [1795773600000, 105, 109, 104, 108, 2],
+          [1795777200000, 108, 110, 107, 109, 2]
+        ],
+        "expect": [
+          [1795752000000, 100, 105, 98, 104, 4],
+          [1795766400000, 104, 110, 103, 109, 6]
+        ]
+      },
+      {
+        "name": "1d to 1w: a Sunday before the first Monday and a lone Monday after the last Sunday are left out",
+        "base": "1d",
+        "tf": "1w",
+        "candles": [
+          [1703980800000, 90, 95, 89, 94, 1],
+          [1704067200000, 100, 101, 99, 100, 1],
+          [1704153600000, 100, 103, 98, 102, 1],
+          [1704240000000, 102, 104, 101, 103, 1],
+          [1704326400000, 103, 105, 97, 104, 1],
+          [1704412800000, 104, 106, 103, 105, 1],
+          [1704499200000, 105, 108, 104, 107, 1],
+          [1704585600000, 107, 109, 106, 108, 1],
+          [1704672000000, 108, 110, 107, 109, 1]
+        ],
+        "expect": [
+          [1704067200000, 100, 109, 97, 108, 7]
+        ]
+      },
+      {
+        "name": "1h to 3d is refused like the aggregation",
+        "base": "1h",
+        "tf": "3d",
+        "candles": [
+          [1795752000000, 100, 102, 99, 101, 1]
+        ],
+        "error": "3d candles cannot be built from 1h candles"
+      }
+    ],
+    "splits": [
+      {
+        "name": "an hour into quarters: the high in the first, the low in the second, the close in the last, the volume's rest in the last",
+        "base": "1h",
+        "lower": "15m",
+        "candle": [1795752000000, 100, 110, 90, 105, 10],
+        "expect": [
+          [1795752000000, 100, 110, 100, 105, 2],
+          [1795752900000, 105, 105, 90, 105, 2],
+          [1795753800000, 105, 105, 105, 105, 2],
+          [1795754700000, 105, 105, 105, 105, 4]
+        ]
+      },
+      {
+        "name": "a day into 4h candles",
+        "base": "1d",
+        "lower": "4h",
+        "candle": [1704067200000, 50, 60, 40, 45, 7],
+        "expect": [
+          [1704067200000, 50, 60, 45, 45, 1],
+          [1704081600000, 45, 45, 40, 45, 1],
+          [1704096000000, 45, 45, 45, 45, 1],
+          [1704110400000, 45, 45, 45, 45, 1],
+          [1704124800000, 45, 45, 45, 45, 1],
+          [1704139200000, 45, 45, 45, 45, 2]
+        ]
+      }
+    ]
+  }
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fixture from "../../../../crates/core/tests/fixtures/replay.json";
 import { createMockBackend } from "./mock";
-import { type MockCandle, mockAggregate, mockBucketStart, mockCandleHash, mockReadReplay, mockRevealed, mockSimulate, mockSimulateFile, mockSplit } from "./mockReplay";
+import { type MockCandle, mockAggregate, mockBucketStart, mockCandleHash, mockHigher, mockReadReplay, mockRevealed, mockSimulate, mockSimulateFile, mockSplit } from "./mockReplay";
 import type { CandleColumns, LiveEvent, ReplayCommand, ReplayStats, ReplayTrade, TimeframeCode } from "./types";
 
 const id = { source: "mock", symbol: "BTCUSDT" };
@@ -71,6 +71,18 @@ describe("mock replay (TEST-ONLY copy of sandchart_core::replay)", () => {
         expect(mockAggregate(mockRevealed(base, candles, ch.cut), base, v.tf as TimeframeCode), `${v.name} at ${ch.cut}`).toEqual(rows6(ch.candles));
       }
       expectSim(mockSimulate(base, candles, v.start, v.cut, v.commands as ReplayCommand[]), v.expect as Sim, v.name);
+    }
+  });
+
+  it("re-bases up like the engine and splits candles that Rust aggregates back", () => {
+    for (const c of fixture.rebase.higher) {
+      const run = () => mockHigher(rows6(c.candles), c.base as TimeframeCode, c.tf as TimeframeCode);
+      if ("error" in c) expect(run, c.name).toThrow(c.error);
+      else expect(run(), c.name).toEqual(rows6(c.expect!));
+    }
+    for (const c of fixture.rebase.splits) {
+      const [candle] = rows6([c.candle]);
+      expect(mockSplit(candle!, c.base as TimeframeCode, c.lower as TimeframeCode), c.name).toEqual(rows6(c.expect));
     }
   });
 

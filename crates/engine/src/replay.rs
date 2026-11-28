@@ -578,7 +578,16 @@ impl Engine {
         let candles = if snap.base.builds_from(base) {
             self.lower_candles(&snap, base).await?
         } else if base.builds_from(snap.base) {
-            higher_candles(&snap, base)?
+            // On the new base's boundary only: a snap down would hide candles already seen,
+            // a snap up would show unseen ones.
+            if base.bucket_start(snap.cut) != snap.cut {
+                return Err(EngineError::Replay(format!(
+                    "the replay is at {}, inside a {new} candle; step to {} first, where it closes",
+                    snap.cut,
+                    base.bucket_end(snap.cut)
+                )));
+            }
+            higher_candles(&snap.candles, snap.base, base).map_err(EngineError::Replay)?
         } else {
             return Err(EngineError::Replay(format!(
                 "a replay of {old} candles cannot step {new} candles: their boundaries do not line up"
@@ -839,28 +848,17 @@ impl Engine {
     }
 }
 
-/// Candles of the higher `base` for a re-base, built from the current ones; a bucket the
-/// current candles cover only in part (at either end) is left out. Needs the cut on a
-/// `base` boundary: a snap down would hide candles already seen, a snap up would show
-/// unseen ones.
-fn higher_candles(snap: &Snapshot, base: Timeframe) -> Result<Vec<Candle>, EngineError> {
-    if base.bucket_start(snap.cut) != snap.cut {
-        return Err(EngineError::Replay(format!(
-            "the replay is at {}, inside a {} candle; step to {} first, where it closes",
-            snap.cut,
-            base.code(),
-            base.bucket_end(snap.cut)
-        )));
-    }
-    let src = snap.candles.as_slice();
-    let mut out = aggregate(src, snap.base, base).map_err(EngineError::Replay)?;
+/// Candles of the higher `base` for a re-base, built from the `old` ones; a bucket they
+/// cover only in part (at either end) is left out.
+fn higher_candles(src: &[Candle], old: Timeframe, base: Timeframe) -> Result<Vec<Candle>, String> {
+    let mut out = aggregate(src, old, base)?;
     if let (Some(f), Some(c)) = (out.first(), src.first())
         && c.open_time > f.open_time
     {
         out.remove(0);
     }
     if let (Some(l), Some(c)) = (out.last(), src.last())
-        && base.bucket_end(l.open_time) > snap.base.close_time(c.open_time)
+        && base.bucket_end(l.open_time) > old.close_time(c.open_time)
     {
         out.pop();
     }
@@ -881,9 +879,49 @@ fn file_name(symbol: &str, tf: Timeframe) -> String {
 
 #[cfg(test)]
 mod tests {
-    use sandchart_core::Timeframe;
+    use sandchart_core::{Candle, Timeframe};
 
-    use super::file_name;
+    use super::{file_name, higher_candles};
+
+    /// The re-base cases of the replay fixture, which the browser mock's `mockHigher` is
+    /// checked against too.
+    #[test]
+    fn higher_candles_match_the_fixture() {
+        #[derive(serde::Deserialize)]
+        struct Case {
+            name: String,
+            base: String,
+            tf: String,
+            candles: Vec<[i64; 6]>,
+            expect: Option<Vec<[i64; 6]>>,
+            error: Option<String>,
+        }
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../core/tests/fixtures/replay.json")).unwrap();
+        let cases: Vec<Case> = serde_json::from_value(fixture["rebase"]["higher"].clone()).unwrap();
+        assert!(cases.len() >= 3);
+        let rows = |r: &[[i64; 6]]| -> Vec<Candle> {
+            r.iter()
+                .map(|&[open_time, open, high, low, close, volume]| Candle {
+                    open_time,
+                    open,
+                    high,
+                    low,
+                    close,
+                    volume,
+                })
+                .collect()
+        };
+        let tf = |c: &str| Timeframe::from_code(c).unwrap();
+        for c in &cases {
+            let got = higher_candles(&rows(&c.candles), tf(&c.base), tf(&c.tf));
+            match (&c.expect, &c.error) {
+                (Some(want), None) => assert_eq!(got.unwrap(), rows(want), "{}", c.name),
+                (None, Some(msg)) => assert_eq!(got.unwrap_err(), *msg, "{}", c.name),
+                _ => panic!("{}: needs exactly one of expect and error", c.name),
+            }
+        }
+    }
 
     #[test]
     fn file_names_keep_only_safe_characters() {
