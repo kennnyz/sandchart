@@ -716,3 +716,61 @@ async fn instances_of_a_module_that_fails_to_load_survive_a_save() {
     assert_eq!(ids, ["builtin.sma", "test.echo"]);
     assert_eq!(got[0].params[0], ("period".to_string(), ParamValue::Int(3)));
 }
+
+#[tokio::test]
+async fn a_replay_computes_over_its_revealed_bars_only() {
+    let f = fixture().await;
+    // Ten hourly bars, closes 100.00 .. 109.00; the newest is bar 9.
+    let candles: Vec<Candle> = (0..10).map(|i| candle(9 - i, 10_000 + 100 * i)).collect();
+    f.cache_candles("BTCUSDT", candles).await;
+    f.install("ok_echo").await;
+    f.engine
+        .set_chart_indicators(vec![sma(2), echo()])
+        .await
+        .unwrap();
+    let full = f.compute(i64::MIN).await;
+
+    let start = NOW_OPEN - 5 * H; // bar 4, close 104.00
+    f.engine
+        .replay_start(&id("BTCUSDT"), TF, start)
+        .await
+        .unwrap();
+    let during = f.compute(i64::MIN).await;
+    let c = result(&during, "sma").result.as_ref().unwrap();
+    assert_eq!(c.last_time, start, "no bar after the replay's current one");
+    assert!(same(
+        &values(result(&during, "echo")),
+        &[100.0, 101.0, 102.0, 103.0, 104.0]
+    ));
+    // The same values as over all bars, cut at the current one (SMA does not repaint).
+    assert!(same(
+        &values(result(&during, "sma")),
+        &values(result(&full, "sma"))[..5]
+    ));
+
+    f.engine.replay_step(2).unwrap();
+    let stepped = f.compute(i64::MIN).await;
+    let c = result(&stepped, "echo").result.as_ref().unwrap();
+    assert_eq!(
+        c.last_time,
+        start + 2 * H,
+        "a step reveals new bars to indicators"
+    );
+
+    // Another timeframe or instrument is not replayed and computes over its cache.
+    f.cache_candles("ETHUSDT", three()).await;
+    let eth = f.compute_for("ETHUSDT", i64::MIN).await;
+    assert_eq!(values(result(&eth, "echo")), [100.0, 101.0, 102.0]);
+
+    f.engine.replay_exit();
+    let after = f.compute(i64::MIN).await;
+    let c = result(&after, "echo").result.as_ref().unwrap();
+    assert_eq!(
+        c.last_time, NOW_OPEN,
+        "after the replay every cached bar counts"
+    );
+    assert!(same(
+        &values(result(&after, "sma")),
+        &values(result(&full, "sma"))
+    ));
+}

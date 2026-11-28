@@ -743,6 +743,8 @@ impl Engine {
 
     /// Computes every visible chart indicator over all cached bars of `(id, tf)` (the
     /// newest [`MAX_INDICATOR_BARS`]) and returns the bars with `open_time >= from_time`.
+    /// While a replay of `(id, tf)` is open, it computes over the replay's revealed bars
+    /// instead, so no result depends on a bar after the current one.
     /// One failing instance gets its error as its result; the others still compute.
     pub async fn compute_indicators(
         &self,
@@ -758,13 +760,24 @@ impl Engine {
             Ok((s.indicator_instances()?, s.instrument(&key)?))
         })
         .await?;
-        let inst = inst.ok_or_else(|| EngineError::UnknownInstrument(id.clone()))?;
-        let shared = self.shared.clone();
-        let (bars, generation, read) =
-            spawn_blocking(move || Ok(cached_bars(&shared, &inst, tf)?)).await?;
-        if read {
-            svc.store_reads.fetch_add(1, Ordering::Relaxed);
-        }
+        let (bars, generation) = match self.shared.replay_bars(id, tf, MAX_INDICATOR_BARS) {
+            // A replay computes over its revealed bars only, never the cache; a fresh
+            // generation keeps its results apart from the cache's in the memo.
+            Some((inst, candles)) => (
+                Arc::new(to_bars(&candles, &inst)),
+                self.shared.bar_state().next_generation(),
+            ),
+            None => {
+                let inst = inst.ok_or_else(|| EngineError::UnknownInstrument(id.clone()))?;
+                let shared = self.shared.clone();
+                let (bars, generation, read) =
+                    spawn_blocking(move || Ok(cached_bars(&shared, &inst, tf)?)).await?;
+                if read {
+                    svc.store_reads.fetch_add(1, Ordering::Relaxed);
+                }
+                (bars, generation)
+            }
+        };
 
         let visible: Vec<(Instance, Loaded)> = resolve(stored, svc)
             .into_iter()

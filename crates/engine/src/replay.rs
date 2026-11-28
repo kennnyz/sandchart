@@ -67,6 +67,24 @@ impl crate::Shared {
         self.replay.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// The revealed bars (the newest `max`, up to the current one) and the instrument of
+    /// the open replay, if it replays `(id, tf)`. Indicators compute over these only, so
+    /// they never see a bar the UI has not been shown (ADR 0005, decision 5).
+    pub(crate) fn replay_bars(
+        &self,
+        id: &InstrumentId,
+        tf: Timeframe,
+        max: usize,
+    ) -> Option<(Instrument, Vec<Candle>)> {
+        let guard = self.session();
+        let s = guard
+            .as_ref()
+            .filter(|s| s.instrument.id == *id && s.tf == tf)?;
+        let end = s.current as usize + 1;
+        let revealed = &s.candles[end.saturating_sub(max)..end];
+        Some((s.instrument.clone(), revealed.to_vec()))
+    }
+
     /// Live events of this instrument are held back while it is replayed.
     pub(crate) fn replaying(&self, id: &InstrumentId) -> bool {
         self.session()
