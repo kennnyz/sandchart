@@ -182,8 +182,8 @@ export class DrawingLayer {
   private menuEdit: { ids: string[]; at: Point } | null = null;
   /** Hide all: nothing is painted or hit; the drawings themselves are unchanged. */
   private hiddenAll = false;
-  /** In a replay, the open time of the last revealed bar: a drawing anchored only later is not shown. */
-  private cutoff: number | null = null;
+  /** In a replay, the cut (close time of the last revealed base bar): a drawing anchored only at or after it is not shown. */
+  private cut: number | null = null;
 
   constructor(private readonly host: LayerHost) {
     this.state = new DrawingState({
@@ -365,15 +365,16 @@ export class DrawingLayer {
   }
 
   /**
-   * While a replay is on: the open time of its last revealed bar. A drawing whose earliest anchor
-   * is after it would give a later bar away, so it is neither painted nor hit until a step reveals
-   * that bar (null: every drawing). Drops the selection of a drawing it hides.
+   * While a replay is on: its cut, the close time of the last revealed bar of the update
+   * interval (inside a forming bar of a higher timeframe, not that bar's open). A drawing whose
+   * earliest anchor is at or after it would give a later bar away, so it is neither painted nor
+   * hit until a step reveals that time (null: every drawing). Drops the selection of a drawing it hides.
    */
-  setCutoff(t: number | null): void {
-    if (t === this.cutoff) return;
-    this.cutoff = t;
+  setCut(t: number | null): void {
+    if (t === this.cut) return;
+    this.cut = t;
     const s = this.state;
-    const kept = t === null ? s.selection : s.selection.filter((id) => earliestTime(s.byId(id)!.body) <= t);
+    const kept = t === null ? s.selection : s.selection.filter((id) => earliestTime(s.byId(id)!.body) < t);
     if (kept.length !== s.selection.length) {
       this.abort();
       this.closeText();
@@ -891,7 +892,7 @@ export class DrawingLayer {
   /** The tool of a drawing that is shown and inside the visible times. */
   private visibleTool(d: Drawing): ToolDef | undefined {
     if (this.hiddenAll || d.hidden) return undefined;
-    if (this.cutoff !== null && earliestTime(d.body) > this.cutoff) return undefined;
+    if (this.cut !== null && earliestTime(d.body) >= this.cut) return undefined;
     const tool = toolFor(d.body.kind);
     if (!tool) return undefined;
     const [lo, hi] = tool.timeSpan(d.body);

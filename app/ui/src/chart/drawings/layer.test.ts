@@ -194,8 +194,8 @@ describe("geometry cache", () => {
   });
 });
 
-describe("replay cutoff", () => {
-  it("neither paints nor hits a drawing whose earliest anchor is after the cutoff", () => {
+describe("replay cut", () => {
+  it("neither paints nor hits a drawing whose earliest anchor is at or after the cut", () => {
     const l = layer();
     const c = coords();
     const at = (i: number) => i * STEP;
@@ -213,7 +213,9 @@ describe("replay cutoff", () => {
     );
     const position = drawing({ kind: "position", side: "long", entry: { t: at(55), p: 5_000 }, stop: 4_000, take: 7_000, endT: at(70) }, "pos");
     const level = drawing({ kind: "hline", p: 3_000 }, "level");
-    l.setDrawings([past, later, across, ahead, position, level]);
+    // Inside a forming bar of a higher timeframe: half a bar before the cut is revealed.
+    const inside = drawing({ kind: "trend", a: { t: at(49.5), p: 4_000 }, b: { t: at(49.5) + 1, p: 4_100 }, extendLeft: false, extendRight: false }, "inside");
+    l.setDrawings([past, later, across, ahead, position, level, inside]);
     const note = toolFor("note")!;
     const where = (d: Drawing) => note.layout(d.body, c) as { x: number; y: number };
     const painted = () => {
@@ -223,10 +225,11 @@ describe("replay cutoff", () => {
       spies.forEach((s) => s.mockRestore());
       return n;
     };
-    expect(painted()).toBe(6);
+    expect(painted()).toBe(7);
 
-    l.setCutoff(at(50));
-    expect(painted()).toBe(3);
+    // The cut is the close time of the last revealed bar: bar 49 is revealed, bar 50 is not.
+    l.setCut(at(50));
+    expect(painted()).toBe(4);
     const p = where(past);
     expect(l.pointerDown(p.x, p.y, false)).toBe(true);
     l.pointerUp(p.x, p.y, false);
@@ -237,18 +240,21 @@ describe("replay cutoff", () => {
     l.pointerUp(q.x, q.y, false);
     expect(l.state.selected).toBeNull();
 
-    // A step reveals the bar of the later note and the position's entry.
-    l.setCutoff(at(60));
+    // A drawing anchored exactly at the cut is on the first bar not revealed yet.
+    l.setCut(at(60));
     expect(painted()).toBe(5);
-    l.setCutoff(null);
+    // A step reveals the bar of the later note.
+    l.setCut(at(61));
     expect(painted()).toBe(6);
+    l.setCut(null);
+    expect(painted()).toBe(7);
   });
 
-  it("drops the selection of a drawing the cutoff hides", () => {
+  it("drops the selection of a drawing the cut hides", () => {
     const l = layer();
     l.setDrawings([drawing({ kind: "note", t: 60 * STEP, text: "later" }, "later")]);
     l.state.select("later");
-    l.setCutoff(50 * STEP);
+    l.setCut(60 * STEP);
     expect(l.state.selected).toBeNull();
   });
 });

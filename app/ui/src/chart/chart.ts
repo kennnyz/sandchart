@@ -484,8 +484,8 @@ export class Chart {
     const entering = m !== null && !this.replayOn;
     this.replayOn = m !== null;
     this.replay.set(m);
-    // No drawing anchored after the last revealed bar gives that bar away.
-    this.drawings.setCutoff(m ? m.time : null);
+    // No drawing anchored at or after the cut gives a later bar away.
+    this.drawings.setCut(m ? m.cut : null);
     // Entering a replay on the last bar: leave room for the trade right of the cut. New bars keep it.
     if (entering && this.view.rightIndex >= this.series.count - 1) {
       this.view = { barWidth: this.view.barWidth, rightIndex: this.series.count - 1 + REPLAY_MARGIN_BARS };

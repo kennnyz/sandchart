@@ -178,7 +178,13 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
   const replayView = rp.phase === "on" ? rp.view : null;
   useEffect(() => {
     chart?.setReplay(
-      replayView ? { trades: replayView.trades, time: replayView.time, close: replayView.close, label: t("replay.marker") } : null,
+      replayView ? {
+            trades: replayView.trades,
+            time: replayView.time,
+            close: replayView.close,
+            cut: replayView.cut,
+            label: t("replay.marker"),
+          } : null,
     );
   }, [chart, replayView, lang]);
   useEffect(() => {

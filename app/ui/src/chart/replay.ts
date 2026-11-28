@@ -13,6 +13,8 @@ export interface ReplayMarks {
   /** Open time and close of the last revealed bar. */
   time: number;
   close: number;
+  /** The cut: close time of the last revealed bar of the update interval; nothing at or after it is shown. */
+  cut: number;
   /** The word at the cut ("Replay"). */
   label: string;
 }

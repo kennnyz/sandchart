@@ -15,7 +15,7 @@ const trade = (entryBar: number, reason: ReplayTrade["reason"] = "open"): Replay
   ambiguous: false,
   r: reason === "open" ? 0.1 : -1,
 });
-const marks = (trades: ReplayTrade[], time: number): ReplayMarks => ({ trades, time, close: 101, label: "Replay" });
+const marks = (trades: ReplayTrade[], time: number): ReplayMarks => ({ trades, time, close: 101, cut: time + 1000, label: "Replay" });
 
 describe("replay on the chart", () => {
   it("snaps a picked date to the first bar opening at or after it", () => {

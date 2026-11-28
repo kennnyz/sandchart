@@ -316,6 +316,55 @@ test("replay_hides_drawings_anchored_after_the_revealed_bars", async ({ page }) 
   await expect.poll(async () => (await debug(page)).drawingsPainted).toBe(1);
 });
 
+test("replay_on_a_higher_timeframe_hides_drawings_until_the_cut_passes_them", async ({ page }) => {
+  await openChart(page);
+  const live = await lastBar(page);
+  // A note two hours into a 4h bar, well before the newest bars.
+  const bucket = Math.floor((live - 40 * H) / (4 * H)) * 4 * H;
+  const at = bucket + 2 * H;
+  await page.evaluate((t) => {
+    const d = {
+      id: "inside",
+      instrument: { source: "mock", symbol: "BTCUSDT" },
+      priceScale: 2,
+      body: { kind: "note", t, text: "inside" },
+      style: { color: 0, width: 1, dash: false },
+      locked: false,
+      hidden: false,
+      z: 0,
+      updatedAt: 1,
+    };
+    localStorage.setItem("sandchart.mock.drawings", JSON.stringify([d]));
+  }, at);
+  await page.reload();
+  await expect(page.getByTestId("legend")).toHaveAttribute("data-time", /^\d+$/);
+  await expect.poll(async () => (await debug(page)).drawingsPainted).toBe(1);
+
+  // Stepping 1h up to the start of the note's 4h bar, then showing 4h.
+  await page.getByTestId("replay-button").click();
+  const dayStart = Math.floor((bucket - 24 * H) / (24 * H)) * 24 * H;
+  await page.getByTestId("replay-date").fill(new Date(dayStart).toISOString().slice(0, 10));
+  await expect.poll(() => lastBar(page)).toBe(dayStart);
+  await stepUntil(page, async () => (await lastBar(page)) === bucket - H);
+  await tfButton(page, "4h").click();
+  await expect.poll(() => lastBar(page)).toBe(bucket - 4 * H);
+  await expect(page.getByTestId("replay-interval")).toHaveText("1h");
+  await expect.poll(async () => (await debug(page)).drawingsPainted).toBe(0);
+
+  // The forming 4h bar opens before the note, but the cut has not reached it yet.
+  for (const cut of [bucket + H, bucket + 2 * H]) {
+    await page.keyboard.press("ArrowRight");
+    await expect.poll(() => cutOf(page)).toBe(cut);
+    expect(await lastBar(page)).toBe(bucket);
+    await nextFrame(page);
+    expect((await debug(page)).drawingsPainted).toBe(0);
+  }
+  // One step past it, inside the same forming bar: the note shows.
+  await page.keyboard.press("ArrowRight");
+  await expect.poll(() => cutOf(page)).toBe(bucket + 3 * H);
+  await expect.poll(async () => (await debug(page)).drawingsPainted).toBe(1);
+});
+
 test("replay_hides_the_replayed_pair_quote_in_the_watchlist", async ({ page }) => {
   const plot = await openChart(page);
   const row = (s: string) => page.locator(`[data-testid="watchlist-row"][data-symbol="${s}"]`);
