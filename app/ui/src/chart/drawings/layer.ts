@@ -111,6 +111,8 @@ interface CacheEntry {
   coords: Coords;
   geom: unknown;
   handles: Point[] | null;
+  /** `ToolDef.markers` of the geometry, listed once like the handles. */
+  markers: Point[] | null;
   live: boolean;
 }
 
@@ -493,7 +495,8 @@ export class DrawingLayer {
       if (!d || !tool) continue;
       const g = tool.layout(item.body, c);
       paintOne(ctx, tool, g, d.style, dpr, theme, false);
-      paintHandles(ctx, [...tool.handles(g), ...(tool.markers?.(g) ?? NONE)], color(theme, d.style), theme);
+      paintHandles(ctx, tool.handles(g), color(theme, d.style), theme);
+      if (tool.markers) paintHandles(ctx, tool.markers(g), color(theme, d.style), theme);
       for (const p of tool.axisPrices?.(item.body) ?? []) tags.push([p, color(theme, d.style)]);
     }
     if (debug) debug.selectedHandles = [];
@@ -502,8 +505,9 @@ export class DrawingLayer {
       const tool = d && this.visibleTool(d);
       if (!d || !tool) continue;
       const handles = this.handles(tool, d);
-      const markers = s.isSelected(d.id) && tool.markers ? tool.markers(this.geom(tool, d)) : NONE;
-      paintHandles(ctx, [...handles, ...markers], color(theme, d.style), theme);
+      const markers = s.isSelected(d.id) ? this.markers(tool, d) : NONE;
+      paintHandles(ctx, handles, color(theme, d.style), theme);
+      paintHandles(ctx, markers, color(theme, d.style), theme);
       if (debug && id === s.selected) debug.selectedHandles = [...handles, ...markers];
     }
     if (this.box) paintBox(ctx, boxOf(this.box), theme);
@@ -877,6 +881,14 @@ export class DrawingLayer {
     return e.handles;
   }
 
+  /** The markers of `d` in this frame (none for most tools), listed once per geometry. */
+  private markers(tool: ToolDef, d: Drawing): Point[] {
+    if (!tool.markers) return NONE;
+    const e = this.entry(tool, d);
+    e.markers ??= tool.markers(e.geom);
+    return e.markers;
+  }
+
   private entry(tool: ToolDef, d: Drawing): CacheEntry {
     const c = this.coords!;
     const hit = this.cache.get(d.id);
@@ -889,7 +901,7 @@ export class DrawingLayer {
     }
     c.lastBarRead = false;
     const geom = tool.layout(d.body, c, this.outcomes.get(d.id));
-    const e: CacheEntry = { drawing: d, coords: c, geom, handles: null, live: c.lastBarRead };
+    const e: CacheEntry = { drawing: d, coords: c, geom, handles: null, markers: null, live: c.lastBarRead };
     this.cache.set(d.id, e);
     return e;
   }

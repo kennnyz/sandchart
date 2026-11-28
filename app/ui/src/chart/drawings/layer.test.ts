@@ -417,6 +417,19 @@ describe("hidden drawings", () => {
   });
 });
 
+describe("overlay frames", () => {
+  it("lists a selected brush stroke's end markers once per layout, not every frame", () => {
+    const { l, c, paint } = recording();
+    const stroke = drawing({ kind: "brush", points: [{ t: c.t(100), p: c.p(500) }, { t: c.t(300), p: c.p(400) }] }, "s");
+    l.setDrawings([stroke]);
+    l.state.select("s");
+    paint();
+    const markers = vi.spyOn(toolFor("brush")!, "markers");
+    for (let i = 0; i < 5; i++) l.paintOverlay(ctx, 1, dark, () => {});
+    expect(markers).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("⌘ snapping and handles", () => {
   it("keeps snapping a dragged end bar to bar while ⌘ is held", () => {
     const { l, c, paint } = recording();
