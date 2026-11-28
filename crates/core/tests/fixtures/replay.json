@@ -260,6 +260,60 @@
         ]
       },
       "error": "command 1: no open trade to close"
+    },
+    {
+      "name": "a candle whose low is above its open or close is refused",
+      "file": {
+        "version": 1,
+        "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
+        "timeframe": "1h",
+        "start": 1,
+        "current": 2,
+        "sha256": "6ff705fdcd8ae423bf3e61d53285bff1d6f4e7157db07e60dd85a5ad2f321469",
+        "commands": [],
+        "candles": [
+          [1000, 100, 101, 99, 100, 7],
+          [2000, 100, 102, 101, 101, 7],
+          [3000, 100, 101, 99, 100, 7]
+        ]
+      },
+      "error": "candle 1: low must be at most the open and the close"
+    },
+    {
+      "name": "a candle whose high is below its open or close is refused",
+      "file": {
+        "version": 1,
+        "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
+        "timeframe": "1h",
+        "start": 1,
+        "current": 2,
+        "sha256": "ba0ff08e16eb49624b362be7e3a841f9fe2f703eeea40eea147932f8679bb2ab",
+        "commands": [],
+        "candles": [
+          [1000, 100, 101, 99, 100, 7],
+          [2000, 100, 102, 98, 100, 7],
+          [3000, 100, 101, 99, 102, 7]
+        ]
+      },
+      "error": "candle 2: high must be at least the open and the close"
+    },
+    {
+      "name": "a candle with a negative volume is refused",
+      "file": {
+        "version": 1,
+        "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
+        "timeframe": "1h",
+        "start": 1,
+        "current": 2,
+        "sha256": "31a45096c7a64a118a4d8e40688e5afd60e40ad2713ef7042efd70259fb1c411",
+        "commands": [],
+        "candles": [
+          [1000, 100, 101, 99, 100, -1],
+          [2000, 100, 102, 98, 100, 7],
+          [3000, 100, 101, 99, 100, 7]
+        ]
+      },
+      "error": "candle 0: volume must not be negative"
     }
   ]
 }

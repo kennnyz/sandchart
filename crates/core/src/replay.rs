@@ -531,13 +531,27 @@ impl ReplayFile {
     }
 }
 
-/// Strictly ascending open times and every number inside ±(2^53 - 1).
+/// Strictly ascending open times, every number inside ±(2^53 - 1), low ≤ open, close ≤ high
+/// and a volume that is not negative.
 pub fn check_candles(candles: &[Candle]) -> Result<(), String> {
     for (i, c) in candles.iter().enumerate() {
         for v in [c.open_time, c.open, c.high, c.low, c.close, c.volume] {
             if v.unsigned_abs() > JS_SAFE_MAX.unsigned_abs() {
                 return Err(format!("candle {i}: {v} is outside ±(2^53 - 1)"));
             }
+        }
+        if c.low > c.open.min(c.close) {
+            return Err(format!(
+                "candle {i}: low must be at most the open and the close"
+            ));
+        }
+        if c.high < c.open.max(c.close) {
+            return Err(format!(
+                "candle {i}: high must be at least the open and the close"
+            ));
+        }
+        if c.volume < 0 {
+            return Err(format!("candle {i}: volume must not be negative"));
         }
         if i > 0 && candles[i - 1].open_time >= c.open_time {
             return Err(format!("candle {i}: open times must go up"));
