@@ -22,6 +22,13 @@ interface Stored {
     levels?: number[];
     points?: { t: number; p: number }[];
     extendRight?: boolean;
+    side?: string;
+    entry?: { t: number; p: number };
+    stop?: number;
+    take?: number;
+    endT?: number;
+    t?: number;
+    text?: string;
   };
 }
 
@@ -31,7 +38,9 @@ interface Debug {
   drawingsPainted: number;
   selectedDrawing: string | null;
   hoveredDrawing: string | null;
+  selectedHandles: { x: number; y: number }[];
   ruler: string | null;
+  outcomes: Record<string, string>;
 }
 
 async function openChart(page: Page): Promise<Plot> {
@@ -378,6 +387,170 @@ test("magnet_snaps_a_level_to_a_candle_high", async ({ page }) => {
   // The switch is kept across a reload.
   await page.reload();
   await expect(page.getByTestId("tool-magnet")).toHaveAttribute("aria-pressed", "true");
+});
+
+/** Handles of the selected drawing in page px. */
+async function handles(page: Page, plot: Plot): Promise<[number, number][]> {
+  const d = await debug(page);
+  return d.selectedHandles.map((h) => [Math.round(plot.left + h.x), Math.round(plot.top + h.y)]);
+}
+
+const HOUR = 3_600_000;
+
+test("places_a_long_and_a_short_drags_stop_and_take_and_shows_outcomes", async ({ page }) => {
+  const plot = await openChart(page);
+  const cx = Math.round(plot.left + plot.width / 2);
+  // Low on the plot: the candles after the entry trade above it.
+  const ey = Math.round(plot.top + plot.height * 0.8);
+  const bottom = plot.top + plot.height - 4;
+
+  // Alt+L, one click: the entry, with the default stop, take and length.
+  await page.keyboard.press("Alt+KeyL");
+  await expect(page.getByTestId("tool-long")).toHaveAttribute("aria-pressed", "true");
+  await page.mouse.click(cx - 250, ey);
+  const [long] = await storedCount(page, 1);
+  const lb = long!.body;
+  expect(lb).toMatchObject({ kind: "position", side: "long" });
+  expect(lb.stop!).toBeLessThan(lb.entry!.p);
+  expect(lb.take! - lb.entry!.p).toBe(3 * (lb.entry!.p - lb.stop!));
+  expect(lb.endT! - lb.entry!.t).toBe(20 * HOUR);
+  await expect(page.getByTestId("tool-long")).toHaveAttribute("aria-pressed", "false");
+
+  // Take dragged below the entry stops one tick above it; stop dragged to the bottom.
+  let [stopH, takeH] = await handles(page, plot);
+  await drag(page, takeH!, [takeH![0], ey + 30]);
+  await expect.poll(async () => (await stored(page))[0]!.body.take).toBe(lb.entry!.p + 1);
+  [stopH] = await handles(page, plot);
+  await drag(page, stopH!, [stopH![0], bottom]);
+  await expect.poll(async () => (await stored(page))[0]!.body.stop).toBeLessThan(lb.stop!);
+  await expect.poll(async () => (await debug(page)).outcomes[long!.id]).toBe("take");
+
+  // A short: its stop dragged below the entry stops one tick above it, so the next bars hit it.
+  await page.keyboard.press("Alt+KeyS");
+  await page.mouse.click(cx + 100, ey);
+  const list = await storedCount(page, 2);
+  const short = list.find((d) => d.body.side === "short")!;
+  expect(short.body.stop!).toBeGreaterThan(short.body.entry!.p);
+  expect(short.body.take!).toBeLessThan(short.body.entry!.p);
+  [stopH, takeH] = await handles(page, plot);
+  await drag(page, takeH!, [takeH![0], bottom]);
+  [stopH] = await handles(page, plot);
+  await drag(page, stopH!, [stopH![0], ey + 30]);
+  const shortStop = async () => (await stored(page)).find((d) => d.id === short.id)!.body.stop;
+  await expect.poll(shortStop).toBe(short.body.entry!.p + 1);
+  await expect.poll(async () => (await debug(page)).outcomes[short.id]).toBe("stop");
+
+  // The end handle makes it longer; the outcome is asked for again.
+  const end = (await handles(page, plot))[3]!;
+  await drag(page, end, [end[0] + 60, end[1]]);
+  await expect.poll(async () => (await stored(page)).find((d) => d.id === short.id)!.body.endT).toBeGreaterThan(short.body.endT!);
+  await expect.poll(async () => (await debug(page)).outcomes[short.id]).toBe("stop");
+
+  // Both come back after a reload, with their outcomes.
+  await page.reload();
+  await expect(page.getByTestId("legend")).toHaveAttribute("data-time", /^\d+$/);
+  await expect.poll(async () => (await debug(page)).outcomes).toEqual({ [long!.id]: "take", [short.id]: "stop" });
+  expect((await debug(page)).drawingsPainted).toBe(2);
+
+  // Moving the mouse over them redraws only the overlay.
+  const before = await settled(page);
+  for (let i = 0; i <= 10; i++) await page.mouse.move(cx - 300 + i * 50, ey - 20 + (i % 3) * 10);
+  const after = await debug(page);
+  expect(after.overlayDraws).toBeGreaterThan(before.overlayDraws);
+  expect(after.baseDraws).toBe(before.baseDraws);
+});
+
+/** Centre of the blue note marker near column `x` of the base canvas, in page px. */
+async function findMarker(page: Page, x: number): Promise<[number, number]> {
+  const found = await page.getByTestId("chart").evaluate(
+    (el, [cx, blue]) => {
+      const c = el.querySelectorAll("canvas")[0]!;
+      const r = c.getBoundingClientRect();
+      const k = c.width / r.width;
+      const x0 = Math.round((cx as number) - r.left - 12);
+      const d = c.getContext("2d")!.getImageData(Math.round(x0 * k), 0, Math.round(24 * k), c.height).data;
+      const w = Math.round(24 * k);
+      let sx = 0;
+      let sy = 0;
+      let n = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        const b = blue as number[];
+        if (Math.abs(d[i]! - b[0]!) <= 12 && Math.abs(d[i + 1]! - b[1]!) <= 12 && Math.abs(d[i + 2]! - b[2]!) <= 12) {
+          const p = i / 4;
+          sx += (p % w) / k;
+          sy += Math.floor(p / w) / k;
+          n++;
+        }
+      }
+      return n === 0 ? null : [r.left + x0 + sx / n, r.top + sy / n];
+    },
+    [x, BLUE] as [number, number[]],
+  );
+  if (!found) throw new Error("no note marker");
+  return [Math.round(found[0]!), Math.round(found[1]!)];
+}
+
+test("writes_edits_and_deletes_a_note", async ({ page }) => {
+  const plot = await openChart(page);
+  const cx = Math.round(plot.left + plot.width / 2);
+  const y = Math.round(plot.top + plot.height * 0.5);
+
+  // A note without text is no note.
+  await page.keyboard.press("Alt+KeyN");
+  await page.mouse.click(cx, y);
+  await expect(page.getByTestId("note-editor")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("note-editor")).toBeHidden();
+  await page.getByTestId("tool-note").click();
+  await page.mouse.click(cx, y);
+  await page.getByTestId("note-save").click();
+  await expect(page.getByTestId("note-editor")).toBeHidden();
+  expect(await stored(page)).toEqual([]);
+
+  // Click on a bar, type, save: stored at the bar's open time.
+  await page.keyboard.press("Alt+KeyN");
+  await page.mouse.click(cx, y);
+  const area = page.getByTestId("note-editor").getByRole("textbox");
+  await expect(area).toBeFocused();
+  await page.keyboard.type("Breakout\nretest");
+  await expect(page.getByTestId("note-editor")).toContainText("15 / 2000");
+  await page.getByTestId("note-save").click();
+  const [note] = await storedCount(page, 1);
+  expect(note!.body).toMatchObject({ kind: "note", text: "Breakout\nretest" });
+  expect(note!.body.t! % HOUR).toBe(0);
+
+  await page.reload();
+  await expect(page.getByTestId("legend")).toHaveAttribute("data-time", /^\d+$/);
+  await settled(page);
+  const marker = await findMarker(page, cx);
+  expect(Math.abs(marker[0] - cx)).toBeLessThan(10);
+  // Hovering shows the first line; it redraws only the overlay.
+  const before = await settled(page);
+  await page.mouse.move(marker[0], marker[1]);
+  await expect.poll(async () => (await debug(page)).hoveredDrawing).toBe(note!.id);
+  expect((await debug(page)).baseDraws).toBe(before.baseDraws);
+
+  // A double-click opens the editor with the text; ⌘Enter saves the change.
+  await page.mouse.dblclick(marker[0], marker[1]);
+  await expect(area).toHaveValue("Breakout\nretest");
+  await expect(area).toBeFocused();
+  // Over the limit the text is cut at 2000 bytes.
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.insertText("x".repeat(2100));
+  await expect(area).toHaveValue("x".repeat(2000));
+  await expect(page.getByTestId("note-editor")).toContainText("2000 / 2000");
+  await page.keyboard.press("ControlOrMeta+Enter");
+  await expect(page.getByTestId("note-editor")).toBeHidden();
+  await expect.poll(async () => (await stored(page))[0]!.body.text).toBe("x".repeat(2000));
+
+  // Click selects it, Enter opens the editor, Delete removes it.
+  await page.mouse.click(plot.left + 30, plot.top + 30);
+  await page.mouse.click(marker[0], marker[1]);
+  expect((await debug(page)).selectedDrawing).toBe(note!.id);
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("note-editor")).toBeVisible();
+  await page.getByTestId("note-delete").click();
+  await storedCount(page, 0);
 });
 
 test("base_frame_with_500_drawings_under_budget @perf", async ({ page }) => {

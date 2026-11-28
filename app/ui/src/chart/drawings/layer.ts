@@ -263,10 +263,14 @@ export class DrawingLayer {
         for (const p of tool.axisPrices?.(e.body) ?? []) tags.push([p, color(theme, d.style)]);
       }
     }
+    if (debug) debug.selectedHandles = [];
     for (const id of new Set([s.selected, hovered?.id])) {
       const d = id && id !== e?.id ? s.byId(id) : undefined;
       const tool = d && this.visibleTool(d);
-      if (d && tool) paintHandles(ctx, tool.handles(this.geom(tool, d)), color(theme, d.style), theme);
+      if (!d || !tool) continue;
+      const handles = tool.handles(this.geom(tool, d));
+      paintHandles(ctx, handles, color(theme, d.style), theme);
+      if (debug && id === s.selected) debug.selectedHandles = handles;
     }
 
     // The shape being placed: the points so far and the mouse as the next one. A stroke

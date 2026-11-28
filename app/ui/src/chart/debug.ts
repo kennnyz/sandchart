@@ -28,6 +28,8 @@ export interface ChartDebug {
   /** Selected and hovered drawing ids at the last overlay frame. */
   selectedDrawing: string | null;
   hoveredDrawing: string | null;
+  /** Handles of the selected drawing at the last overlay frame, in CSS px of the chart. */
+  selectedHandles: { x: number; y: number }[];
   /** The ruler's numbers at the last overlay frame ("+1.00 (+0.50%)|12 bars, 12h"), null when it is not shown. */
   ruler: string | null;
   /** Position outcomes the chart was last given, by drawing id: "take", "stop", "open", with "?" when ambiguous. */
@@ -53,6 +55,7 @@ export function enableChartDebug(): void {
     drawingsPainted: 0,
     selectedDrawing: null,
     hoveredDrawing: null,
+    selectedHandles: [],
     ruler: null,
     outcomes: {},
   };
