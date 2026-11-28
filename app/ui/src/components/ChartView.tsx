@@ -1,3 +1,4 @@
+import { EyeOff, Lock, LockOpen, Settings2, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { Backend, ConnectionState, InstrumentId, TimeframeCode } from "../backend/types";
 import { Chart } from "../chart/chart";
@@ -5,7 +6,7 @@ import { formatDate, formatUtcClock } from "../chart/format";
 import type { PriceScaleMode } from "../chart/scale";
 import type { ChartTheme } from "../chart/theme";
 import { t, useLanguage } from "../i18n";
-import { bannerText, sourceName } from "../labels";
+import { bannerText, deleteKeyLabel, enterKeyLabel, sourceName } from "../labels";
 import { ChartSession, type SessionState } from "../state/chartSession";
 import { alertKey } from "../chart/drawings/keys";
 import type { DrawingPatch } from "../chart/drawings/state";
@@ -18,6 +19,7 @@ import { DrawingStyle, type LineAlert } from "./DrawingStyle";
 import { IndicatorLegend } from "./IndicatorLegend";
 import { IndicatorSettings } from "./IndicatorSettings";
 import { Legend } from "./Legend";
+import { Menu, type MenuItem } from "./Menu";
 import { NoteEditor } from "./NoteEditor";
 import { ReplayBar } from "./ReplayBar";
 import { ReplayStats } from "./ReplayStats";
@@ -76,6 +78,7 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
   const ind = indicators.state;
   const textEdit = drawings.state.textEdit;
   const styleEdit = drawings.state.styleEdit;
+  const menuEdit = drawings.state.menu;
   const drawingError = drawings.state.error;
   /** Chart and first bar time of the last recompute; a change of either recomputes at once. */
   const computedFor = useRef<{ key: string; first: number } | null>(null);
@@ -265,6 +268,34 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
   const restyle = useCallback((patch: DrawingPatch) => drawings.state.restyle(patch), [drawings]);
   const closeStyle = useCallback(() => drawings.state.closeStyle(), [drawings]);
   const deleteStyled = useCallback(() => drawings.state.deleteStyled(), [drawings]);
+  const closeMenu = useCallback(() => drawings.state.menuAction(null), [drawings]);
+  const menuItems: MenuItem[] = menuEdit
+    ? [
+        menuEdit.locked
+          ? { id: "unlock", label: t("drawingMenu.unlock"), icon: LockOpen, onSelect: () => drawings.state.menuAction("unlock") }
+          : { id: "lock", label: t("drawingMenu.lock"), icon: Lock, onSelect: () => drawings.state.menuAction("lock") },
+        { id: "hide", label: t("drawingMenu.hide"), icon: EyeOff, onSelect: () => drawings.state.menuAction("hide") },
+        {
+          id: "remove",
+          label: t("drawingMenu.remove"),
+          icon: Trash2,
+          shortcut: deleteKeyLabel(),
+          keys: ["Delete", "Backspace"],
+          onSelect: () => drawings.state.menuAction("remove"),
+        },
+        ...(menuEdit.single
+          ? [
+              {
+                id: "settings",
+                label: t("drawingMenu.settings"),
+                icon: Settings2,
+                shortcut: enterKeyLabel(),
+                onSelect: () => drawings.state.menuAction("settings"),
+              },
+            ]
+          : []),
+      ]
+    : [];
 
   const openSettings = useCallback((instance: string, row: HTMLElement) => {
     const host = hostRef.current;
@@ -402,6 +433,19 @@ export function ChartView({ backend, id, tf, theme, priceMode, connection, indic
             onChange={restyle}
             onDelete={deleteStyled}
             onClose={closeStyle}
+          />
+        )}
+        {menuEdit && (
+          <Menu
+            key={`${menuEdit.ids.join(",")}@${menuEdit.x},${menuEdit.y}`}
+            items={menuItems}
+            label={t("drawingMenu.label")}
+            testId="drawing-menu"
+            x={menuEdit.x}
+            y={menuEdit.y}
+            width={hostWidth}
+            height={hostHeight}
+            onClose={closeMenu}
           />
         )}
         {loading && <Loading symbol={symbol} tf={tfLabel(tf)} source={sourceLabel} />}

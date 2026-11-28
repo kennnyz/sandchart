@@ -13,6 +13,16 @@ export function altShortcutLabel(key: string): string {
   return isMac ? `⌥${key}` : `Alt ${key}`;
 }
 
+/** The Delete key as printed on this platform's keyboard. */
+export function deleteKeyLabel(): string {
+  return isMac ? "⌫" : "Del";
+}
+
+/** The Enter key as printed on this platform's keyboard. */
+export function enterKeyLabel(): string {
+  return isMac ? "↵" : "Enter";
+}
+
 /** Display name of a data source id ("binance" -> "Binance"); unknown ids as they are. */
 export function sourceName(source: string): string {
   const key = `source.${source}`;
