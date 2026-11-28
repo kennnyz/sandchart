@@ -4161,7 +4161,7 @@ dependencies = [
 
 [[package]]
 name = "sandchart-app"
-version = "0.2.0"
+version = "0.5.0"
 dependencies = [
  "directories",
  "reqwest 0.13.5",
@@ -4184,7 +4184,7 @@ dependencies = [
 
 [[package]]
 name = "sandchart-core"
-version = "0.2.0"
+version = "0.5.0"
 dependencies = [
  "schemars 1.2.3",
  "serde",
@@ -4195,7 +4195,7 @@ dependencies = [
 
 [[package]]
 name = "sandchart-data"
-version = "0.2.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "futures",
@@ -4212,7 +4212,7 @@ dependencies = [
 
 [[package]]
 name = "sandchart-engine"
-version = "0.2.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "futures",
@@ -4231,7 +4231,7 @@ dependencies = [
 
 [[package]]
 name = "sandchart-indicator-cli"
-version = "0.2.0"
+version = "0.5.0"
 dependencies = [
  "clap",
  "sandchart-indicators",
@@ -4241,7 +4241,7 @@ dependencies = [
 
 [[package]]
 name = "sandchart-indicators"
-version = "0.2.0"
+version = "0.5.0"
 dependencies = [
  "bytes",
  "rand",
@@ -4257,7 +4257,7 @@ dependencies = [
 
 [[package]]
 name = "sandchart-mcp"
-version = "0.2.0"
+version = "0.5.0"
 dependencies = [
  "directories",
  "libc",
@@ -4278,7 +4278,7 @@ dependencies = [
 
 [[package]]
 name = "sandchart-store"
-version = "0.2.0"
+version = "0.5.0"
 dependencies = [
  "rusqlite",
  "sandchart-core",

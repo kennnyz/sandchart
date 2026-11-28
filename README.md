@@ -5,7 +5,7 @@
 [![CI](https://github.com/kennnyz/sandchart/actions/workflows/ci.yml/badge.svg)](https://github.com/kennnyz/sandchart/actions/workflows/ci.yml)
 ![Licence: MIT OR Apache-2.0](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)
 ![Platforms: macOS, Windows, Linux](https://img.shields.io/badge/platforms-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)
-![Status: 0.2, early](https://img.shields.io/badge/status-0.2%20early-orange)
+![Status: 0.5, early](https://img.shields.io/badge/status-0.5%20early-orange)
 
 ![Sandchart showing a live BTCUSDT 1h chart from Binance](docs/screenshot.png)
 
@@ -115,10 +115,8 @@ Nothing is reloaded wholesale: a chart you have opened before comes straight fro
 | Version | Focus |
 | --- | --- |
 | 0.1 | Live Binance charts, local cache, own renderer, search, watchlist, themes, unsigned builds |
-| **0.2** (this release) | Indicators as sandboxed WebAssembly modules, with an SDK and a command to build and test them; one-button self-update |
-| 0.3 | Drawing tools: trend lines, levels, zones, Fibonacci, long and short positions, a ruler, a brush and notes on bars |
-| 0.4 | Replay: step through history candle by candle, paper trades with stop and take-profit, statistics in R, a shareable `.replay` file that gives anyone the same result |
-| 0.5 | An MCP server so AI agents can read charts, build indicators and run replays; price alerts |
+| 0.2 | Indicators as sandboxed WebAssembly modules, with an SDK and a command to build and test them; one-button self-update |
+| **0.5** (this release) | Drawing tools (trend lines, levels, zones, Fibonacci, long and short positions, a ruler, a brush, notes on bars); replay across timeframes with paper trades, statistics in R and a shareable `.replay` file; price and line alerts; an MCP server for AI agents. The planned 0.3 and 0.4 ship together in 0.5 |
 | 1.0 | Builds signed with OS code-signing certificates |
 
 The order can change; the design decisions are recorded in [ADR 0001](docs/adr/0001-wasm-indicators-and-tauri.md).
@@ -136,7 +134,7 @@ Download the file for your system from the [Releases](../../releases) page:
 
 The builds are not signed with an OS code-signing certificate yet, so the operating system will warn you the first time. Updates are signed with the project's own key (see [Updates](#updates)).
 
-Version 0.2 migrates the local database (watchlist, cache, indicator settings). The data is kept, but 0.1 refuses to open the migrated database. Back up the file first if you may want to go back.
+Each version may migrate the local database (watchlist, cache, indicator settings, drawings, alerts). The data is kept, but an older version refuses to open a migrated database: 0.5 moves it to schema 5, which 0.2 cannot read. Back up the file first if you may want to go back. `sandchart-mcp` never migrates a database an older app still uses; update the app first.
 
 Version 0.1 cannot update itself. Install 0.2 by hand once; later versions update from inside the app.
 
