@@ -647,8 +647,9 @@ fn capped_candles<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<[i64; 6]
     d.deserialize_seq(Capped::new(MAX_CANDLES, "candles"))
 }
 
-/// The parts every file version has, checked: instrument, candles and their hash.
+/// The parts every file version has, checked: instrument, candles of `base` and their hash.
 fn checked(
+    base: Timeframe,
     instrument: FileInstrument,
     rows: &[[i64; 6]],
     sha256: &str,
@@ -665,7 +666,7 @@ fn checked(
             volume,
         })
         .collect();
-    check_candles(&candles)?;
+    check_candles(base, &candles)?;
     if candle_hash(&candles) != sha256 {
         return Err("the candles do not match the file's sha256".into());
     }
@@ -842,7 +843,8 @@ impl ReplayFile {
             1 => {
                 let body: BodyV1 = serde_json::from_slice(bytes).map_err(not_a_file)?;
                 let base = timeframe(&body.timeframe)?;
-                let (instrument, candles) = checked(body.instrument, &body.candles, &body.sha256)?;
+                let (instrument, candles) =
+                    checked(base, body.instrument, &body.candles, &body.sha256)?;
                 let (start, cut, commands) =
                     from_v1(base, &candles, body.start, body.current, &body.commands)?;
                 ReplayFile {
@@ -858,7 +860,8 @@ impl ReplayFile {
             VERSION => {
                 let body: Body = serde_json::from_slice(bytes).map_err(not_a_file)?;
                 let base = timeframe(&body.base)?;
-                let (instrument, candles) = checked(body.instrument, &body.candles, &body.sha256)?;
+                let (instrument, candles) =
+                    checked(base, body.instrument, &body.candles, &body.sha256)?;
                 ReplayFile {
                     instrument,
                     base,
@@ -880,14 +883,21 @@ impl ReplayFile {
     }
 }
 
-/// Strictly ascending open times, every number inside ±(2^53 - 1), low ≤ open, close ≤ high
-/// and a volume that is not negative.
-pub fn check_candles(candles: &[Candle]) -> Result<(), String> {
+/// Candles of the `base` timeframe as a file may hold them: every number and every close time
+/// inside ±(2^53 - 1) (so a start, cut or catch-up time, each a close time, is too),
+/// strictly ascending open times, low ≤ open, close ≤ high and a volume that is not negative.
+pub fn check_candles(base: Timeframe, candles: &[Candle]) -> Result<(), String> {
     for (i, c) in candles.iter().enumerate() {
         for v in [c.open_time, c.open, c.high, c.low, c.close, c.volume] {
             if v.unsigned_abs() > JS_SAFE_MAX.unsigned_abs() {
                 return Err(format!("candle {i}: {v} is outside ±(2^53 - 1)"));
             }
+        }
+        let closes = base.close_time(c.open_time);
+        if closes > JS_SAFE_MAX {
+            return Err(format!(
+                "candle {i}: its close time {closes} is outside ±(2^53 - 1)"
+            ));
         }
         if c.low > c.open.min(c.close) {
             return Err(format!(

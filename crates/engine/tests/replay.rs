@@ -301,7 +301,25 @@ async fn broken_or_oversized_files_leave_the_session_alone() {
     assert_eq!(msg, "the candles do not match the file's sha256");
     let msg = replay_err(engine.replay_open(&vec![b' '; MAX_FILE_BYTES + 1]));
     assert!(msg.starts_with("the replay file is 32 MiB"), "{msg}");
-    assert!(engine.replay_state(TF, 0, 0).is_ok());
+    // A cut past what the UI can hold (a candle closing after 2^53 - 1) is refused before the
+    // open session is replaced.
+    let last = (sandchart_core::JS_SAFE_MAX / H) * H;
+    let mut hostile = file_at(2, 2);
+    hostile.candles.push(Candle {
+        open_time: last,
+        ..hostile.candles[1]
+    });
+    hostile.cut = last + H;
+    let msg = replay_err(engine.replay_open(hostile.to_json().as_bytes()));
+    assert_eq!(
+        msg,
+        format!(
+            "candle 2: its close time {} is outside ±(2^53 - 1)",
+            last + H
+        )
+    );
+    let st = engine.replay_state(TF, 0, 0).unwrap();
+    assert_eq!(st.cut, T0 + 551 * H, "the session started above");
 }
 
 /// A file of `n` bars from bar 550 on, with prices at `price_scale` decimals (`bar` is at 2).

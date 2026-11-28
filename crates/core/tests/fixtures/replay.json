@@ -927,6 +927,23 @@
         ]
       },
       "error": "the instrument's quote must be 1 to 64 characters from A-Z, a-z, 0-9, ., _ and -"
+    },
+    {
+      "name": "a candle that closes after 2^53 - 1 is refused, so no cut or start can be outside it",
+      "file": {
+        "version": 2,
+        "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
+        "base": "1h",
+        "start": 9007199254800000,
+        "cut": 9007199254800000,
+        "sha256": "3e2909147de2c979f72fa4a0e189cc684096af0bb7d3bf3d37866a4e65d34dcb",
+        "commands": [],
+        "candles": [
+          [9007199247600000, 100, 101, 99, 100, 7],
+          [9007199251200000, 100, 101, 99, 100, 7]
+        ]
+      },
+      "error": "candle 1: its close time 9007199254800000 is outside ±(2^53 - 1)"
     }
   ],
   "aggregates": [

@@ -475,6 +475,8 @@ export async function mockReadReplay(bytes: Uint8Array): Promise<MockReplayFile>
     for (const v of [c.time, c.open, c.high, c.low, c.close, c.volume]) {
       if (!Number.isInteger(v) || Math.abs(v) > SAFE) throw new Error(`candle ${i}: ${v} is outside ±(2^53 - 1)`);
     }
+    const closes = mockCloseTime(tf, c.time);
+    if (!(closes <= SAFE)) throw new Error(`candle ${i}: its close time ${closes} is outside ±(2^53 - 1)`);
     if (c.low > Math.min(c.open, c.close)) throw new Error(`candle ${i}: low must be at most the open and the close`);
     if (c.high < Math.max(c.open, c.close)) throw new Error(`candle ${i}: high must be at least the open and the close`);
     if (c.volume < 0) throw new Error(`candle ${i}: volume must not be negative`);

@@ -20,7 +20,7 @@ use sandchart_core::replay::{
     Command, ExitReason, MAX_CANDLES, ReplayFile, Simulation, Stats, Trade, check_candles,
     revealed, simulate,
 };
-use sandchart_core::{Candle, Instrument, InstrumentId, Timeframe};
+use sandchart_core::{Candle, Instrument, InstrumentId, JS_SAFE_MAX, Timeframe};
 
 /// Base candles shown before the start, for context.
 pub const REPLAY_CONTEXT: usize = 500;
@@ -135,6 +135,32 @@ fn check_view(base: Timeframe, tf: Timeframe) -> Result<(), EngineError> {
     } else {
         format!("{t} candles cannot be built from {b} candles")
     }))
+}
+
+/// Every number of `st` fits a JavaScript number exactly (±(2^53 - 1)), as the IPC layer
+/// requires; [`check_candles`] already bounds a file's candles and close times.
+fn js_safe(st: &ReplayState) -> Result<(), EngineError> {
+    let bars = st
+        .bars
+        .iter()
+        .flat_map(|c| [c.open_time, c.open, c.high, c.low, c.close, c.volume]);
+    let trades = st.trades.iter().flat_map(|t| {
+        [t.entry_time, t.entry_price, t.initial_stop, t.stop, t.take]
+            .into_iter()
+            .chain(t.exit_time)
+            .chain(t.exit_price)
+    });
+    let mut all = [st.cut]
+        .into_iter()
+        .chain(st.caught_up_at)
+        .chain(bars)
+        .chain(trades);
+    match all.find(|v| v.unsigned_abs() > JS_SAFE_MAX.unsigned_abs()) {
+        Some(v) => Err(EngineError::Replay(format!(
+            "the replay holds {v}, outside ±(2^53 - 1)"
+        ))),
+        None => Ok(()),
+    }
 }
 
 fn next_session_id() -> u64 {
@@ -681,7 +707,7 @@ impl Engine {
                 file = file
                     .rescaled(ps, qs)
                     .ok_or_else(|| at("a value does not fit".into()))?;
-                check_candles(&file.candles).map_err(at)?;
+                check_candles(file.base, &file.candles).map_err(at)?;
                 file.simulate().map_err(at)?;
             }
             file.instrument = inst;
@@ -699,7 +725,10 @@ impl Engine {
             live: false,
             caught_up_at: file.caught_up_at,
         };
+        // The whole state is built and checked before the open session is replaced, so a
+        // file the UI could not show leaves the session as it was.
         let state = session.state(base, 0, 0)?;
+        js_safe(&state)?;
         *self.shared.session() = Some(session);
         Ok(state)
     }
