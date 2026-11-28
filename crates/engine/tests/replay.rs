@@ -971,3 +971,114 @@ async fn an_empty_answer_while_a_candle_should_have_closed_is_no_catch_up() {
     assert_eq!(st.caught_up_at, Some(T0 + (BARS + 1) * H));
     assert!(st.newer_error.is_none());
 }
+
+const M: i64 = 60_000;
+
+/// Minute `k` (from `T0`), flat at the close of its hour's bar.
+fn minute(k: i64) -> Candle {
+    let p = bar(k / 60).close;
+    Candle {
+        open_time: T0 + k * M,
+        open: p,
+        high: p,
+        low: p,
+        close: p,
+        volume: 1,
+    }
+}
+
+#[tokio::test]
+async fn a_lower_re_base_loads_a_page_past_the_cut_and_steps_load_the_rest_in_batches() {
+    let f = live_engine(T0 + BARS * H);
+    f.provider
+        .set(Timeframe::M1, (0..BARS * 60).map(minute).collect());
+    f.engine
+        .replay_start(&id(), TF, T0 + 500 * H)
+        .await
+        .unwrap();
+    let st = f.engine.replay_set_base(Timeframe::M1).await.unwrap();
+    // 5000 minutes of context, the start minute and 1000 past the cut: seven pages, not
+    // the 99 hours to now.
+    assert_eq!(f.provider.calls(Timeframe::M1), 7);
+    assert_eq!(st.bars.len(), 5001);
+    assert_eq!(*st.bars.last().unwrap(), minute(500 * 60 + 59));
+    assert!(!st.at_end);
+    // Stepping to the last loaded minute loads the next 3000 (three pages), no more.
+    assert_eq!(f.engine.replay_step(1000).await.unwrap(), st.cut + 1000 * M);
+    assert_eq!(f.provider.calls(Timeframe::M1), 10);
+    assert_eq!(f.engine.replay_step(3000).await.unwrap(), st.cut + 4000 * M);
+    // The next 3000 would pass now: the last 1940 minutes, in two pages.
+    assert_eq!(f.provider.calls(Timeframe::M1), 12);
+    let st = f.engine.replay_state(Timeframe::M1, u32::MAX, 0).unwrap();
+    assert!(!st.at_end && st.newer_error.is_none());
+}
+
+#[tokio::test]
+async fn a_lower_re_base_fetches_only_the_part_the_cache_is_missing() {
+    // The cache holds the quarters of hours 400..600, as a 15m chart opened lately keeps them.
+    let f = live_engine(T0 + BARS * H);
+    let qs: Vec<Candle> = (0..BARS).flat_map(quarters).collect();
+    f.provider.set(Timeframe::M15, qs.clone());
+    Store::open(&f.dir.path().join("sandchart.db"))
+        .unwrap()
+        .upsert_candles(&id(), Timeframe::M15, &qs[1600..])
+        .unwrap();
+    f.engine
+        .replay_start(&id(), TF, T0 + 300 * H)
+        .await
+        .unwrap();
+    f.engine.replay_step(5).await.unwrap();
+    let st = f.engine.replay_set_base(Timeframe::M15).await.unwrap();
+    // Context from hour 0, then to a page past the cut (hour 556): hours 0..400 come from
+    // the exchange in two pages, the rest from the cache.
+    assert_eq!(f.provider.calls(Timeframe::M15), 2);
+    assert_eq!(st.bars, qs[..306 * 4]);
+    f.engine.replay_step(250 * 4).await.unwrap();
+    f.engine.replay_step(44 * 4).await.unwrap();
+    let st = f.engine.replay_state(Timeframe::M15, u32::MAX, 0).unwrap();
+    assert!(st.caught_up, "the newer quarters came from the cache");
+    assert_eq!(st.cut, T0 + BARS * H);
+    assert_eq!(f.provider.calls(Timeframe::M15), 2);
+}
+
+#[tokio::test]
+async fn a_lower_re_base_measures_the_limit_from_the_start_to_the_cut() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(&dir.path().join("sandchart.db")).unwrap();
+    store.upsert_instruments(&[instrument()]).unwrap();
+    let days: Vec<Candle> = (0..200)
+        .map(|i| Candle {
+            open_time: T0 + i * DAY,
+            ..bar(i)
+        })
+        .collect();
+    store.upsert_candles(&id(), Timeframe::D1, &days).unwrap();
+    let provider = Arc::new(FakeProvider::default());
+    provider.set(Timeframe::M1, (0..12 * 1440).map(minute).collect());
+    let engine = Engine::open_with_clock(
+        dir.path(),
+        None,
+        vec![provider.clone() as Arc<dyn Provider>],
+        Arc::new(|| T0 + 200 * DAY),
+    )
+    .unwrap();
+    // 190 days to now, but one from the start to the cut: 1m is fine.
+    engine
+        .replay_start(&id(), Timeframe::D1, T0 + 10 * DAY)
+        .await
+        .unwrap();
+    let st = engine.replay_set_base(Timeframe::M1).await.unwrap();
+    assert_eq!((st.base, st.cut), (Timeframe::M1, T0 + 11 * DAY));
+    // From the start to a cut 141 days on is too long at 1m.
+    engine.replay_exit();
+    engine
+        .replay_start(&id(), Timeframe::D1, T0 + 10 * DAY)
+        .await
+        .unwrap();
+    engine.replay_step(140).await.unwrap();
+    let msg = replay_err(engine.replay_set_base(Timeframe::M1).await);
+    assert_eq!(
+        msg,
+        "a replay holds at most 200000 candles: at 1m that is 138 days from its start to its cut, and this one spans 141 days; replay at a higher step or start later"
+    );
+}

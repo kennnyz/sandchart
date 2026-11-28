@@ -907,17 +907,21 @@ export function createMockBackend(opts: MockOptions): MockBackend {
       const len = mockCloseTime(base, 0);
       const end = mockCloseTime(old, src.at(-1)!.time);
       const first = s.start - len;
-      const need = Math.floor((end - first) / len);
-      if (need > MOCK_MAX_REPLAY_CANDLES) {
+      // A live session loads newer candles as it steps, so only the part up to its cut counts.
+      const live = s.live && s.caughtUpAt === null;
+      const held = live ? cut : end;
+      if (Math.floor((held - first) / len) > MOCK_MAX_REPLAY_CANDLES) {
         const most = Math.floor((MOCK_MAX_REPLAY_CANDLES * len) / DAY_MS);
-        const span = Math.ceil((end - first) / DAY_MS);
+        const span = Math.ceil((held - first) / DAY_MS);
         throw problem(
-          `a replay holds at most ${MOCK_MAX_REPLAY_CANDLES} candles: at ${base} that is ${most} days from its start to ${s.live && s.caughtUpAt === null ? "now" : "its last candle"}, and this one spans ${span} days; replay at a higher step or start later`,
+          `a replay holds at most ${MOCK_MAX_REPLAY_CANDLES} candles: at ${base} that is ${most} days from its start to ${live ? "its cut" : "its last candle"}, and this one spans ${span} days; replay at a higher step or start later`,
         );
       }
+      const need = Math.min(Math.floor((end - first) / len), MOCK_MAX_REPLAY_CANDLES);
       const context = Math.min(Math.max(0, Math.floor((first - src[0]!.time) / len)), REBASE_CONTEXT, MOCK_MAX_REPLAY_CANDLES - need);
       const from = first - context * len;
-      candles = src.flatMap((c) => mockSplit(c, old, base)).filter((c) => c.time >= from && mockCloseTime(base, c.time) <= end);
+      const stop = Math.min(end, first + MOCK_MAX_REPLAY_CANDLES * len);
+      candles = src.flatMap((c) => mockSplit(c, old, base)).filter((c) => c.time >= from && mockCloseTime(base, c.time) <= stop);
     } else if (mockBuildsFrom(base, old)) {
       const at = mockBucketStart(base, cut);
       if (at !== cut) throw problem(`the replay is at ${cut}, inside a ${base} candle; step to ${mockCloseTime(base, at)} first, where it closes`);

@@ -14,19 +14,24 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, MutexGuard, PoisonError};
 
 use crate::chart::fetch_window;
-use crate::{Engine, EngineError, Shared, blocking, lock};
+use crate::{Engine, EngineError, PAGE, Shared, blocking, lock};
 use sandchart_core::aggregate::aggregate;
 use sandchart_core::replay::{
     Command, ExitReason, MAX_CANDLES, ReplayFile, Simulation, Stats, Trade, check_candles,
     revealed, simulate,
 };
 use sandchart_core::{Candle, Instrument, InstrumentId, JS_SAFE_MAX, Timeframe};
+use sandchart_data::Provider;
 
 /// Base candles shown before the start, for context.
 pub const REPLAY_CONTEXT: usize = 500;
 /// Most base candles of context a re-base to a lower timeframe loads before the start
 /// (ADR 0008): the old context's time span when it fits, else its newest part.
 pub const REBASE_CONTEXT: usize = 5_000;
+/// Base candles a re-base to a lower timeframe loads past the cut; steps load the rest.
+const AHEAD: usize = PAGE as usize;
+/// Most newer base candles one load reads, so a step never waits for a long window.
+const NEWER_BATCH: usize = 3 * PAGE as usize;
 
 const DAY_MS: i64 = 86_400_000;
 
@@ -463,7 +468,9 @@ impl Engine {
         }) else {
             return;
         };
-        let newer = self.newer_candles(&inst, base, last, room).await;
+        let newer = self
+            .newer_candles(&inst, base, last, room.min(NEWER_BATCH))
+            .await;
         let mut guard = self.shared.session();
         let Some(s) = guard.as_mut().filter(|s| s.id == sid && s.wants_more()) else {
             return; // replaced or changed meanwhile
@@ -494,6 +501,9 @@ impl Engine {
     ) -> Result<Vec<Candle>, EngineError> {
         let now = self.now_ms();
         let from = base.close_time(last);
+        if base.close_time(from) > now {
+            return Ok(Vec::new()); // the next candle has not closed: nothing to ask for
+        }
         let key = inst.id.clone();
         let mut cached = blocking(&self.shared.store, move |s| {
             s.scan_candles_between(&key, base, last, i64::MAX, |it| {
@@ -601,9 +611,11 @@ impl Engine {
     }
 
     /// Candles of the lower `base` for a re-base: from before the start (the old context's
-    /// span, at most [`REBASE_CONTEXT`]) to now (to the old last candle for a session that
-    /// does not load newer ones). Refused when the part from the start on does not fit
-    /// [`MAX_CANDLES`].
+    /// span, at most [`REBASE_CONTEXT`]) to a page past the cut ([`AHEAD`]; steps load the
+    /// rest as they reach it), or to the old last candle for a session that loads nothing
+    /// newer. The cache gives what it holds of that window and the provider only the parts
+    /// before and after it. Refused when the part from the start to the cut (to the last
+    /// candle for a session that loads nothing newer) does not fit [`MAX_CANDLES`].
     async fn lower_candles(
         &self,
         snap: &Snapshot,
@@ -613,22 +625,29 @@ impl Engine {
         let len = base
             .fixed_ms()
             .ok_or_else(|| EngineError::Replay(format!("cannot re-base to {new}")))?;
-        let now = self.now_ms();
-        let end = match snap.candles.last() {
-            Some(c) if !snap.live => snap.base.close_time(c.open_time),
-            _ => now,
-        };
         // The new candle that closes at the start opens one length before it.
         let first = snap.start - len;
-        let need = usize::try_from((end - first) / len).unwrap_or(usize::MAX);
-        if need > MAX_CANDLES {
+        let (held, end) = match snap.candles.last() {
+            Some(c) if !snap.live => {
+                let last = snap.base.close_time(c.open_time);
+                (last, last)
+            }
+            _ => (snap.cut, (snap.cut + AHEAD as i64 * len).min(self.now_ms())),
+        };
+        if (held - first) / len > MAX_CANDLES as i64 {
             let most = MAX_CANDLES as i64 * len / DAY_MS;
-            let span = (end - first + DAY_MS - 1) / DAY_MS;
-            let to = if snap.live { "now" } else { "its last candle" };
+            let span = (held - first + DAY_MS - 1) / DAY_MS;
+            let to = if snap.live {
+                "its cut"
+            } else {
+                "its last candle"
+            };
             return Err(EngineError::Replay(format!(
                 "a replay holds at most {MAX_CANDLES} candles: at {new} that is {most} days from its start to {to}, and this one spans {span} days; replay at a higher step or start later"
             )));
         }
+        let end = end.min(first + MAX_CANDLES as i64 * len);
+        let need = usize::try_from((end - first) / len).unwrap_or(MAX_CANDLES);
         let old_first = snap.candles.first().map_or(first, |c| c.open_time);
         let span = usize::try_from((first - old_first).max(0) / len).unwrap_or(0);
         let context = span.min(REBASE_CONTEXT).min(MAX_CANDLES - need);
@@ -645,10 +664,39 @@ impl Engine {
         let Some(provider) = self.provider(&snap.instrument.id.source) else {
             return Ok(cached);
         };
-        if cached.len() == want {
-            return Ok(cached);
-        }
-        match fetch_window(provider.as_ref(), &snap.instrument, base, from, end, want).await {
+        // The stored series is contiguous, so only the window's ends can be missing.
+        let (head_to, tail_from) = match (cached.first(), cached.last()) {
+            (Some(f), Some(l)) => (f.open_time, base.close_time(l.open_time)),
+            _ => (end, end),
+        };
+        let head = self
+            .window(provider.as_ref(), snap, base, from, head_to)
+            .await?;
+        let tail = self
+            .window(provider.as_ref(), snap, base, tail_from, end)
+            .await?;
+        Ok([head, cached, tail].concat())
+    }
+
+    /// The provider's `base` candles that open at or after `from` and close by `to`, for a
+    /// re-base (kept in memory only).
+    async fn window(
+        &self,
+        provider: &dyn Provider,
+        snap: &Snapshot,
+        base: Timeframe,
+        from: i64,
+        to: i64,
+    ) -> Result<Vec<Candle>, EngineError> {
+        let Some(n) = base
+            .fixed_ms()
+            .map(|len| (to - from) / len)
+            .filter(|&n| n > 0)
+        else {
+            return Ok(Vec::new());
+        };
+        let n = usize::try_from(n).unwrap_or(MAX_CANDLES).min(MAX_CANDLES);
+        match fetch_window(provider, &snap.instrument, base, from, to, n).await {
             Ok(fetched) => {
                 self.shared.note_ok();
                 Ok(fetched)
@@ -656,7 +704,8 @@ impl Engine {
             Err(e) => {
                 self.shared.note_error(&e);
                 Err(EngineError::Replay(format!(
-                    "the {new} candles could not be loaded: {e}"
+                    "the {} candles could not be loaded: {e}",
+                    base.code()
                 )))
             }
         }
