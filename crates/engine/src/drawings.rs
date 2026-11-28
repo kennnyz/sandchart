@@ -37,6 +37,12 @@ impl Engine {
             .collect())
     }
 
+    /// One stored drawing by id, as stored (not rescaled); `None` when there is none.
+    pub async fn drawing(&self, id: &str) -> Result<Option<Drawing>, EngineError> {
+        let id = id.to_owned();
+        blocking(&self.shared.store, move |s| s.drawing(&id)).await
+    }
+
     /// Validates and stores a drawing whose prices are ticks at `d.price_scale`. When the
     /// instrument's scale has changed since (the UI loaded it before), the ticks are
     /// rescaled to the current one; a drawing that no longer fits or breaks a rule after

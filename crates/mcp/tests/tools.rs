@@ -1028,3 +1028,44 @@ async fn every_price_of_a_drawing_comes_with_its_decimal_and_saves_back_as_it_is
     assert_eq!(fib["body"]["levels"], json!([0.0, 0.5, 1.0]));
     assert_eq!(fib["body"]["b"]["pDecimal"], "0.02");
 }
+
+#[tokio::test]
+async fn an_update_keeps_the_stored_lock_and_hiding_unless_given() {
+    let h = harness().await;
+    let first = json!({ "id": "h1", "symbol": "BTCUSDT", "priceScale": 2, "body": hline(100),
+                        "locked": true, "hidden": true });
+    h.call("save_drawing", first).await;
+    // Moved by an agent that did not mention them: the user's lock and hiding stay.
+    let moved = h
+        .call(
+            "save_drawing",
+            json!({ "id": "h1", "symbol": "BTCUSDT", "priceScale": 2, "body": hline(200) }),
+        )
+        .await;
+    assert_eq!(
+        (moved["locked"].clone(), moved["hidden"].clone()),
+        (json!(true), json!(true))
+    );
+    assert_eq!(moved["body"]["p"], 200);
+    let shown = h
+        .call(
+            "save_drawing",
+            json!({ "id": "h1", "symbol": "BTCUSDT", "priceScale": 2, "body": hline(200), "hidden": false }),
+        )
+        .await;
+    assert_eq!(
+        (shown["locked"].clone(), shown["hidden"].clone()),
+        (json!(true), json!(false))
+    );
+    // A new id still defaults to neither.
+    let new = h
+        .call(
+            "save_drawing",
+            json!({ "id": "h2", "symbol": "BTCUSDT", "priceScale": 2, "body": hline(300) }),
+        )
+        .await;
+    assert_eq!(
+        (new["locked"].clone(), new["hidden"].clone()),
+        (json!(false), json!(false))
+    );
+}

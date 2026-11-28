@@ -192,7 +192,7 @@ Saves a drawing with the same rules as the app ([Drawing tools](drawings.md)): a
 | `priceScale` | The scale of the prices in `body`: the pair's. |
 | `body` | The shape, by `kind` (below). |
 | `style` | Optional `{ "color": 0-7, "width": 1-4, "dash": false }`, default slot 0, width 1, solid. |
-| `locked`, `hidden`, `z` | Optional, default `false`, `false` and `0`. A hidden drawing stays stored but is not shown on the chart until the user shows it again. |
+| `locked`, `hidden`, `z` | Optional, default `false`, `false` and `0`. On an update (an `id` that exists), a left-out `locked` or `hidden` keeps the stored value, so moving a drawing does not unlock or show it. A hidden drawing stays stored but is not shown on the chart until the user shows it again. |
 
 | `kind` | Fields |
 | --- | --- |
