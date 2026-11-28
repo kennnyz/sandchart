@@ -101,6 +101,7 @@ impl Engine {
             tf,
             tx,
             guard,
+            own,
         ));
         Ok(LiveHandle { events, task })
     }
@@ -160,6 +161,10 @@ impl Backoff {
     }
 }
 
+/// Runs one live stream. A stream the engine opened for alerts (`own`) only evaluates
+/// them: nothing reads its candles, so it stores none, feeds no indicator bars, sends no
+/// events and fills no gaps (the alert rule compares the update after a gap with the last
+/// one before, which is what a gap needs).
 async fn run(
     shared: Shared,
     provider: Arc<dyn Provider>,
@@ -167,6 +172,7 @@ async fn run(
     tf: Timeframe,
     tx: mpsc::Sender<LiveEvent>,
     stream_slot: StreamGuard,
+    own: bool,
 ) {
     let mut stream = provider.live(&inst, tf);
     let mut gap = GapGuard {
@@ -175,6 +181,13 @@ async fn run(
     };
     let mut backoff = Backoff::default();
     while let Some(item) = stream.next().await {
+        if own {
+            if let Ok(live) = item {
+                shared.note_ok();
+                evaluate(&shared, &inst.id, stream_slot.key, &live.candle);
+            }
+            continue;
+        }
         let event = match item {
             Err(_) => {
                 if gap.open {
@@ -224,18 +237,7 @@ async fn run(
                 }
                 // Forming candles reach the indicator bars too, in memory only.
                 shared.live_bar(&inst, tf, &live.candle);
-                // A replayed pair's alerts wait too: the first update after the replay is
-                // compared with the last one before it.
-                if !shared.replaying(&inst.id) {
-                    let now = (shared.clock)();
-                    let fired =
-                        shared
-                            .alerts
-                            .evaluate(&inst.id, stream_slot.key, &live.candle, now);
-                    if !fired.is_empty() {
-                        tokio::spawn(record_fired(shared.clone(), fired));
-                    }
-                }
+                evaluate(&shared, &inst.id, stream_slot.key, &live.candle);
                 LiveEvent::Candle(live)
             }
         };
@@ -246,6 +248,19 @@ async fn run(
         if tx.send(event).await.is_err() {
             return;
         }
+    }
+}
+
+/// Checks the alerts of `id` against an update of stream `key` and stores the ones that
+/// fired. A replayed pair's alerts wait: the first update after the replay is compared with
+/// the last one before it.
+fn evaluate(shared: &Shared, id: &InstrumentId, key: u64, candle: &Candle) {
+    if shared.replaying(id) {
+        return;
+    }
+    let fired = shared.alerts.evaluate(id, key, candle, (shared.clock)());
+    if !fired.is_empty() {
+        tokio::spawn(record_fired(shared.clone(), fired));
     }
 }
 

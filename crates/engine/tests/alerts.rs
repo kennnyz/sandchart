@@ -82,6 +82,15 @@ impl FakeProvider {
 
     /// Sends to every open stream of `symbol` at `tf`.
     fn send(&self, symbol: &str, tf: Timeframe, c: Candle) {
+        self.send_item(symbol, tf, c, false);
+    }
+
+    /// Sends a closed candle to every open stream of `symbol` at `tf`.
+    fn send_closed(&self, symbol: &str, tf: Timeframe, c: Candle) {
+        self.send_item(symbol, tf, c, true);
+    }
+
+    fn send_item(&self, symbol: &str, tf: Timeframe, c: Candle, closed: bool) {
         for (at, tx) in self
             .opened
             .lock()
@@ -91,10 +100,7 @@ impl FakeProvider {
             .flatten()
         {
             if *at == tf && !tx.is_closed() {
-                let _ = tx.send(Ok(LiveCandle {
-                    candle: c,
-                    closed: false,
-                }));
+                let _ = tx.send(Ok(LiveCandle { candle: c, closed }));
             }
         }
     }
@@ -752,4 +758,36 @@ async fn a_firing_that_cannot_be_stored_is_still_reported_and_stored_on_the_retr
     }
     assert_eq!(stored, vec![fired]);
     none_fired(&mut f.events).await;
+}
+
+/// Stored candles of `symbol`, every timeframe.
+fn stored_candles(dir: &std::path::Path, symbol: &str) -> i64 {
+    let conn = rusqlite::Connection::open(dir.join("sandchart.db")).unwrap();
+    conn.query_row(
+        "SELECT COUNT(*) FROM candles WHERE symbol = ?1",
+        [symbol],
+        |row| row.get(0),
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn the_engines_own_stream_only_evaluates_and_stores_nothing() {
+    let mut f = fixture(&["BTCUSDT"]).await;
+    f.engine
+        .set_alert(price_alert("a1", "BTCUSDT", 10_000, Direction::Above))
+        .await
+        .unwrap();
+    until("the alert stream opens", || {
+        !f.provider.open("BTCUSDT").is_empty()
+    })
+    .await;
+    let p = &f.provider;
+    p.send_closed("BTCUSDT", Timeframe::M1, bar(0, 9_980, 9_990, 9_990));
+    p.send_closed("BTCUSDT", Timeframe::M1, bar(M, 9_980, 10_005, 10_002));
+    assert_eq!(
+        next_fired(&mut f.events).await.triggered_price,
+        Some(10_002)
+    );
+    assert_eq!(stored_candles(f._dir.path(), "BTCUSDT"), 0);
 }
