@@ -1,4 +1,4 @@
-import { ChevronsDown, ChevronsUp, CircleX, FastForward, FolderOpen, LogOut, Pause, Play, Save, StepForward, X } from "lucide-react";
+import { ChevronsDown, ChevronsUp, CircleX, Rewind, FolderOpen, LogOut, Pause, Play, Save, StepForward, X } from "lucide-react";
 import { useEffect, useRef, useState, type ChangeEvent, type MouseEvent } from "react";
 import { t } from "../i18n";
 import { MAX_REPLAY_FILE_MIB, replayKeyAction, SPEEDS, type ReplayController } from "../state/replay";
@@ -95,7 +95,7 @@ export function ReplayBar({ replay: r, range, onDate }: ReplayBarProps) {
   if (r.phase === "picking") {
     return (
       <div className="replay-bar" role="toolbar" aria-label={t("replay.controls")} data-testid="replay-bar" onMouseDown={keepFocus}>
-        <FastForward size={14} className="replay-icon" />
+        <Rewind size={14} className="replay-icon" />
         <span className="replay-hint" data-testid="replay-hint">
           {t("replay.hint")}
         </span>

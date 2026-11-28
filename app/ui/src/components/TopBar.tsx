@@ -1,4 +1,4 @@
-import { ChevronDown, FastForward, Moon, PanelRightOpen, SquareFunction, Sun } from "lucide-react";
+import { ChevronDown, Rewind, Moon, PanelRightOpen, SquareFunction, Sun } from "lucide-react";
 import type { ConnectionState, InstrumentId, TimeframeCode } from "../backend/types";
 import { getLanguage, setLanguage, t } from "../i18n";
 import type { ReplayPhase } from "../state/replay";
@@ -84,7 +84,7 @@ export function TopBar(p: TopBarProps) {
         disabled={!p.current}
         onClick={p.onReplay}
       >
-        <FastForward size={14} />
+        <Rewind size={14} />
         {t("replay.button")}
       </button>
       <div className="spacer" />
