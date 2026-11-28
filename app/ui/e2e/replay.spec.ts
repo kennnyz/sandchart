@@ -203,10 +203,22 @@ test("replay_picking_cancels_with_esc_and_starts_by_date", async ({ page }) => {
   await expect(page.getByTestId("replay-bar")).toHaveCount(0);
   await expect(page.getByTestId("chart")).toHaveAttribute("data-replay", "off");
 
+  // The field takes a UTC date (and time) the same in every language; a bad one says how.
+  await page.getByTestId("replay-button").click();
+  await page.getByTestId("replay-date").fill("20.11.2026");
+  await page.getByTestId("replay-date-go").click();
+  await expect(page.getByTestId("replay-date-error")).toContainText("YYYY-MM-DD");
+  await expect(page.getByTestId("chart")).toHaveAttribute("data-replay", "picking");
+  await page.getByTestId("replay-date").fill("2001-01-01");
+  await page.getByTestId("replay-date").press("Enter");
+  await expect(page.getByTestId("replay-date-error")).toContainText("scroll the chart left");
+  await page.keyboard.press("Escape");
+
   // A date starts at the first bar of that day (UTC).
   await page.getByTestId("replay-button").click();
   const dayStart = Math.floor((live - 10 * 24 * H) / (24 * H)) * 24 * H;
   await page.getByTestId("replay-date").fill(new Date(dayStart).toISOString().slice(0, 10));
+  await page.getByTestId("replay-date").press("Enter");
   await expect(page.getByTestId("chart")).toHaveAttribute("data-replay", "on");
   await expect.poll(() => lastBar(page)).toBe(dayStart);
   // Only that day's first bar and the context before it are on the chart.
@@ -296,6 +308,7 @@ test("replay_indicators_and_drawings_see_only_revealed_bars", async ({ page }) =
   const decided = (await debug(page)).outcomes.tight;
   await page.getByTestId("replay-button").click();
   await page.getByTestId("replay-date").fill(new Date(at).toISOString().slice(0, 10));
+  await page.getByTestId("replay-date").press("Enter");
   await expect(page.getByTestId("chart")).toHaveAttribute("data-replay", "on");
   const first = Math.floor(at / (24 * H)) * 24 * H;
   await expect.poll(() => lastBar(page)).toBe(first);
@@ -359,6 +372,7 @@ test("replay_hides_drawings_anchored_after_the_revealed_bars", async ({ page }) 
   await page.getByTestId("replay-button").click();
   const dayStart = Math.floor((at - 24 * H) / (24 * H)) * 24 * H;
   await page.getByTestId("replay-date").fill(new Date(dayStart).toISOString().slice(0, 10));
+  await page.getByTestId("replay-date").press("Enter");
   await expect.poll(() => lastBar(page)).toBe(dayStart);
   await stepUntil(page, async () => (await lastBar(page)) === at - H);
   await expect.poll(async () => (await debug(page)).drawingsPainted).toBe(0);
@@ -398,6 +412,7 @@ test("replay_on_a_higher_timeframe_hides_drawings_until_the_cut_passes_them", as
   await page.getByTestId("replay-button").click();
   const dayStart = Math.floor((bucket - 24 * H) / (24 * H)) * 24 * H;
   await page.getByTestId("replay-date").fill(new Date(dayStart).toISOString().slice(0, 10));
+  await page.getByTestId("replay-date").press("Enter");
   await expect.poll(() => lastBar(page)).toBe(dayStart);
   await stepUntil(page, async () => (await lastBar(page)) === bucket - H);
   await tfButton(page, "4h").click();

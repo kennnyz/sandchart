@@ -41,6 +41,21 @@ export function formatCrosshairTime(ms: number, tf: TimeframeCode): string {
   return `${date} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
 }
 
+/**
+ * A UTC time typed as `YYYY-MM-DD`, optionally followed by `HH:MM` (after a space or a T), in
+ * ms; null unless it is a real calendar date and time. The same digits in every language.
+ */
+export function parseUtcDateTime(text: string): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?$/.exec(text.trim());
+  if (!m) return null;
+  const [y, mo, d, h = 0, mi = 0] = m.slice(1).map((v) => (v === undefined ? undefined : Number(v))) as number[];
+  if (h! > 23 || mi! > 59) return null;
+  const ms = Date.UTC(y!, mo! - 1, d!, h, mi);
+  const back = new Date(ms);
+  // Date.UTC rolls 31 November over into December: only a date that comes back the same is real.
+  return back.getUTCFullYear() === y && back.getUTCMonth() === mo! - 1 && back.getUTCDate() === d ? ms : null;
+}
+
 const MINUS = "−";
 
 function signOf(n: number): string {

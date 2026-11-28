@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatBp, formatChange, formatCrosshairTime, formatPrice, formatTimeLabel, formatUtcClock, formatValue } from "./format";
+import { formatBp, formatChange, formatCrosshairTime, formatPrice, formatTimeLabel, formatUtcClock, formatValue, parseUtcDateTime } from "./format";
 
 describe("formatPrice", () => {
   it("formats_tiny_tick_prices", () => {
@@ -81,5 +81,20 @@ describe("formatValue", () => {
     expect(formatValue(-0.5, 2)).toBe("−0.50");
     expect(formatValue(-0.001, 2)).toBe("0.00");
     expect(formatValue(54.1, 0)).toBe("54");
+  });
+});
+
+describe("parseUtcDateTime", () => {
+  it("reads a UTC date with an optional time, the same in every language", () => {
+    expect(parseUtcDateTime("2026-11-20")).toBe(Date.UTC(2026, 10, 20));
+    expect(parseUtcDateTime(" 2026-11-20 13:45 ")).toBe(Date.UTC(2026, 10, 20, 13, 45));
+    expect(parseUtcDateTime("2026-11-20T09:05")).toBe(Date.UTC(2026, 10, 20, 9, 5));
+    expect(parseUtcDateTime("2024-02-29 00:00")).toBe(Date.UTC(2024, 1, 29));
+  });
+
+  it("refuses what is not a real date or time", () => {
+    for (const bad of ["", "20.11.2026", "2026-11-31", "2025-02-29", "2026-13-01", "2026-11-20 24:00", "2026-11-20 12:60", "2026-11-20 7:00", "2026-11-20x"]) {
+      expect(parseUtcDateTime(bad), bad).toBeNull();
+    }
   });
 });

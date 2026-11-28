@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState, type ChangeEvent, type MouseEvent } from "react";
 import { TIMEFRAME_CODES } from "../backend/types";
-import { formatCrosshairTime } from "../chart/format";
+import { formatCrosshairTime, parseUtcDateTime } from "../chart/format";
 import { t } from "../i18n";
 import { baseChoices, MAX_REPLAY_FILE_MIB, replayKeyAction, SPEEDS, type ReplayController } from "../state/replay";
 import { Menu, type MenuItem } from "./Menu";
@@ -31,8 +31,6 @@ export interface ReplayBarProps {
   /** A start date was picked (UTC midnight of the day). */
   onDate: (time: number) => void;
 }
-
-const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 
 /** The replay keys as shown in tooltips and menus ("→", "Space", "⇧B"). */
 export const REPLAY_KEYS = { step: "→", play: "Space", buy: "⇧B", sell: "⇧S", close: "⇧C" } as const;
@@ -49,6 +47,8 @@ const keepFocus = (e: MouseEvent<HTMLDivElement>) => {
 
 type MenuId = "select" | "speed" | "interval";
 
+const DAY = 86_400_000;
+
 /**
  * The replay controls, centred under the chart. While a start is picked: the hint, a date,
  * Open and Cancel. While replaying: Select bar, Play, Step, speed, update interval, jump to
@@ -63,6 +63,9 @@ export function ReplayBar({ replay: r, range, onDate }: ReplayBarProps) {
   const [menu, setMenu] = useState<{ id: MenuId; x: number; y: number } | null>(null);
   /** "Pick a date" was chosen: the date field takes focus once picking starts. */
   const [wantDate, setWantDate] = useState(false);
+  /** The typed start time (UTC), and why it cannot start there. */
+  const [dateText, setDateText] = useState("");
+  const [dateError, setDateError] = useState<string | null>(null);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -116,13 +119,7 @@ export function ReplayBar({ replay: r, range, onDate }: ReplayBarProps) {
   useEffect(() => {
     if (!picking || !wantDate) return;
     setWantDate(false);
-    const el = dateRef.current;
-    el?.focus();
-    try {
-      el?.showPicker();
-    } catch {
-      // Not every engine opens the picker from script; the field has focus.
-    }
+    dateRef.current?.focus();
   }, [picking, wantDate]);
 
   const onFile = (e: ChangeEvent<HTMLInputElement>) => {
@@ -191,19 +188,54 @@ export function ReplayBar({ replay: r, range, onDate }: ReplayBarProps) {
           <span className="replay-hint" data-testid="replay-hint">
             {t("replay.hint")}
           </span>
-          <input
-            ref={dateRef}
-            type="date"
-            className="replay-date mono"
-            data-testid="replay-date"
-            aria-label={t("replay.date")}
-            min={range ? day(range[0]) : undefined}
-            max={range ? day(range[1]) : undefined}
-            onChange={(e) => {
-              const v = e.target.valueAsNumber;
-              if (Number.isFinite(v)) onDate(v);
+          <form
+            className="replay-date-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const at = parseUtcDateTime(dateText);
+              if (at === null) setDateError(t("replay.date.invalid"));
+              else if (range && (at < range[0] - (range[0] % DAY) || at > range[1])) {
+                setDateError(t("replay.date.range", { from: fillTime(range[0]), to: fillTime(range[1]) }));
+              } else {
+                setDateError(null);
+                onDate(at);
+              }
             }}
-          />
+          >
+            <input
+              ref={dateRef}
+              type="text"
+              inputMode="numeric"
+              spellCheck={false}
+              autoComplete="off"
+              className="replay-date mono"
+              data-testid="replay-date"
+              aria-label={t("replay.date")}
+              aria-invalid={dateError !== null}
+              title={t("replay.date")}
+              placeholder={t("replay.date.placeholder")}
+              value={dateText}
+              onChange={(e) => {
+                setDateText(e.target.value);
+                setDateError(null);
+              }}
+              onKeyDown={(e) => {
+                // Typing keys are not replay keys; Esc still puts the picking away.
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  r.cancelPick();
+                }
+              }}
+            />
+            <button type="submit" className="text-button" data-testid="replay-date-go">
+              {t("replay.date.go")}
+            </button>
+          </form>
+          {dateError && (
+            <span className="replay-file-error" data-testid="replay-date-error" title={dateError}>
+              {dateError}
+            </span>
+          )}
           <div className="divider" />
           {openButton}
           {error}

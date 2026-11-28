@@ -20,7 +20,7 @@ Replay walks through history bar by bar, as if it were live: you see a bar, deci
 2. Click **Replay** in the top bar. A bar under the chart says what to do next.
 3. Pick the first bar:
    - **click a bar** on the chart: a line marks the bar under the mouse and dims everything after it. The start is picked when the button comes up; a press that moves 4 px or more pans the chart instead, and the wheel zooms, so you can look for the bar first; or
-   - **pick a date**: the replay starts at the first bar of that day (UTC). The date can be anywhere in the history the chart has loaded; scroll left first to load older bars.
+   - **type a start time**: a UTC date as `YYYY-MM-DD`, with a time `HH:MM` after it if you like (`2026-11-20 13:00`), then Enter or **Start**. The replay starts at the first bar at or after that time; a date alone means midnight UTC, so the first bar of that day. It reads the same in every language and on every system. The time can be anywhere in the history the chart has loaded (it says which span when it is outside); scroll left first to load older bars.
 
    Esc or the **X** at the right end puts it away without starting.
 
@@ -36,7 +36,7 @@ The replay bar sits centred under the chart, with the results under it:
 
 | Control | What it does |
 | --- | --- |
-| Select bar ▾ | Start again from another bar: **Pick a bar on the chart** or **Pick a date**. With trades not saved yet it asks first, since a new start drops them (see below). The live chart comes back to pick on. |
+| Select bar ▾ | Start again from another bar: **Pick a bar on the chart** or **Pick a date** (the start time field). With trades not saved yet it asks first, since a new start drops them (see below). The live chart comes back to pick on. |
 | Play / Pause | Reveals one step after another at the chosen speed. |
 | Step | Reveals the next step. |
 | 1x 2x 3x 5x 10x | Speed of Play, in steps per second. |
