@@ -622,6 +622,7 @@ fn replay_file() -> String {
         // Cuts: the close times of bars 5 and 15.
         start: T0 + 6 * H,
         cut: T0 + 16 * H,
+        caught_up_at: None,
         // Long at the close of bar 5 (105.00), stop 104.00, take 107.00: bar 7 reaches 107.50.
         commands: vec![Command::Open {
             time: T0 + 6 * H,

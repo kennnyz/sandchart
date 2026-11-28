@@ -395,6 +395,70 @@
       }
     },
     {
+      "name": "a file saved after catching up with real time: the trade still open there is unfinished and does not count",
+      "file": {
+        "version": 2,
+        "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
+        "base": "1h",
+        "start": 3602000,
+        "cut": 3603000,
+        "caughtUpAt": 3603000,
+        "sha256": "8e00a94b6607b2f146b1eebe48bee89d496122804148ff13bc770ff759af67b3",
+        "commands": [{"kind": "open", "time": 3602000, "side": "long", "stop": 90, "take": 120}],
+        "candles": [
+          [1000, 100, 101, 99, 100, 7],
+          [2000, 100, 102, 98, 100, 7],
+          [3000, 100, 105, 95, 100, 7]
+        ]
+      },
+      "expect": {
+        "trades": [
+          {"side": "long", "entryTime": 2000, "entryPrice": 100, "initialStop": 90, "stop": 90, "take": 120, "exitTime": null, "exitPrice": null, "reason": "unfinished", "ambiguous": false, "r": 0}
+        ],
+        "stats": {"count": 0, "wins": 0, "losses": 0, "winRate": 0, "totalR": 0, "averageR": 0, "profitFactor": null, "maxDrawdownR": 0, "longestLosingStreak": 0}
+      }
+    },
+    {
+      "name": "a file must have caught up at its cut",
+      "file": {
+        "version": 2,
+        "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
+        "base": "1h",
+        "start": 3602000,
+        "cut": 3603000,
+        "caughtUpAt": 3602000,
+        "sha256": "8e00a94b6607b2f146b1eebe48bee89d496122804148ff13bc770ff759af67b3",
+        "commands": [{"kind": "open", "time": 3602000, "side": "long", "stop": 90, "take": 120}],
+        "candles": [
+          [1000, 100, 101, 99, 100, 7],
+          [2000, 100, 102, 98, 100, 7],
+          [3000, 100, 105, 95, 100, 7]
+        ]
+      },
+      "error": "the replay caught up at 3602000, which is not its cut 3603000"
+    },
+    {
+      "name": "a file that caught up has no candle after its cut",
+      "file": {
+        "version": 2,
+        "instrument": {"source": "binance", "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5},
+        "base": "1h",
+        "start": 3602000,
+        "cut": 3603000,
+        "caughtUpAt": 3603000,
+        "sha256": "83f74cc2f1756b1009afd466072aeb10927d37e5d8c0aabf9b1bf098748eea2e",
+        "commands": [{"kind": "open", "time": 3602000, "side": "long", "stop": 90, "take": 120}],
+        "candles": [
+          [1000, 100, 101, 99, 100, 7],
+          [2000, 100, 102, 98, 100, 7],
+          [3000, 100, 105, 95, 100, 7],
+          [4000, 100, 121, 99, 118, 7],
+          [5000, 118, 119, 110, 115, 7]
+        ]
+      },
+      "error": "a replay that caught up has no candle after its cut"
+    },
+    {
       "name": "a version 2 file may carry candles after its cut; they do not count",
       "file": {
         "version": 2,

@@ -235,6 +235,13 @@ export function mockSimulate(
   return { trades, stats: mockStats(trades) };
 }
 
+/** `Simulation::at_real_time` from Rust: the trade still open is unfinished; the stats stay. */
+export function mockAtRealTime<T extends { trades: ReplayTrade[] }>(sim: T): T {
+  const last = sim.trades.at(-1);
+  if (last?.reason === "open") last.reason = "unfinished";
+  return sim;
+}
+
 /** `stats` from Rust, summed in the same order. */
 export function mockStats(trades: ReplayTrade[]): ReplayStats {
   let count = 0;
@@ -248,7 +255,7 @@ export function mockStats(trades: ReplayTrade[]): ReplayStats {
   let streak = 0;
   let longest = 0;
   for (const t of trades) {
-    if (t.reason === "open") continue;
+    if (t.reason === "open" || t.reason === "unfinished") continue;
     count++;
     total += t.r;
     if (t.r > 0) {
@@ -300,6 +307,18 @@ export interface MockReplayFile {
   /** The close time of the last revealed candle. */
   cut: number;
   commands: ReplayCommand[];
+  /** The cut at which the replay caught up with real time, or null. */
+  caughtUpAt: number | null;
+}
+
+/** `ReplayFile::simulate` from Rust: checks the catch-up time, simulates, ends the backtest there. */
+export function mockSimulateFile(f: MockReplayFile) {
+  if (f.caughtUpAt !== null) {
+    if (f.caughtUpAt !== f.cut) throw new Error(`the replay caught up at ${f.caughtUpAt}, which is not its cut ${f.cut}`);
+    if (mockRevealed(f.base, f.candles, f.cut).length !== f.candles.length) throw new Error("a replay that caught up has no candle after its cut");
+  }
+  const sim = mockSimulate(f.base, f.candles, f.start, f.cut, f.commands);
+  return f.caughtUpAt === null ? sim : mockAtRealTime(sim);
 }
 
 /** The file text in Rust's layout (always version 2): one command and one candle per line. */
@@ -311,15 +330,15 @@ export async function mockWriteReplay(f: MockReplayFile): Promise<string> {
   const candles = lines(f.candles.map((c) => `[${c.time}, ${c.open}, ${c.high}, ${c.low}, ${c.close}, ${c.volume}]`));
   return (
     `{\n  "version": ${MOCK_REPLAY_VERSION},\n  "instrument": ${JSON.stringify(instrument)},\n  "base": ${JSON.stringify(f.base)},\n` +
-    `  "start": ${f.start},\n  "cut": ${f.cut},\n  "sha256": "${await mockCandleHash(f.candles)}",\n` +
+    `  "start": ${f.start},\n  "cut": ${f.cut},\n${f.caughtUpAt === null ? "" : `  "caughtUpAt": ${f.caughtUpAt},\n`}  "sha256": "${await mockCandleHash(f.candles)}",\n` +
     `  "commands": ${commands},\n  "candles": ${candles}\n}\n`
   );
 }
 
 /** Fields of each file version, and of its commands (`at`: the field that places a command). */
 const SHAPES = {
-  1: { file: ["version", "instrument", "timeframe", "start", "current", "sha256", "commands", "candles"], at: "bar" },
-  2: { file: ["version", "instrument", "base", "start", "cut", "sha256", "commands", "candles"], at: "time" },
+  1: { file: ["version", "instrument", "timeframe", "start", "current", "sha256", "commands", "candles"], may: [], at: "bar" },
+  2: { file: ["version", "instrument", "base", "start", "cut", "sha256", "commands", "candles"], may: ["caughtUpAt"], at: "time" },
 } as const;
 const INSTRUMENT_FIELDS = ["source", "symbol", "base", "quote", "priceScale", "qtyScale"];
 
@@ -354,7 +373,8 @@ function str(v: unknown): string {
 /** The shape serde checks in Rust's `Body` (or `BodyV1`), `FileInstrument` and `Command`. */
 function checkShape(raw: Record<string, unknown>, version: 1 | 2): void {
   const shape = SHAPES[version];
-  fields(raw, shape.file);
+  fields(raw, shape.file, shape.may);
+  if (raw.caughtUpAt !== undefined && raw.caughtUpAt !== null) int(raw.caughtUpAt);
   const i = fields(raw.instrument, INSTRUMENT_FIELDS);
   for (const k of ["source", "symbol", "base", "quote"]) str(i[k]);
   uint(i.priceScale, 8);
@@ -465,6 +485,7 @@ export async function mockReadReplay(bytes: Uint8Array): Promise<MockReplayFile>
     version === 1
       ? fromV1(tf, candles, raw.start as number, raw.current as number, raw.commands as V1Command[])
       : { start: raw.start as number, cut: raw.cut as number, commands: raw.commands as ReplayCommand[] };
+  const caughtUpAt = version === 1 ? null : ((raw.caughtUpAt as number | null | undefined) ?? null);
   const file: MockReplayFile = {
     instrument: {
       id: { source: String(inst.source), symbol: String(inst.symbol) },
@@ -476,7 +497,8 @@ export async function mockReadReplay(bytes: Uint8Array): Promise<MockReplayFile>
     base: tf,
     candles,
     ...session,
+    caughtUpAt,
   };
-  mockSimulate(file.base, file.candles, file.start, file.cut, file.commands);
+  mockSimulateFile(file);
   return file;
 }

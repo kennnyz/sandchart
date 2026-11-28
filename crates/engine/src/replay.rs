@@ -4,26 +4,23 @@
 //! from the revealed base candles, so nothing after the cut ever leaves the engine.
 //!
 //! A session started from the cache reads newer candles when its steps reach the last
-//! loaded one (the store, else the provider). When none is left it has caught up: it takes
-//! no more steps or commands, follows the live closed base candles of its pair (so open
-//! trades keep resolving), and stops holding the pair's live updates back.
+//! loaded one (the store, else the provider). When none is left it has caught up with real
+//! time and its backtest ends there: it takes no more steps or commands, the trade still
+//! open is unfinished, and it stops holding the pair's live updates back, so the chart shows
+//! live data again while the session stays at its cut.
 
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, MutexGuard, PoisonError};
 
+use crate::chart::fetch_window;
+use crate::{Engine, EngineError, Shared, blocking, lock};
 use sandchart_core::aggregate::aggregate;
 use sandchart_core::replay::{
     Command, ExitReason, MAX_CANDLES, ReplayFile, Simulation, Stats, Trade, check_candles,
     revealed, simulate,
 };
 use sandchart_core::{Candle, Instrument, InstrumentId, Timeframe};
-use sandchart_data::Provider;
-use tokio::task::JoinHandle;
-
-use crate::chart::fetch_window;
-use crate::live::{LiveEvent, LiveHandle};
-use crate::{Engine, EngineError, Shared, blocking, lock};
 
 /// Base candles shown before the start, for context.
 pub const REPLAY_CONTEXT: usize = 500;
@@ -53,17 +50,9 @@ pub(crate) struct Session {
     /// Started from the cache of a pair with a provider: it reads newer candles and can
     /// catch up. A file's session (or a CSV pair's) ends at its last candle.
     live: bool,
-    caught_up: bool,
-    /// Appends the live base candles while caught up; aborted when dropped.
-    follow: Option<Follow>,
-}
-
-struct Follow(JoinHandle<()>);
-
-impl Drop for Follow {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
+    /// The cut at which the session caught up with real time and its backtest ended (for
+    /// a file, the one it was saved with). The cut never moves past it.
+    caught_up_at: Option<i64>,
 }
 
 /// What the UI gets for one chart timeframe `tf` (the base or one that builds from it):
@@ -86,9 +75,12 @@ pub struct ReplayState {
     /// No base candle is left to reveal, and no newer one can be loaded (a file's end, a
     /// pair without a provider, the candle limit, or caught up).
     pub at_end: bool,
-    /// The replay reached the newest data and follows the live candles: no step and no
-    /// command is taken.
+    /// The replay reached the newest data in this session: the pair's live data flows
+    /// again (for display), and no step and no command is taken.
     pub caught_up: bool,
+    /// The cut at which the backtest ended at real time (also for a file saved after
+    /// catching up); the trade still open there is unfinished.
+    pub caught_up_at: Option<i64>,
     /// The last `tf` bar is still forming: more base candles go into it.
     pub partial: bool,
     /// Index of `bars[0]`.
@@ -156,7 +148,7 @@ fn no_session() -> EngineError {
 
 fn caught_up_error(what: &str) -> EngineError {
     EngineError::Replay(format!(
-        "the replay has caught up with the live data and follows it now: it takes no {what}"
+        "the replay has caught up with real time, so its backtest is finished: it takes no {what}"
     ))
 }
 
@@ -172,14 +164,24 @@ impl Session {
     }
 
     fn simulate(&self, commands: &[Command]) -> Result<Simulation, EngineError> {
-        simulate(self.base, &self.candles, self.start, self.cut, commands)
-            .map_err(EngineError::Replay)
+        let sim = simulate(self.base, &self.candles, self.start, self.cut, commands)
+            .map_err(EngineError::Replay)?;
+        Ok(if self.caught_up_at.is_some() {
+            sim.at_real_time()
+        } else {
+            sim
+        })
+    }
+
+    /// Caught up with real time in this run: the pair's live data is no longer held back.
+    fn caught_up(&self) -> bool {
+        self.live && self.caught_up_at.is_some()
     }
 
     /// Every loaded candle is revealed and newer ones may still be loaded.
     fn wants_more(&self) -> bool {
         self.live
-            && !self.caught_up
+            && self.caught_up_at.is_none()
             && self.candles.len() < MAX_CANDLES
             && self.revealed_len() == self.candles.len()
     }
@@ -228,7 +230,8 @@ impl Session {
             current: bars.len().saturating_sub(1) as u32,
             cut: self.cut,
             at_end: shown.len() == self.candles.len() && !self.wants_more(),
-            caught_up: self.caught_up,
+            caught_up: self.caught_up(),
+            caught_up_at: self.caught_up_at,
             partial,
             from: from as u32,
             bars: bars[from..].to_vec(),
@@ -241,7 +244,7 @@ impl Session {
     }
 
     /// Adds base candles newer than the last one (a candle with its open time replaces it)
-    /// up to the limit; while caught up they are revealed at once.
+    /// up to the limit.
     fn append(&mut self, candles: &[Candle]) {
         let mut changed = false;
         for c in candles {
@@ -261,13 +264,7 @@ impl Session {
                 }
             }
         }
-        let list = &self.candles;
         if changed {
-            if self.caught_up
-                && let Some(last) = list.last()
-            {
-                self.cut = self.base.close_time(last.open_time);
-            }
             self.sim = None;
         }
     }
@@ -291,7 +288,7 @@ impl Shared {
         let guard = self.session();
         let Some(s) = guard
             .as_ref()
-            .filter(|s| s.instrument.id == *id && !s.caught_up)
+            .filter(|s| s.instrument.id == *id && !s.caught_up())
         else {
             return Ok(None);
         };
@@ -312,57 +309,7 @@ impl Shared {
     pub(crate) fn replaying(&self, id: &InstrumentId) -> bool {
         self.session()
             .as_ref()
-            .is_some_and(|s| s.instrument.id == *id && !s.caught_up)
-    }
-
-    /// Appends live base candles closed by now to session `id` while it is caught up.
-    fn replay_append(&self, id: u64, candles: &[Candle]) {
-        let now = (self.clock)();
-        let mut guard = self.session();
-        if let Some(s) = guard.as_mut().filter(|s| s.id == id && s.caught_up) {
-            let n = candles.partition_point(|c| s.base.close_time(c.open_time) <= now);
-            s.append(&candles[..n]);
-        }
-    }
-
-    /// Where session `id` misses candles before one opening at `t`: the open time of the
-    /// base candle after its last one, if that is before `t`.
-    fn replay_gap(&self, id: u64, t: i64) -> Option<i64> {
-        let guard = self.session();
-        let s = guard.as_ref().filter(|s| s.id == id && s.caught_up)?;
-        let next = s.base.close_time(s.candles.last()?.open_time);
-        (next < t).then_some(next)
-    }
-}
-
-/// Feeds the closed candles of a live base stream into session `id` while it is caught up.
-/// A candle that does not follow the session's last one (missed while the stream connected
-/// or was down) has the gap before it fetched first.
-async fn follow_live(
-    shared: Shared,
-    provider: Arc<dyn Provider>,
-    id: u64,
-    inst: Instrument,
-    base: Timeframe,
-    mut live: LiveHandle,
-) {
-    while let Some(event) = live.receiver().recv().await {
-        let candles = match event {
-            LiveEvent::Candle(c) if c.closed => vec![c.candle],
-            LiveEvent::Backfilled { candles, .. } if !candles.is_empty() => candles,
-            _ => continue,
-        };
-        if let Some(from) = shared.replay_gap(id, candles[0].open_time) {
-            let to = candles[0].open_time;
-            match fetch_window(provider.as_ref(), &inst, base, from, to, MAX_CANDLES).await {
-                Ok(missed) => {
-                    shared.note_ok();
-                    shared.replay_append(id, &missed);
-                }
-                Err(e) => shared.note_error(&e),
-            }
-        }
-        shared.replay_append(id, &candles);
+            .is_some_and(|s| s.instrument.id == *id && !s.caught_up())
     }
 }
 
@@ -430,8 +377,7 @@ impl Engine {
             cut: start,
             commands: Vec::new(),
             sim: None,
-            caught_up: false,
-            follow: None,
+            caught_up_at: None,
         };
         *self.shared.session() = Some(session);
         // The newest data could not be asked for: a later step asks again.
@@ -443,11 +389,11 @@ impl Engine {
 
     /// Reveals up to `n` more base candles; returns the cut. Once every loaded candle is
     /// revealed it loads newer ones; with none left the replay has caught up. Refused once
-    /// caught up. A failure to load newer candles is returned after the step: stepping
+    /// caught up (or for a file saved after catching up). A failure to load newer candles is returned after the step: stepping
     /// again tries again.
     pub async fn replay_step(&self, n: u32) -> Result<i64, EngineError> {
         let cut = self.with_session(|s| {
-            if s.caught_up {
+            if s.caught_up_at.is_some() {
                 return Err(caught_up_error("steps"));
             }
             let shown = s.revealed_len();
@@ -463,8 +409,7 @@ impl Engine {
     }
 
     /// When a session from the cache has revealed every loaded candle: loads the newer
-    /// closed base candles, or, when there are none, marks it caught up and starts
-    /// following the live ones.
+    /// closed base candles, or, when there are none, marks it caught up at its cut.
     async fn load_newer(&self) -> Result<(), EngineError> {
         let Some((sid, inst, base, last, room)) = self.with_session(|s| {
             Ok(s.wants_more().then(|| {
@@ -482,19 +427,13 @@ impl Engine {
             return Ok(());
         };
         let newer = self.newer_candles(&inst, base, last, room).await?;
-        // Opened before the lock is taken, so the session lock never waits on the store.
-        let follow = if newer.is_empty() {
-            self.follow(sid, &inst, base)
-        } else {
-            None
-        };
         let mut guard = self.shared.session();
         let Some(s) = guard.as_mut().filter(|s| s.id == sid && s.wants_more()) else {
             return Ok(()); // replaced or changed meanwhile
         };
         if newer.is_empty() {
-            s.caught_up = true;
-            s.follow = follow;
+            s.caught_up_at = Some(s.cut);
+            s.sim = None;
         } else {
             s.append(&newer);
         }
@@ -541,29 +480,6 @@ impl Engine {
         }
     }
 
-    /// Opens the live base stream that feeds session `id` once it has caught up. Without
-    /// one (no runtime, the stream cap) the session still has caught up, without live
-    /// candles.
-    fn follow(&self, id: u64, inst: &Instrument, base: Timeframe) -> Option<Follow> {
-        let provider = self.provider(&inst.id.source)?;
-        let live = match self.open_live(&inst.id, base, false) {
-            Ok(live) => live,
-            Err(e) => {
-                eprintln!("the caught-up replay cannot follow live candles: {e}");
-                return None;
-            }
-        };
-        let task = tokio::spawn(follow_live(
-            self.shared.clone(),
-            provider,
-            id,
-            inst.clone(),
-            base,
-            live,
-        ));
-        Some(Follow(task))
-    }
-
     /// Changes the step resolution to `base`, keeping the cut, the start and the commands
     /// (they are times). A lower base loads its candles (the cache, else the provider) from
     /// before the start to the newest closed one (to the last candle for a file); a higher
@@ -580,7 +496,8 @@ impl Engine {
                 start: s.start,
                 cut: s.cut,
                 commands: s.commands.clone(),
-                live: s.live,
+                // A finished backtest loads nothing past its cut, as a file does not.
+                live: s.live && s.caught_up_at.is_none(),
             })
         })?;
         let (old, new) = (snap.base.code(), base.code());
@@ -619,9 +536,13 @@ impl Engine {
             s.candles = Arc::new(candles);
             s.start = start;
             s.cut = cut;
-            s.sim = Some(sim);
-            s.caught_up = false;
-            s.follow = None;
+            // A finished backtest stays finished, at the cut on the new candles.
+            s.caught_up_at = s.caught_up_at.map(|_| cut);
+            s.sim = Some(if s.caught_up_at.is_some() {
+                sim.at_real_time()
+            } else {
+                sim
+            });
         }
         if let Err(e) = self.load_newer().await {
             eprintln!("the replay could not load newer candles: {e}");
@@ -693,10 +614,11 @@ impl Engine {
 
     /// Appends a trade command if the session stays valid with it (time order, the time
     /// of a revealed base candle's close, one trade at a time, levels around the close).
-    /// Refused once caught up: the live chart shows prices after the cut.
+    /// Refused once caught up: the backtest is finished, and the live chart shows prices
+    /// after the cut.
     pub fn replay_command(&self, cmd: Command) -> Result<(), EngineError> {
         self.with_session(|s| {
-            if s.caught_up {
+            if s.caught_up_at.is_some() {
                 return Err(caught_up_error("commands"));
             }
             let mut next = s.commands.clone();
@@ -727,8 +649,8 @@ impl Engine {
         self.with_session(|s| Ok(file_name(&s.instrument.id.symbol, s.base)))
     }
 
-    /// The `.replay` file: context and revealed candles (live ones too, once caught up),
-    /// never a candle after the cut.
+    /// The `.replay` file: context and revealed candles, never a candle after the cut (so
+    /// none after catching up, where the cut stopped), and the catch-up time.
     pub fn replay_export(&self) -> Result<Vec<u8>, EngineError> {
         self.with_session(|s| {
             let file = ReplayFile {
@@ -738,6 +660,7 @@ impl Engine {
                 start: s.start,
                 cut: s.cut,
                 commands: s.commands.clone(),
+                caught_up_at: s.caught_up_at,
             };
             Ok(file.to_json().into_bytes())
         })
@@ -774,8 +697,7 @@ impl Engine {
             commands: file.commands,
             sim: None,
             live: false,
-            caught_up: false,
-            follow: None,
+            caught_up_at: file.caught_up_at,
         };
         let state = session.state(base, 0, 0)?;
         *self.shared.session() = Some(session);

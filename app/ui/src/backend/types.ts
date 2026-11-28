@@ -244,7 +244,8 @@ export type ReplayCommand =
   | { kind: "open"; time: number; side: Side; stop: number; take: number }
   | { kind: "edit"; time: number; stop?: number; take?: number }
   | { kind: "close"; time: number };
-export type ExitReason = "take" | "stop" | "manual" | "open";
+/** `unfinished`: still open when the replay caught up with real time, where its backtest ended. */
+export type ExitReason = "take" | "stop" | "manual" | "open" | "unfinished";
 /** One trade; its times are the open times of the bars it filled on. An open trade has no exit; its `r` is marked to the close of the current bar. */
 export interface ReplayTrade {
   side: Side;
@@ -292,8 +293,10 @@ export interface ReplayState {
   cut: number;
   /** No base candle is left to reveal and none can come (a file's end, no data source, the limit, or caught up). */
   atEnd: boolean;
-  /** The replay reached the newest data and follows the live candles: steps and commands are refused. */
+  /** The replay reached the newest data in this session: the pair's live data flows again, for display only. */
   caughtUp: boolean;
+  /** The cut at which the backtest ended at real time (also for a file saved then): no steps or commands, the open trade is unfinished. */
+  caughtUpAt: number | null;
   /** The last bar is still forming (a timeframe above the base): ask again from its index. */
   partial: boolean;
   /** Index of `bars.time[0]`. */

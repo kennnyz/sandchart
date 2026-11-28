@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fixture from "../../../../crates/core/tests/fixtures/replay.json";
 import { createMockBackend } from "./mock";
-import { type MockCandle, mockAggregate, mockBucketStart, mockCandleHash, mockReadReplay, mockRevealed, mockSimulate, mockSplit } from "./mockReplay";
+import { type MockCandle, mockAggregate, mockBucketStart, mockCandleHash, mockReadReplay, mockRevealed, mockSimulate, mockSimulateFile, mockSplit } from "./mockReplay";
 import type { CandleColumns, LiveEvent, ReplayCommand, ReplayStats, ReplayTrade, TimeframeCode } from "./types";
 
 const id = { source: "mock", symbol: "BTCUSDT" };
@@ -50,7 +50,7 @@ describe("mock replay (TEST-ONLY copy of sandchart_core::replay)", () => {
         await expect(read, c.name).rejects.toThrow(c.error);
       } else {
         const f = await read;
-        expectSim(mockSimulate(f.base, f.candles, f.start, f.cut, f.commands), c.expect as Sim, c.name);
+        expectSim(mockSimulateFile(f), c.expect as Sim, c.name);
       }
     }
   });
@@ -115,7 +115,7 @@ describe("mock replay session", () => {
     // At the newest candle it has caught up: no more steps or commands.
     expect(await b.replayState("1h", 0, 0)).toMatchObject({ atEnd: true, caughtUp: true, current: 599 });
     await expect(b.replayStep(1)).rejects.toMatchObject({
-      message: "the replay has caught up with the live data and follows it now: it takes no steps",
+      message: "the replay has caught up with real time, so its backtest is finished: it takes no steps",
     });
     await expect(b.replayStart(id, "1h", startTime + 1)).rejects.toMatchObject({
       message: `no cached 1h bar opens at ${startTime + 1}`,
@@ -277,25 +277,33 @@ describe("mock replay across timeframes", () => {
     await expect(b.replaySetBase("1w")).rejects.toMatchObject({ message: /inside a 1w candle/ });
   });
 
-  it("catches up at the newest candle: closed live candles join it and nothing is held back", async () => {
+  it("catches up at the newest candle: the backtest ends there and live candles flow for display only", async () => {
     const b = createMockBackend({ candles: 2000 });
     const page = await b.getCandles(id, "1h");
     const got: LiveEvent[] = [];
     await b.subscribeLive(id, "1h", (e) => got.push(e));
-    const st = await b.replayStart(id, "1h", page.time.at(-1)!);
-    expect(st).toMatchObject({ caughtUp: true, atEnd: true });
+    const st0 = await b.replayStart(id, "1h", page.time.at(-2)!);
+    expect(st0).toMatchObject({ caughtUp: false, caughtUpAt: null });
+    await b.replayCommand({ kind: "open", time: st0.cut, side: "long", stop: 1, take: 10 ** 9 });
+    await b.replayStep(1);
+    const st = await b.replayState("1h", 0, 0);
+    expect(st).toMatchObject({ caughtUp: true, caughtUpAt: st.cut, atEnd: true });
+    expect(st.trades[0]!.reason).toBe("unfinished");
+    expect(st.stats.count).toBe(0);
     await expect(b.replayCommand({ kind: "close", time: st.cut })).rejects.toMatchObject({
-      message: "the replay has caught up with the live data and follows it now: it takes no commands",
+      message: "the replay has caught up with real time, so its backtest is finished: it takes no commands",
     });
     const next = { time: page.time.at(-1)! + H, open: 1, high: 2, low: 1, close: 2, volume: 3 };
-    b.emitLive({ kind: "candle", ...next, closed: false });
-    expect((await b.replayState("1h", 0, 0)).cut).toBe(st.cut);
     b.emitLive({ kind: "candle", ...next, closed: true });
-    const after = await b.replayState("1h", 0, 0);
-    expect(after.cut).toBe(next.time + H);
-    expect(after.bars.time.at(-1)).toBe(next.time);
-    expect(got).toHaveLength(2);
+    expect(got).toHaveLength(1);
+    expect((await b.replayState("1h", 0, 0)).cut).toBe(st.cut);
     await b.replaySave();
-    expect(b.replayFile()).toContain(`[${next.time}, 1, 2, 1, 2, 3]`);
+    const text = b.replayFile()!;
+    expect(text).toContain(`"caughtUpAt": ${st.cut},`);
+    expect(text).not.toContain(`[${next.time}, `);
+    const opened = await b.replayOpen(new TextEncoder().encode(text));
+    expect(opened).toMatchObject({ caughtUp: false, caughtUpAt: st.cut, atEnd: true });
+    expect(opened.trades[0]!.reason).toBe("unfinished");
   });
+
 });

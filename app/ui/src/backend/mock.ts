@@ -30,6 +30,7 @@ import {
   MOCK_MAX_REPLAY_CANDLES,
   type MockCandle,
   mockAggregate,
+  mockAtRealTime,
   mockBucketStart,
   mockBuildsFrom,
   mockCloseTime,
@@ -573,9 +574,10 @@ interface MockSession {
   /** Index of the last revealed base candle. */
   current: number;
   commands: ReplayCommand[];
-  /** Started from the mock's candles: at the newest one it has caught up and follows live candles. */
+  /** Started from the mock's candles: at the newest one it catches up with real time. */
   live: boolean;
-  caughtUp: boolean;
+  /** The cut where it caught up and its backtest ended (a file's too); null before. */
+  caughtUpAt: number | null;
 }
 
 export function createMockBackend(opts: MockOptions): MockBackend {
@@ -808,7 +810,7 @@ export function createMockBackend(opts: MockOptions): MockBackend {
   /** The open replay's revealed bars of `tf` while it holds `id` back, as `replay_bars` in the engine. */
   function replayBars(id: InstrumentId, tf: TimeframeCode): { scale: number; candles: MockCandle[] } | null {
     const s = session;
-    if (!s || s.caughtUp || s.instrument.id.source !== id.source || s.instrument.id.symbol !== id.symbol) return null;
+    if (!s || caughtUpLive(s) || s.instrument.id.source !== id.source || s.instrument.id.symbol !== id.symbol) return null;
     const bad = mockViewError(s.base, tf);
     if (bad) throw problem(bad);
     reveal(s);
@@ -835,7 +837,13 @@ export function createMockBackend(opts: MockOptions): MockBackend {
   }
 
   const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
-  const caughtUp = (what: string) => problem(`the replay has caught up with the live data and follows it now: it takes no ${what}`);
+  const caughtUp = (what: string) => problem(`the replay has caught up with real time, so its backtest is finished: it takes no ${what}`);
+  /** Caught up in this session: the pair's live data is no longer held back. */
+  const caughtUpLive = (s: MockSession) => s.live && s.caughtUpAt !== null;
+  /** At the newest candle of a live session: the backtest ends at this cut. */
+  const catchUp = (s: MockSession) => {
+    if (s.live && s.caughtUpAt === null && s.current + 1 >= s.total) s.caughtUpAt = cutOf(s);
+  };
 
   function simulateOrThrow(s: MockSession, commands: ReplayCommand[]) {
     try {
@@ -848,7 +856,8 @@ export function createMockBackend(opts: MockOptions): MockBackend {
   function replayStateOf(s: MockSession, tf: TimeframeCode, cursor: number, tradesFrom: number): ReplayState {
     const bad = mockViewError(s.base, tf);
     if (bad) throw problem(bad);
-    const { trades, stats } = simulateOrThrow(s, s.commands);
+    const sim = simulateOrThrow(s, s.commands);
+    const { trades, stats } = s.caughtUpAt === null ? sim : mockAtRealTime(sim);
     const closed = trades.length - (trades.at(-1)?.reason === "open" ? 1 : 0);
     const tfrom = Math.min(tradesFrom, closed);
     const cut = cutOf(s);
@@ -876,7 +885,8 @@ export function createMockBackend(opts: MockOptions): MockBackend {
       cut,
       // A started session that reached its newest candle has caught up.
       atEnd: s.current + 1 >= s.total,
-      caughtUp: s.caughtUp,
+      caughtUp: caughtUpLive(s),
+      caughtUpAt: s.caughtUpAt,
       partial: tf !== s.base && last !== undefined && mockCloseTime(tf, last.time) > cut,
       from,
       bars,
@@ -884,20 +894,6 @@ export function createMockBackend(opts: MockOptions): MockBackend {
       trades: trades.slice(tfrom),
       stats,
     };
-  }
-
-  /** A closed live candle of the caught-up replay's pair joins it, as the engine's follow stream does. */
-  function follow(e: LiveEvent) {
-    const s = session;
-    if (!s?.caughtUp || e.kind !== "candle" || !e.closed) return;
-    const c = { time: e.time, open: e.open, high: e.high, low: e.low, close: e.close, volume: e.volume };
-    const last = reveal(s, true).at(-1)!;
-    if (c.time === last.time) s.candles[s.candles.length - 1] = c;
-    else if (c.time > last.time && s.total < MOCK_MAX_REPLAY_CANDLES) {
-      s.candles.push(c);
-      s.total++;
-    }
-    s.current = s.total - 1;
   }
 
   /** `replay_set_base` from the engine; the lower candles are the current ones split (`mockSplit`). */
@@ -915,7 +911,7 @@ export function createMockBackend(opts: MockOptions): MockBackend {
         const most = Math.floor((MOCK_MAX_REPLAY_CANDLES * len) / DAY_MS);
         const span = Math.ceil((end - first) / DAY_MS);
         throw problem(
-          `a replay holds at most ${MOCK_MAX_REPLAY_CANDLES} candles: at ${base} that is ${most} days from its start to ${s.live ? "now" : "its last candle"}, and this one spans ${span} days; replay at a higher step or start later`,
+          `a replay holds at most ${MOCK_MAX_REPLAY_CANDLES} candles: at ${base} that is ${most} days from its start to ${s.live && s.caughtUpAt === null ? "now" : "its last candle"}, and this one spans ${span} days; replay at a higher step or start later`,
         );
       }
       const context = Math.min(Math.max(0, Math.floor((first - src[0]!.time) / len)), REBASE_CONTEXT, MOCK_MAX_REPLAY_CANDLES - need);
@@ -938,7 +934,9 @@ export function createMockBackend(opts: MockOptions): MockBackend {
       throw problem(`the replay cannot step ${base} candles: ${message(e)}`);
     }
     Object.assign(s, { base, candles, total: candles.length, make: null, start, current: shown - 1 });
-    s.caughtUp = s.live && s.current + 1 >= s.total;
+    // A finished backtest stays finished, at the cut on the new candles.
+    if (s.caughtUpAt !== null) s.caughtUpAt = newCut;
+    else catchUp(s);
   }
 
   function computeInstance(inst: IndicatorInstance, bars: MockBars, fromTime: number): IndicatorResult {
@@ -1010,11 +1008,9 @@ export function createMockBackend(opts: MockOptions): MockBackend {
 
     emitLive(e) {
       const evaluated = new Set<string>();
-      const replayed = session?.instrument.id;
-      if (replayed && [...live.values()].some((sub) => sub.source === replayed.source && sub.symbol === replayed.symbol)) follow(e);
       for (const [cb, sub] of [...live]) {
         // Held back while replayed, until the replay has caught up.
-        const paused = !session?.caughtUp && session?.instrument.id.source === sub.source && session.instrument.id.symbol === sub.symbol;
+        const paused = session !== null && !caughtUpLive(session) && session.instrument.id.source === sub.source && session.instrument.id.symbol === sub.symbol;
         if (paused) continue;
         if (e.kind === "candle" && !evaluated.has(pairKey(sub))) {
           evaluated.add(pairKey(sub));
@@ -1045,9 +1041,9 @@ export function createMockBackend(opts: MockOptions): MockBackend {
         current: i - ctx,
         commands: [],
         live: true,
-        caughtUp: false,
+        caughtUpAt: null,
       };
-      s.caughtUp = s.current + 1 >= s.total;
+      catchUp(s);
       session = s;
       return replayStateOf(s, base, 0, 0);
     },
@@ -1055,9 +1051,9 @@ export function createMockBackend(opts: MockOptions): MockBackend {
     async replayStep(n) {
       await delay();
       const s = openSession();
-      if (s.caughtUp) throw caughtUp("steps");
+      if (s.caughtUpAt !== null) throw caughtUp("steps");
       s.current = Math.min(s.current + n, s.total - 1);
-      s.caughtUp = s.live && s.current + 1 >= s.total;
+      catchUp(s);
       return cutOf(s);
     },
 
@@ -1071,7 +1067,7 @@ export function createMockBackend(opts: MockOptions): MockBackend {
     async replayCommand(command) {
       await delay();
       const s = openSession();
-      if (s.caughtUp) throw caughtUp("commands");
+      if (s.caughtUpAt !== null) throw caughtUp("commands");
       const next = [...s.commands, structuredClone(command)];
       simulateOrThrow(s, next);
       s.commands = next;
@@ -1092,6 +1088,7 @@ export function createMockBackend(opts: MockOptions): MockBackend {
         start: s.start,
         cut: cutOf(s),
         commands: s.commands,
+        caughtUpAt: s.caughtUpAt,
       });
       return `${s.instrument.id.symbol}-${s.base}.replay`;
     },
@@ -1115,7 +1112,7 @@ export function createMockBackend(opts: MockOptions): MockBackend {
         current: mockRevealed(f.base, f.candles, f.cut).length - 1,
         commands: f.commands,
         live: false,
-        caughtUp: false,
+        caughtUpAt: f.caughtUpAt,
       };
       session = s;
       return replayStateOf(s, f.base, 0, 0);

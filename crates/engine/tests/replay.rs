@@ -332,6 +332,7 @@ fn file_at(price_scale: u8, n: i64) -> sandchart_core::replay::ReplayFile {
         candles,
         start: T0 + 551 * H,
         cut: T0 + (550 + n) * H,
+        caught_up_at: None,
         commands: vec![Command::Open {
             time: T0 + 551 * H,
             side: Side::Long,
@@ -705,16 +706,6 @@ fn live_engine(now: i64) -> Live {
     }
 }
 
-async fn until(what: &str, mut f: impl FnMut() -> bool) {
-    for _ in 0..500 {
-        if f() {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    panic!("timed out waiting until {what}");
-}
-
 #[tokio::test]
 async fn a_lower_base_missing_from_the_cache_is_fetched_and_not_stored() {
     let f = live_engine(T0 + BARS * H);
@@ -742,7 +733,7 @@ async fn a_lower_base_missing_from_the_cache_is_fetched_and_not_stored() {
 }
 
 #[tokio::test]
-async fn stepping_reads_newer_candles_then_catches_up_and_follows_the_live_ones() {
+async fn stepping_reads_newer_candles_then_catches_up_and_the_backtest_ends_there() {
     // Bars up to 597 are cached; 598 and 599 are stored later, as the chart's stream does.
     let f = live_engine(T0 + BARS * H + 1);
     Store::open(&f.dir.path().join("sandchart.db"))
@@ -772,52 +763,44 @@ async fn stepping_reads_newer_candles_then_catches_up_and_follows_the_live_ones(
     f.engine.replay_step(2).await.unwrap();
     let st = f.engine.replay_state(TF, 0, 0).unwrap();
     assert!(
-        !st.at_end && !st.caught_up,
+        !st.at_end && !st.caught_up && st.caught_up_at.is_none(),
         "598 and 599 came from the store"
     );
+    assert_eq!(st.trades[0].reason, ExitReason::Open);
     assert_eq!(f.provider.calls(TF), 0);
 
-    // The provider has nothing newer either (bar 600 is still forming): caught up.
+    // The provider has nothing newer either (bar 600 is still forming): caught up, and the
+    // backtest ends at this cut with the trade unfinished, outside the statistics.
     f.provider.set(TF, (0..=BARS).map(bar).collect());
-    assert_eq!(f.engine.replay_step(2).await.unwrap(), T0 + BARS * H);
+    let at = T0 + BARS * H;
+    assert_eq!(f.engine.replay_step(2).await.unwrap(), at);
     let st = f.engine.replay_state(TF, 0, 0).unwrap();
     assert!(st.at_end && st.caught_up);
-    assert_eq!(st.trades[0].reason, ExitReason::Open);
+    assert_eq!(st.caught_up_at, Some(at));
+    assert_eq!(
+        (st.trades[0].reason, st.trades[0].exit_time),
+        (ExitReason::Unfinished, None)
+    );
+    assert_eq!(st.stats.count, 0);
     let msg = replay_err(f.engine.replay_step(1).await);
     assert_eq!(
         msg,
-        "the replay has caught up with the live data and follows it now: it takes no steps"
+        "the replay has caught up with real time, so its backtest is finished: it takes no steps"
     );
     let msg = replay_err(f.engine.replay_command(Command::Close { time: st.cut }));
     assert_eq!(
         msg,
-        "the replay has caught up with the live data and follows it now: it takes no commands"
+        "the replay has caught up with real time, so its backtest is finished: it takes no commands"
     );
-    // Its own 1h stream follows, next to the chart's.
-    until("the replay follows the live candles", || {
-        f.provider.open(TF) == 2
-    })
-    .await;
 
-    // Bar 600 closes reaching the take: it is revealed, and the chart gets it too, since
-    // nothing is held back any more.
+    // Bar 600 closes reaching the take: the chart gets it, since nothing is held back any
+    // more, but the backtest does not: no own stream, the cut and the trade stay.
     f.clock.store(T0 + 601 * H, Ordering::Relaxed);
     let take = Candle {
         high: 10_660,
         ..bar(BARS)
     };
     f.provider.send(TF, take, true);
-    until("the live candle is appended", || {
-        f.engine.replay_state(TF, 0, 0).unwrap().cut == T0 + 601 * H
-    })
-    .await;
-    let st = f.engine.replay_state(TF, 0, 0).unwrap();
-    assert_eq!(*st.bars.last().unwrap(), take);
-    assert_eq!(
-        (st.trades[0].reason, st.trades[0].exit_time),
-        (ExitReason::Take, Some(take.open_time))
-    );
-    assert_eq!(st.stats.count, 1);
     let event = tokio::time::timeout(Duration::from_secs(5), chart.receiver().recv())
         .await
         .unwrap()
@@ -829,30 +812,27 @@ async fn stepping_reads_newer_candles_then_catches_up_and_follows_the_live_ones(
             closed: true
         })
     );
-
-    // A forming candle is not appended; a closed one after a gap has the gap fetched.
-    f.provider.send(TF, bar(BARS + 1), false);
-    f.clock.store(T0 + 603 * H, Ordering::Relaxed);
-    f.provider.set(TF, (0..=BARS + 2).map(bar).collect());
-    f.provider.send(TF, bar(BARS + 2), true);
-    until("the gap is filled", || {
-        f.engine.replay_state(TF, 0, 0).unwrap().cut == T0 + 603 * H
-    })
-    .await;
+    assert_eq!(f.provider.open(TF), 1, "only the chart's stream");
     let st = f.engine.replay_state(TF, 0, 0).unwrap();
-    let n = st.bars.len();
-    assert_eq!(st.bars[n - 3..], [take, bar(BARS + 1), bar(BARS + 2)]);
+    assert_eq!(st.cut, at);
+    assert_eq!(st.trades[0].reason, ExitReason::Unfinished);
 
-    // The file holds the live candles; an exit stops following.
+    // The file ends at the catch-up cut and opens to the same unfinished trade.
     let text = String::from_utf8(f.engine.replay_export().unwrap()).unwrap();
-    assert!(text.contains(&format!("[{}, ", bar(BARS + 2).open_time)));
+    assert!(text.contains(&format!("\"caughtUpAt\": {at},")), "{text}");
+    assert!(!text.contains(&format!("[{}, ", take.open_time)));
+    let opened = f.engine.replay_open(text.as_bytes()).unwrap();
+    assert!(opened.at_end && !opened.caught_up);
+    assert_eq!(opened.caught_up_at, Some(at));
+    assert_eq!(opened.trades[0].reason, ExitReason::Unfinished);
+    let msg = replay_err(f.engine.replay_command(Command::Close { time: at }));
+    assert!(msg.ends_with("it takes no commands"), "{msg}");
     f.engine.replay_exit();
-    until("the replay's stream closes", || f.provider.open(TF) == 1).await;
     drop(chart);
 }
 
 #[tokio::test]
-async fn a_start_at_the_newest_candle_has_caught_up_and_a_re_base_down_steps_again() {
+async fn a_start_at_the_newest_candle_has_caught_up_and_a_re_base_down_stays_finished() {
     let f = live_engine(T0 + BARS * H + 30 * 60_000);
     f.provider.set(TF, (0..=BARS).map(bar).collect());
     let quarters_now: Vec<Candle> = (0..BARS)
@@ -866,23 +846,15 @@ async fn a_start_at_the_newest_candle_has_caught_up_and_a_re_base_down_steps_aga
         .await
         .unwrap();
     assert!(st.caught_up);
-    // Two quarters of bar 600 closed since the cut: a 15m replay has them to step.
+    assert_eq!(st.caught_up_at, Some(T0 + BARS * H));
+    // Two quarters of bar 600 closed since the cut, but the backtest ended there: a 15m
+    // chart shows the quarters up to the cut and nothing to step.
     let st = f.engine.replay_set_base(Timeframe::M15).await.unwrap();
-    assert!(!st.caught_up && !st.at_end);
-    assert_eq!(st.cut, T0 + BARS * H);
-    f.engine.replay_step(1).await.unwrap();
-    assert!(
-        !f.engine
-            .replay_state(Timeframe::M15, 0, 0)
-            .unwrap()
-            .caught_up
+    assert!(st.caught_up && st.at_end);
+    assert_eq!(
+        (st.cut, st.caught_up_at),
+        (T0 + BARS * H, Some(T0 + BARS * H))
     );
-    f.engine.replay_step(1).await.unwrap();
-    let st = f.engine.replay_state(Timeframe::M15, 0, 0).unwrap();
-    assert!(st.caught_up);
-    assert_eq!(st.cut, T0 + BARS * H + 30 * 60_000);
-    // The hourly chart shows the forming hour built from its two quarters.
-    let hours = f.engine.replay_state(TF, 0, 0).unwrap();
-    assert!(hours.partial);
-    assert_eq!(hours.bars.last().unwrap().open_time, T0 + BARS * H);
+    assert_eq!(*st.bars.last().unwrap(), quarters(BARS - 1)[3]);
+    assert!(replay_err(f.engine.replay_step(1).await).ends_with("it takes no steps"));
 }

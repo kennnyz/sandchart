@@ -75,6 +75,17 @@ pub enum ExitReason {
     Manual,
     /// Still open at the cut.
     Open,
+    /// Still open when the replay caught up with real time, where the backtest ends
+    /// (ADR 0008, decision 9). Like an open trade it has no exit and does not count in the
+    /// statistics.
+    Unfinished,
+}
+
+impl ExitReason {
+    /// Take, stop or manual: the trade has an exit and counts in the statistics.
+    pub fn is_closed(self) -> bool {
+        !matches!(self, ExitReason::Open | ExitReason::Unfinished)
+    }
 }
 
 /// One trade. Prices are ticks; times are the open times of the base candles it filled on,
@@ -125,6 +136,19 @@ pub struct Stats {
 pub struct Simulation {
     pub trades: Vec<Trade>,
     pub stats: Stats,
+}
+
+impl Simulation {
+    /// The backtest ended at real time: the trade still open there is unfinished. The
+    /// statistics do not change, since an open trade never counted in them.
+    pub fn at_real_time(mut self) -> Simulation {
+        if let Some(t) = self.trades.last_mut()
+            && t.reason == ExitReason::Open
+        {
+            t.reason = ExitReason::Unfinished;
+        }
+        self
+    }
 }
 
 /// The base candles revealed at `cut`: those that close at or before it.
@@ -372,7 +396,7 @@ pub fn stats(trades: &[Trade]) -> Stats {
     let (mut total, mut gross_win, mut gross_loss) = (0.0f64, 0.0f64, 0.0f64);
     let (mut peak, mut max_dd) = (0.0f64, 0.0f64);
     let (mut streak, mut longest) = (0u32, 0u32);
-    for t in trades.iter().filter(|t| t.reason != ExitReason::Open) {
+    for t in trades.iter().filter(|t| t.reason.is_closed()) {
         count += 1;
         total += t.r;
         if t.r > 0.0 {
@@ -429,6 +453,9 @@ pub struct ReplayFile {
     /// The close time of the last revealed candle.
     pub cut: i64,
     pub commands: Vec<Command>,
+    /// The cut at which the replay caught up with real time, where its backtest ended;
+    /// equal to `cut`, and no candle comes after it. `None` for a replay that had not.
+    pub caught_up_at: Option<i64>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -457,6 +484,8 @@ struct Body {
     base: String,
     start: i64,
     cut: i64,
+    #[serde(default)]
+    caught_up_at: Option<i64>,
     sha256: String,
     #[serde(deserialize_with = "capped_commands")]
     commands: Vec<Command>,
@@ -720,15 +749,32 @@ impl ReplayFile {
         })
     }
 
-    /// [`simulate`] over this file's session.
+    /// [`simulate`] over this file's session; a session that caught up ended its backtest
+    /// there ([`Simulation::at_real_time`]).
     pub fn simulate(&self) -> Result<Simulation, String> {
-        simulate(
+        if let Some(t) = self.caught_up_at {
+            if t != self.cut {
+                return Err(format!(
+                    "the replay caught up at {t}, which is not its cut {}",
+                    self.cut
+                ));
+            }
+            if revealed(self.base, &self.candles, self.cut).len() != self.candles.len() {
+                return Err("a replay that caught up has no candle after its cut".into());
+            }
+        }
+        let sim = simulate(
             self.base,
             &self.candles,
             self.start,
             self.cut,
             &self.commands,
-        )
+        )?;
+        Ok(if self.caught_up_at.is_some() {
+            sim.at_real_time()
+        } else {
+            sim
+        })
     }
 
     /// The file text, always the current [`VERSION`]: JSON with one command and one candle
@@ -762,8 +808,11 @@ impl ReplayFile {
                 })
                 .collect(),
         );
+        let caught_up = self
+            .caught_up_at
+            .map_or(String::new(), |t| format!("  \"caughtUpAt\": {t},\n"));
         format!(
-            "{{\n  \"version\": {VERSION},\n  \"instrument\": {},\n  \"base\": {},\n  \"start\": {},\n  \"cut\": {},\n  \"sha256\": \"{}\",\n  \"commands\": {commands},\n  \"candles\": {candles}\n}}\n",
+            "{{\n  \"version\": {VERSION},\n  \"instrument\": {},\n  \"base\": {},\n  \"start\": {},\n  \"cut\": {},\n{caught_up}  \"sha256\": \"{}\",\n  \"commands\": {commands},\n  \"candles\": {candles}\n}}\n",
             line(&instrument),
             line(&self.base.code()),
             self.start,
@@ -803,6 +852,7 @@ impl ReplayFile {
                     start,
                     cut,
                     commands,
+                    caught_up_at: None,
                 }
             }
             VERSION => {
@@ -816,6 +866,7 @@ impl ReplayFile {
                     start: body.start,
                     cut: body.cut,
                     commands: body.commands,
+                    caught_up_at: body.caught_up_at,
                 }
             }
             v => {

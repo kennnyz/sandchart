@@ -642,6 +642,8 @@ pub struct ReplayStateDto {
     pub cut: i64,
     pub at_end: bool,
     pub caught_up: bool,
+    /// The cut at which the backtest ended at real time, null before.
+    pub caught_up_at: Option<i64>,
     /// The last bar of `tf` is still forming.
     pub partial: bool,
     pub from: u32,
@@ -653,6 +655,9 @@ pub struct ReplayStateDto {
 
 pub fn to_replay_state_dto(s: ReplayState) -> Result<ReplayStateDto, DtoError> {
     safe(s.cut)?;
+    if let Some(t) = s.caught_up_at {
+        safe(t)?;
+    }
     for t in &s.trades {
         for v in [t.entry_time, t.entry_price, t.initial_stop, t.stop, t.take]
             .into_iter()
@@ -672,6 +677,7 @@ pub fn to_replay_state_dto(s: ReplayState) -> Result<ReplayStateDto, DtoError> {
         cut: s.cut,
         at_end: s.at_end,
         caught_up: s.caught_up,
+        caught_up_at: s.caught_up_at,
         partial: s.partial,
         from: s.from,
         trades_from: s.trades_from,
@@ -1116,7 +1122,9 @@ mod tests {
             take: 140,
         }];
         let simulation: Simulation =
-            simulate(Timeframe::M1, &candles, close(1), close(3), &commands).unwrap();
+            simulate(Timeframe::M1, &candles, close(1), close(3), &commands)
+                .unwrap()
+                .at_real_time();
         let state = ReplayState {
             instrument: page(vec![]).instrument,
             base: Timeframe::M1,
@@ -1125,7 +1133,8 @@ mod tests {
             current: 3,
             cut: close(3),
             at_end: false,
-            caught_up: false,
+            caught_up: true,
+            caught_up_at: Some(close(3)),
             partial: false,
             from: 3,
             bars: candles[3..].to_vec(),
@@ -1142,7 +1151,8 @@ mod tests {
                     "base": "BTC", "quote": "USDT", "priceScale": 2, "qtyScale": 5
                 },
                 "base": "1m", "tf": "1m", "start": 1, "current": 3, "cut": 1_700_000_240_000i64,
-                "atEnd": false, "caughtUp": false, "partial": false, "from": 3,
+                "atEnd": false, "caughtUp": true, "caughtUpAt": 1_700_000_240_000i64,
+                "partial": false, "from": 3,
                 "bars": {
                     "time": [1_700_000_180_000i64], "open": [103], "high": [123], "low": [93],
                     "close": [113], "volume": [8]
@@ -1151,7 +1161,7 @@ mod tests {
                 "trades": [{
                     "side": "long", "entryTime": 1_700_000_060_000i64,
                     "entryPrice": 111, "initialStop": 90, "stop": 90, "take": 140,
-                    "exitTime": null, "exitPrice": null, "reason": "open",
+                    "exitTime": null, "exitPrice": null, "reason": "unfinished",
                     "ambiguous": false, "r": 2.0 / 21.0
                 }],
                 "stats": {

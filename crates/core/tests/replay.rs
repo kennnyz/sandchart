@@ -241,6 +241,7 @@ fn session(n: usize) -> ReplayFile {
         candles,
         start: T0 + 3 * H,
         cut: T0 + n as i64 * H,
+        caught_up_at: None,
         commands: vec![
             Command::Open {
                 time: T0 + 3 * H,
@@ -278,6 +279,23 @@ fn a_file_round_trips_with_one_candle_per_line() {
     assert!(text.contains(&format!("\n    {edit}\n  ],\n")), "{text}");
     // Seven header lines, the commands and the candles with their brackets, the closing brace.
     assert_eq!(text.lines().count(), 7 + (2 + 2) + (5 + 2) + 1);
+}
+
+#[test]
+fn a_file_that_caught_up_round_trips_its_catch_up_time() {
+    let mut file = session(5);
+    file.caught_up_at = Some(file.cut);
+    let text = file.to_json();
+    assert!(
+        text.contains(&format!(
+            "\n  \"cut\": {0},\n  \"caughtUpAt\": {0},\n",
+            file.cut
+        )),
+        "{text}"
+    );
+    let (back, _) = ReplayFile::from_json(text.as_bytes()).unwrap();
+    assert_eq!(back, file);
+    assert!(!session(5).to_json().contains("caughtUpAt"));
 }
 
 #[test]
