@@ -638,14 +638,23 @@ impl Engine {
         }
     }
 
-    /// Appends a trade command if the session stays valid with it (time order, the time
-    /// of a revealed base candle's close, one trade at a time, levels around the close).
+    /// Appends a trade command given at the cut (its time must be the cut) if the session
+    /// stays valid with it (one trade at a time, levels around the close).
     /// Refused once caught up: the backtest is finished, and the live chart shows prices
     /// after the cut.
     pub fn replay_command(&self, cmd: Command) -> Result<(), EngineError> {
         self.with_session(|s| {
             if s.caught_up_at.is_some() {
                 return Err(caught_up_error("commands"));
+            }
+            // Only the bar on screen can be traded: a command made before a step has no say
+            // over candles the user has seen since.
+            if cmd.time() != s.cut {
+                return Err(EngineError::Replay(format!(
+                    "a command is given at the cut {}, not at {}",
+                    s.cut,
+                    cmd.time()
+                )));
             }
             let mut next = s.commands.clone();
             next.push(cmd);

@@ -215,10 +215,9 @@ async fn commands_are_checked_against_the_revealed_bars() {
     assert_eq!(
         msg,
         format!(
-            "command 1: time {} is outside the replay ({}..={})",
-            st.cut + H,
+            "a command is given at the cut {}, not at {}",
             st.cut,
-            st.cut
+            st.cut + H
         )
     );
     engine.replay_command(open).unwrap();
@@ -226,6 +225,22 @@ async fn commands_are_checked_against_the_revealed_bars() {
     assert_eq!(msg, "command 2: a trade is already open");
 
     engine.replay_step(5).await.unwrap();
+    // A command for a bar already passed (a click that was overtaken by steps) is refused
+    // too, though the simulation alone would take it.
+    let late = Command::Edit {
+        time: st.cut,
+        stop: Some(10_450),
+        take: None,
+    };
+    let msg = replay_err(engine.replay_command(late));
+    assert_eq!(
+        msg,
+        format!(
+            "a command is given at the cut {}, not at {}",
+            st.cut + 5 * H,
+            st.cut
+        )
+    );
     let st = engine.replay_state(TF, u32::MAX, 0).unwrap();
     let t = st.trades[0];
     // Bar 555 closes at 10 555 with a high of 10 605: still open, marked to the close.

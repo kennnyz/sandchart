@@ -1068,6 +1068,8 @@ export function createMockBackend(opts: MockOptions): MockBackend {
       await delay();
       const s = openSession();
       if (s.caughtUpAt !== null) throw caughtUp("commands");
+      const cut = cutOf(s);
+      if (command.time !== cut) throw problem(`a command is given at the cut ${cut}, not at ${command.time}`);
       const next = [...s.commands, structuredClone(command)];
       simulateOrThrow(s, next);
       s.commands = next;

@@ -128,11 +128,15 @@ describe("mock replay session", () => {
     expect(st.cut).toBe(startTime + H);
     const open: ReplayCommand = { kind: "open", time: st.cut, side: "long", stop: close - 1_000, take: close + 1_000 };
     await expect(b.replayCommand({ ...open, time: st.cut + H })).rejects.toMatchObject({
-      message: `command 1: time ${st.cut + H} is outside the replay (${st.cut}..=${st.cut})`,
+      message: `a command is given at the cut ${st.cut}, not at ${st.cut + H}`,
     });
     await b.replayCommand(open);
     await expect(b.replayCommand(open)).rejects.toMatchObject({ message: "command 2: a trade is already open" });
     await b.replayStep(1);
+    // A command made before the step is refused: only the bar on screen can be traded.
+    await expect(b.replayCommand({ kind: "close", time: st.cut })).rejects.toMatchObject({
+      message: `a command is given at the cut ${st.cut + H}, not at ${st.cut}`,
+    });
     await b.replayCommand({ kind: "close", time: st.cut + H });
     const s = await b.replayState("1h", 0, 0);
     expect(s.trades[0]).toMatchObject({ reason: "manual", entryPrice: close, entryTime: startTime, exitTime: startTime + H });
